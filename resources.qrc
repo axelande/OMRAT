@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/open_mrat" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>

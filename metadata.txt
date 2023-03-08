@@ -1,0 +1,48 @@
+# This file contains metadata for your plugin.
+
+# This file should be included when you package your plugin.# Mandatory items:
+
+[general]
+name=Open Maritime Risk Analysis Tool
+qgisMinimumVersion=3.0
+description=This is an open source implementation of Pedersens and Friis-Hansen equations
+version=0.1
+author=Axel Hörteborn
+email=axel.horteborn@ri.se
+
+about=A plugin to do simple maritime risk analysis
+
+tracker=https://github.com/axelande/OMRAT
+repository=https://github.com/axelande/OMRAT
+# End of mandatory metadata
+
+# Recommended items:
+
+hasProcessingProvider=no
+# Uncomment the following line and add your changelog:
+changelog=
+  Version 0.1.0 - First release
+
+# Tags are comma separated with spaces allowed
+tags=routing, analysis, ship, risk
+
+homepage=https://github.com/axelande/OMRAT
+category=Plugins
+icon=icon.png
+# experimental flag
+experimental=False
+
+# deprecated flag (applies to the whole plugin, not just a single version)
+deprecated=False
+
+# Since QGIS 3.8, a comma separated list of plugins to be installed
+# (or upgraded) can be specified.
+# Check the documentation for more information.
+# plugin_dependencies=
+
+Category of the plugin: Raster, Vector, Database or Web
+# category=
+
+# If the plugin can run on QGIS Server.
+server=False
+
