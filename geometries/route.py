@@ -108,12 +108,16 @@ def get_mean_distance(route:LineString, obj:Polygon, mu: float, std: float) -> f
             #point.distance()
             p2 = proj_point(point, max_distance, direction)
             new_line = QgsLineString((point, p2))
-            dist = QgsGeometry.intersects(new_line, obj)
-            # dist = split(new_line, object_utm).geoms[0]
-            if dist.length < max_distance:
-                distances.append(dist.length)
-                lines.append(dist)
-                directions.append(direction)
+            if new_line.intersects(obj):
+                dist = QgsGeometry.intersects(new_line, obj)
+                # dist = split(new_line, object_utm).geoms[0]
+                if dist.length < max_distance:
+                    distances.append(dist.length)
+                    lines.append(dist)
+                    directions.append(direction)
+                else:
+                    distances.append(0)
+                    directions.append(-1)
             else:
                 distances.append(0)
                 directions.append(-1)
@@ -147,6 +151,9 @@ def get_multiple_ed(line:LineString, objs:list, mu:float, std:float,
             object_utm = transform(project, obj["wkt"])
             new_line = LineString((dist_point, proj_point(dist_point, max_distance, line_dir+180)))
             dist = split(new_line, object_utm).geoms[0]
+            if not dist.is_valid:
+                lines[key].append(max_distance)
+                continue
             lines[key].append(dist)
             if dist.length < max_distance - 1:
                 distances[key].append(dist.length)

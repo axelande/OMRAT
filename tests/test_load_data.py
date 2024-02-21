@@ -10,6 +10,7 @@ from qgis.PyQt.QtWidgets import QApplication
 from ..open_mrat import OpenMRAT
 from . import omrat
 
+
 @pytest.fixture()
 def load_data(omrat:OpenMRAT):
     omrat.run()
