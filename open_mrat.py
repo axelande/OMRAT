@@ -34,12 +34,12 @@ from resources import *
 
 # Import the code for the DockWidget
 from compute.run_calculations import Calculation
-from utils import PointTool
-from utils.handle_traffic import Traffic
-from utils.repair_time import Repair
-from utils.storage import Storage
-from utils.handle_object import OObject
-from utils.gather_data import GatherData
+from omrat_utils import PointTool
+from omrat_utils.handle_traffic import Traffic
+from omrat_utils.repair_time import Repair
+from omrat_utils.storage import Storage
+from omrat_utils.handle_object import OObject
+from omrat_utils.gather_data import GatherData
 from open_mrat_dockwidget import OpenMRATDockWidget
 from operator import xor
 import os.path
