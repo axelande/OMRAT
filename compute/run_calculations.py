@@ -191,7 +191,8 @@ def powered_accidents(data) -> dict:
     return res
 
 class Calculation:
-    def __init__(self, data, height) -> None:
+    def __init__(self, parent, data, height) -> None:
+        self.p = parent
         self.drift_dict = drift_accidents(data, h=height)
         self.powered_dict = powered_accidents(data)
 
@@ -200,7 +201,8 @@ class Calculation:
         self.rw.show()
         self.rw.cbResType.currentIndexChanged.connect(self.populate)
         self.populate(self.drift_dict)
-        self.rw.exec_()
+        if not self.p.testing:
+            self.rw.exec_()
 
     def populate(self, res_dict: dict = None):
         if res_dict == 0:

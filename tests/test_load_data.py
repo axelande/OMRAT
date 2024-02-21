@@ -5,29 +5,18 @@ import sys
 import pytest
 from qgis.PyQt.QtWidgets import QApplication
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.dirname(SCRIPT_DIR))
-print(os.path.dirname(SCRIPT_DIR))
-from open_mrat import OpenMRAT
-from utils.gather_data import GatherData
-from compute.run_calculations import Calculation
+from ..open_mrat import OpenMRAT
+from . import omrat
 
-
-app = QApplication(sys.argv)
-def test_gather_data_func():
-    omrat = OpenMRAT(None, True)
+@pytest.fixture()
+def load_data(omrat:OpenMRAT):
     omrat.run()
-    gd = GatherData(omrat)
-    with open('test\\test_res.omrat') as f:
-        data = json.load(f)
-        gd.populate(data)
-    return gd
+    omrat.dockwidget.pbLoadProject.click()
+    assert omrat.dockwidget.twObjectList.rowCount() == 1
+    yield omrat
 
-
-def test_run_calculation():
-    gd = test_gather_data_func()
-    data = gd.get_all_for_save()
-    calc = Calculation(data, 10)
+def test_run_calculation(load_data:OpenMRAT):
+    load_data.dockwidget.pbRunModel.click()
     exp_drift = {'tot_sum': 0.0006511175081618417, 
                  'l': {'1': {'lin_sum': 0.0006511175081618417, 
                              'North going': 0.0003163098044510794, 
@@ -47,8 +36,8 @@ def test_run_calculation():
                  'all': {'1 - North going': {'Structure - 1': 0.0823688084188536, 
                                              'Depth - 1': 0}, 
                          '1 - South going': {'Structure - 1': 0, 'Depth - 1': 0}}}
-    assert calc.drift_dict == exp_drift
-    assert calc.powered_dict == exp_power
+    assert load_data.calc.drift_dict == exp_drift
+    assert load_data.calc.powered_dict == exp_power
 
 
 if __name__ == '__main__':

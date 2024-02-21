@@ -82,6 +82,8 @@ class GatherData:
         self.p.traffic.change_dist_segment()
         self.populate_tbl(data['depths'], self.p.dockwidget.twDepthList)
         self.populate_tbl(data['objects'], self.p.dockwidget.twObjectList)
+        
+        # Load data to canvas
         self.p.load_lines(data)
         for dep in data["depths"]:
             self.p.object.load_area('Depth - ' + dep[0], dep[2])

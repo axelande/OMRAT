@@ -1,5 +1,5 @@
 <RCC>
-    <qresource prefix="/plugins/open_mrat" >
+    <qresource prefix="/plugins/Omrat" >
         <file>icon.png</file>
     </qresource>
 </RCC>

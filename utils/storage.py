@@ -27,8 +27,12 @@ class Storage:
             f.write(json.dumps(data, indent=2))
         
     def load_all(self):
-        file_path = self.new_file_path(False, "Load Project", self.last_used_dir(),
-                                       "proj.omrat", "shapefiles (*.omrat *.OMRAT)")[0]
+        if self.p.testing:
+            dp = os.path.dirname(__file__)
+            file_path = os.path.join(dp, '..', 'tests', 'test_res.omrat')
+        else:
+            file_path = self.new_file_path(False, "Load Project", self.last_used_dir(),
+                                           "proj.omrat", "shapefiles (*.omrat *.OMRAT)")[0]
         if file_path == "":
             return
         with open(file_path, 'r') as f:

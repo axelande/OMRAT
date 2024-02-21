@@ -1,11 +1,11 @@
 {
-    "python.testing.unittestArgs": [
-        "-v",
-        "-s",
-        "./test",
-        "-p",
-        "test*.py"
-    ],
+    "python.defaultInterpreterPath": "c:/OSGeo4W/bin/python-qgis.bat",
+    "python.envFile": "${workspaceFolder}/.env",
+    "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
-    "python.testing.unittestEnabled": true
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.analysis.extraPaths": ["%OSGEO4W_ROOT%/apps/qgis/python",
+    "%OSGEO4W_ROOT%/apps/qgis/python/plugins"]
 }

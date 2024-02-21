@@ -89,6 +89,7 @@ class OpenMRAT:
         self.traffic_data = {}
         self.segment_data = {}
         self.traffic = None
+        self.calc = None
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -183,10 +184,11 @@ class OpenMRAT:
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
-        icon_path = ':/plugins/open_mrat/icon.png'
+        icon_path = self.plugin_dir + '/icon.png'
+        print(icon_path)
         self.add_action(
             icon_path,
-            text=self.tr(u'OMRAT'),
+            text=self.tr(u'Omrat'),
             callback=self.run,
             parent=self.iface.mainWindow())
 
@@ -382,8 +384,8 @@ class OpenMRAT:
         gd = GatherData(self)
         height = self.dockwidget.sbHeight.value()
         data = gd.get_all_for_save()
-        calc = Calculation(data, height)
-        calc.run_model()
+        self.calc = Calculation(self, data, height)
+        self.calc.run_model()
         
         
 
