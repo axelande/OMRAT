@@ -10,7 +10,7 @@ on:
     # runs every day
     - cron: '0 6 * * *'
   push:
-    branches: [ "main"]
+    branches: [ "main", "test_ci"]
   pull_request:
     branches: [ "main"]
 
