@@ -267,7 +267,8 @@ class OpenMRAT:
         pr.addFeatures( [ fet ] )
         self.iface.actionToggleEditing().trigger()
         # Show in project
-        QgsProject.instance().removeMapLayer(self.point_layer)
+        if not self.testing:
+            QgsProject.instance().removeMapLayer(self.point_layer)
         self.save_route(start_point, end_point)
         QgsProject.instance().addMapLayer(vl)
         self.update_segment_data(point.asPoint())
