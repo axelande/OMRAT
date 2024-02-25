@@ -41,9 +41,3 @@ def test_run_calculation(load_data:OpenMRAT):
                          '1 - South going': {'Structure - 1': 0, 'Depth - 1': 0}}})
     assert_series_equal(pd.Series(load_data.calc.drift_dict), exp_drift, check_exact=False)
     assert_series_equal(pd.Series(load_data.calc.powered_dict), exp_power, check_exact=False)
-
-
-if __name__ == '__main__':
-    test_gather_data_func()
-    test_run_calculation()
-    app.quit()

@@ -39,8 +39,7 @@ class Storage:
             data = json.load(f)
             gather = GatherData(self.p)
             gather.populate(data)
-            
-        
+
     def new_file_path(self, save, show_msg, dir_path, generic_name, filter_text):
         """Open the QFileDialog and return a string with the folder and name of 
         the new file.
