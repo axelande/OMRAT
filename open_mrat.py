@@ -67,7 +67,7 @@ class OpenMRAT:
             locale_path = os.path.join(
                 self.plugin_dir,
                 'i18n',
-                'OpenMRAT_{}.qm'.format(locale))
+                f'OpenMRAT_{locale}.qm')
 
             if os.path.exists(locale_path):
                 self.translator = QTranslator()
