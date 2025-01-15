@@ -44,8 +44,7 @@ class GatherData:
     def get_causation_factors(self):
         p_pc = float(self.p.dockwidget.lePoweredPc.text())
         d_pc = float(self.p.dockwidget.leDriftingPc.text())
-        ai = float(self.p.dockwidget.leMeanTimeBetChecks.text())
-        self.data['pc'] = {'p_pc': p_pc, 'd_pc': d_pc, 'ai': ai}
+        self.data['pc'] = {'p_pc': p_pc, 'd_pc': d_pc}
         
     def get_all_for_save(self):
         self.gather_drift()
@@ -100,7 +99,6 @@ class GatherData:
     def populate_pc(self, data):
         self.p.dockwidget.lePoweredPc.setText(f"{data['pc']['p_pc']}")
         self.p.dockwidget.leDriftingPc.setText(f"{data['pc']['d_pc']}")
-        self.p.dockwidget.leMeanTimeBetChecks.setText(f"{data['pc']['ai']}")
     
     def populate_drift(self, data:dict):
         """Populates the drift fields with the "data" dict """

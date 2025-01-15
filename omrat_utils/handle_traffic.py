@@ -72,6 +72,7 @@ class Traffic:
             self.omrat.segment_data[l_id]['std_2'] = float(self.dw.leNormStd_2.text())
             self.omrat.segment_data[l_id]['u_min_2'] = float(self.dw.leUniformMin_2.text())
             self.omrat.segment_data[l_id]['u_max_2'] = float(self.dw.leUniformMax_2.text())
+            self.omrat.segment_data[l_id]['ai'] = float(self.dw.LEMeanTimeSeconds.text())
             self.omrat.segment_data[l_id]['u_p_2'] = self.dw.sbUniformP_2.value()
         if 'mean' not in self.omrat.segment_data[seg_id]:
             # Will happen the first time that cbTrafficSelectSeg is changed
@@ -88,6 +89,7 @@ class Traffic:
         self.dw.leNormStd_2.setText(str(self.omrat.segment_data[seg_id]['std_2']))
         self.dw.leUniformMin_2.setText(str(self.omrat.segment_data[seg_id]['u_min_2']))
         self.dw.leUniformMax_2.setText(str(self.omrat.segment_data[seg_id]['u_max_2']))
+        self.dw.LEMeanTimeSeconds.setText(str(self.omrat.segment_data[seg_id]['ai']))
         self.dw.sbUniformP_2.setValue(int(self.omrat.segment_data[seg_id]['u_p_2']))
         self.last_dist_seg = seg_id
         
