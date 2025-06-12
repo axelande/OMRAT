@@ -9,11 +9,11 @@ from scipy import stats
 
 
 if TYPE_CHECKING:
-    from open_mrat import OpenMRAT
+    from omrat_utils.handle_settings import DriftSettings
 
 class Repair:
-    def __init__(self, parent: OpenMRAT) -> None:
-        self.p = parent
+    def __init__(self, settings: DriftSettings) -> None:
+        self.sett = settings
         self.canvas = None
         self.figure = plt.figure()
         self.canvas = FigureCanvas(self.figure)
@@ -21,7 +21,7 @@ class Repair:
         self.ax.tick_params(axis="y",direction="in", pad=-10)
         self.ax.tick_params(axis="x",direction="in", pad=-10)
         self.figure.tight_layout()
-        self.p.dockwidget.canRepairViewLay.addWidget(self.canvas)
+        self.sett.dsw.canRepairViewLay.addWidget(self.canvas)
 
     def test_evaluate(self):
         xs = linspace(0, 4, 20)
@@ -29,7 +29,7 @@ class Repair:
         self.ax.clear()
         for x in xs:
             try:
-                ys.append(eval(self.p.dockwidget.leRepairFunc.toPlainText()))
+                ys.append(eval(self.sett.dsw.leRepairFunc.toPlainText()))
             except Exception as e:
                 ys.append(0)
                 print(e)
@@ -37,12 +37,12 @@ class Repair:
         self.canvas.draw()
         
     def get_repair_prob(self, x):
-        if self.p.dockwidget.tabRepair.currentIndex() == 1:
-            return eval(self.p.dockwidget.leRepairFunc.toPlainText())
+        if self.sett.dsw.rbUserDefined.isChecked() == 1:
+            return eval(self.sett.dsw.leRepairFunc.toPlainText())
         else:
-            std = float(self.p.dockwidget.leRepairStd.text())
-            loc = float(self.p.dockwidget.leRepairLoc.text())
-            scale = float(self.p.dockwidget.leRepairScale.text())
+            std = float(self.sett.dsw.leRepairStd.text())
+            loc = float(self.sett.dsw.leRepairLoc.text())
+            scale = float(self.sett.dsw.leRepairScale.text())
             drift = stats.lognorm(std, loc, scale)
             repaired = drift.cdf(x)
             return repaired

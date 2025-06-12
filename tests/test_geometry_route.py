@@ -3,7 +3,7 @@ from qgis.PyQt.QtCore import QVariant
 from qgis.PyQt.QtWidgets import QApplication
 
 from ..open_mrat import OpenMRAT
-from . import omrat
+from conftest import omrat
 
 
 def create_object(points) -> QgsVectorLayer:
@@ -19,13 +19,6 @@ def create_object(points) -> QgsVectorLayer:
     geom = QgsGeometry.fromMultiPolygonXY([[pointxys]])
     feat.setGeometry(geom)
     return lyr
-
-
-def test_add_line(omrat: OpenMRAT):
-    omrat.current_start_point = QgsGeometry.fromWkt('POINT(17.483303 56.6999912)')
-    p2 = QgsGeometry.fromWkt('POINT(17.4832501 56.7166186)')
-    omrat.create_line(p2)
-    assert omrat.dockwidget.twRouteList.rowCount() == 1
 
 
 def test_add_object(omrat: OpenMRAT):

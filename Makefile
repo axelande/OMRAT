@@ -46,7 +46,7 @@ PY_FILES = \
 	__init__.py \
 	open_mrat.py open_mrat_dockwidget.py
 
-UI_FILES = open_mrat_dockwidget_base.ui
+UI_FILES = open_mrat_dockwidget_base2.ui
 
 EXTRAS = metadata.txt icon.png
 

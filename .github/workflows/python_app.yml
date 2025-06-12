@@ -4,11 +4,11 @@
 name: Automatic plugin testing
 
 on:
-  schedule:
+  # schedule:
     # runs once a week
     # - cron: '0 6 * * 0'
     # runs every day
-    - cron: '0 6 * * *'
+    # - cron: '0 6 * * *'
   push:
     branches: [ "main", "test_ci"]
   pull_request:

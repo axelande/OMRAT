@@ -4,8 +4,12 @@
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
     "python.testing.pytestArgs": [
-        "tests"
+        "tests", "--cov=."
     ],
     "python.analysis.extraPaths": ["%OSGEO4W_ROOT%/apps/qgis/python",
-    "%OSGEO4W_ROOT%/apps/qgis/python/plugins"]
+    "%OSGEO4W_ROOT%/apps/qgis/python/plugins"],
+    "python.createEnvironment.contentButton": "show",
+    "editor.rulers": [120],
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": ["--line-length", "120"]
 }

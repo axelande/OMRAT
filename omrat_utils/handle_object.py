@@ -16,16 +16,35 @@ class OObject:
     def __init__(self, parent: OpenMRAT) -> None:
         self.p = parent
         self.deph_id = 0
-        self.depth_area = None
+        self.area = None
         self.object_id = 0
-        self.object_area = None
+        self.area_type = ''
+        self.loaded_areas = []
         
     def add_area(self, name='area') -> QgsVectorLayer:
-        area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
-        area.startEditing()
+        if self.area is not None:
+            try:
+                self.area.featureAdded.disconnect(self.on_feature_added)
+            except Exception:
+                pass
+        self.area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
+        self.area.startEditing()
+        self.area.featureAdded.connect(self.on_feature_added)
         self.p.iface.actionAddFeature().trigger()
-        QgsProject.instance().addMapLayer(area)
-        return area
+        QgsProject.instance().addMapLayer(self.area)
+    
+    def on_feature_added(self, fid):
+        """This will be called after the user right-clicks to finish the polygon"""
+        try:
+            self.area.featureAdded.disconnect(self.on_feature_added)
+            print('dictonnected')
+        except Exception as e:
+            print(e)
+        if self.area_type == 'depth':
+            self.add_simple_depth()
+        if self.area_type == 'object':
+            self.add_simple_object()
+
     
     def load_area(self, name, wkt):
         area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
@@ -34,22 +53,25 @@ class OObject:
         fet.setGeometry(QgsGeometry.fromWkt(wkt))
         pr.addFeatures( [ fet ] )
         QgsProject.instance().addMapLayer(area)
-        self.p.iface.actionSaveActiveLayerEdits().trigger()  
+        self.p.iface.actionSaveActiveLayerEdits().trigger()
+        self.loaded_areas.append(area)
     
     def add_simple_depth(self):
+        self.area_type = 'depth'
         if self.p.dockwidget.pbAddSimpleDepth.text() == 'Save':
             self.store_depth()
             self.p.dockwidget.pbAddSimpleDepth.setText('Add manual')
+            self.loaded_areas.append(self.area)
         else:
             self.deph_id += 1
-            self.depth_area = self.add_area(f'Depth_{self.deph_id}')
+            self.add_area(f'Depth_{self.deph_id}')
             self.p.dockwidget.pbAddSimpleDepth.setText('Save')
             
     def store_depth(self):
         self.p.dockwidget.twDepthList.setRowCount(self.deph_id)
         item1 = QTableWidgetItem(f'{self.deph_id}')
         item2 = QTableWidgetItem(f'10')
-        polies = self.depth_area.getFeatures()
+        polies = self.area.getFeatures()
         for poly in polies:
             item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
             self.p.dockwidget.twDepthList.setItem(self.deph_id - 1, 0, item1)
@@ -59,19 +81,21 @@ class OObject:
         self.p.iface.actionToggleEditing().trigger()
         
     def add_simple_object(self):
+        self.area_type = 'object'
         if self.p.dockwidget.pbAddSimpleObject.text() == 'Save':
             self.store_object()
             self.p.dockwidget.pbAddSimpleObject.setText('Add manual')
+            self.loaded_areas.append(self.area)
         else:
             self.object_id += 1
-            self.object_area = self.add_area(f'Object_{self.object_id}')
+            self.add_area(f'Object_{self.object_id}')
             self.p.dockwidget.pbAddSimpleObject.setText('Save')
             
     def store_object(self):
         self.p.dockwidget.twObjectList.setRowCount(self.object_id)
         item1 = QTableWidgetItem(f'{self.object_id}')
         item2 = QTableWidgetItem(f'10')
-        polies = self.object_area.getFeatures()
+        polies = self.area.getFeatures()
         for poly in polies:
             item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
             self.p.dockwidget.twObjectList.setItem(self.object_id - 1, 0, item1)
@@ -79,5 +103,17 @@ class OObject:
             self.p.dockwidget.twObjectList.setItem(self.object_id - 1, 2, item3)
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
+        
+    def unload(self):
+        if self.area is not None:
+            try:
+                self.area.featureAdded.disconnect(self.on_feature_added)
+            except TypeError:
+                pass
+        self.area = None
+
+        for layer in self.loaded_areas:
+            QgsProject.instance().removeMapLayer(layer.id())  # Remove the layer from QGIS
+        self.loaded_areas = []
 
         

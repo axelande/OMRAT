@@ -7,19 +7,24 @@ from pandas.testing import assert_series_equal
 import pytest
 from qgis.PyQt.QtWidgets import QApplication
 
-from ..open_mrat import OpenMRAT
-from . import omrat
+from open_mrat import OpenMRAT
+from tests.conftest import omrat
 
 
 @pytest.fixture()
 def load_data(omrat:OpenMRAT):
     omrat.run()
-    omrat.dockwidget.pbLoadProject.click()
-    assert omrat.dockwidget.twObjectList.rowCount() == 1
+    omrat.load_work()
     yield omrat
+    
+def test_the_loaded_data(load_data):
+    assert load_data.dockwidget.twObjectList.rowCount() == 1
+    assert load_data.dockwidget.twDepthList.rowCount() == 1
+    assert load_data.dockwidget.twRouteList.rowCount() == 3
+    
 
-def test_run_calculation(load_data:OpenMRAT):
-    load_data.dockwidget.pbRunModel.click()
+def tes3t_run_calculation(omrat:OpenMRAT):
+    omrat.dockwidget.pbRunModel.click()
     exp_drift = pd.Series({'tot_sum': 0.0006511175081618417, 
                  'l': {'1': {'lin_sum': 0.0006511175081618417, 
                              'North going': 0.0003163098044510794, 
@@ -39,5 +44,11 @@ def test_run_calculation(load_data:OpenMRAT):
                  'all': {'1 - North going': {'Structure - 1': 0.0823688084188536, 
                                              'Depth - 1': 0}, 
                          '1 - South going': {'Structure - 1': 0, 'Depth - 1': 0}}})
-    assert_series_equal(pd.Series(load_data.calc.drift_dict), exp_drift, check_exact=False)
-    assert_series_equal(pd.Series(load_data.calc.powered_dict), exp_power, check_exact=False)
+    assert_series_equal(pd.Series(omrat.calc.drift_dict), exp_drift, check_exact=False)
+    assert_series_equal(pd.Series(omrat.calc.powered_dict), exp_power, check_exact=False)
+
+
+def tes3t_repair_func(omrat:OpenMRAT):
+      omrat.dockwidget.pbTestRepair.click()
+      assert omrat.repair.ax.viewLim.xmax == 4.2
+      
