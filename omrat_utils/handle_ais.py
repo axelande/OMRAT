@@ -103,8 +103,8 @@ class AIS:
     def set_start_ais_settings(self):
         self.acw.leDBHost.setText(ais_settings.db_host)
         self.acw.leDBName.setText(ais_settings.db_name)
-        self.acw.leDBUser.setText(ais_settings.db_user)
-        self.acw.leDBPassword.setText(ais_settings.db_password)
+        self.acw.leUserName.setText(ais_settings.db_user)
+        self.acw.lePassword.setText(ais_settings.db_password)
         self.schema = self.acw.leProvider.text()
         self.year = self.acw.SBYear.value()
         self.months = []

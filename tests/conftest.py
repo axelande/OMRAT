@@ -1,7 +1,8 @@
-# import qgis libs so that ve set the correct sip api version
 import pytest
 from pytest_qgis import qgis_iface
-import qgis   # pylint: disable=W0611  # NOQA
+from unittest.mock import patch, MagicMock
+
+import qgis
 from qgis.core import QgsProject
 
 from open_mrat import OpenMRAT
@@ -23,8 +24,12 @@ def omrat(qgis_iface):
     qgis_iface.actionAddFeature = actionAddFeature
     qgis_iface.actionSaveActiveLayerEdits = actionSaveActiveLayerEdits
     qgis_iface.actionToggleEditing = actionToggleEditing
-    omrat = OpenMRAT(qgis_iface, True)
-    omrat.run()
-    yield omrat
-    # Clean up after the test
-    QgsProject.instance().removeAllMapLayers()
+    
+    # Patch DB before creating OpenMRAT/AIS
+    with patch("omrat_utils.handle_ais.DB") as MockDB:
+        MockDB.return_value = MagicMock()
+        omrat = OpenMRAT(qgis_iface, True)
+        omrat.run()
+        yield omrat
+        # Clean up after the test
+        QgsProject.instance().removeAllMapLayers()

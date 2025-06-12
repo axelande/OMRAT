@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 from omrat_utils.handle_ais import AIS
 from omrat_utils.handle_traffic import Traffic 
 from omrat_utils.handle_ship_cat import ShipCategories
@@ -10,21 +10,24 @@ from omrat_utils.handle_ship_cat import ShipCategories
 
 @pytest.fixture
 def mock_ais():
-    """Fixture to create a mock AIS instance."""
-    mock_omrat = MagicMock()
-    sc = ShipCategories(MagicMock())
-    mock_omrat.ship_cat = sc
-    mock_omrat.traffic_data = {}
-    ais = AIS(mock_omrat)
-    
-    # Replace ais.omrat.traffic with a real Traffic instance
-    mock_traffic = Traffic(mock_omrat, MagicMock())  # Create an instance of Traffic
-    mock_omrat.traffic = mock_traffic
-    ais.db.execute_and_return = MagicMock()
-    ais.schema = "test_schema"
-    ais.year = 2023
-    ais.months = []
-    return ais
+    with patch("omrat_utils.handle_ais.DB") as MockDB:
+        mock_db_instance = MagicMock()
+        MockDB.return_value = mock_db_instance
+
+        mock_omrat = MagicMock()
+        sc = ShipCategories(MagicMock())
+        mock_omrat.ship_cat = sc
+        mock_omrat.traffic_data = {}
+        ais = AIS(mock_omrat)
+        
+        # Optionally, set up additional mocks
+        mock_traffic = Traffic(mock_omrat, MagicMock())
+        mock_omrat.traffic = mock_traffic
+        ais.db = mock_db_instance  # Ensure .db is the mock
+        ais.schema = "test_schema"
+        ais.year = 2023
+        ais.months = []
+        return ais
 
 dt = datetime(2024, 2, 14, 3, 47, 25, tzinfo=timezone(timedelta(seconds=3600)))
 ais_return = [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, -2361.856017700104, 36), 
@@ -57,6 +60,7 @@ ais_return = [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, -2361.8
  (238.0, 35.0, 71, 7.4, None, dt, 18.9, None, 1245.5481197398958, 217),
  (90.0, 15.0, 70, 5.8, None, dt, 11.0, None, 1965.424991579896, 218), 
 ]
+
 
 def test_run_sql_no_months(mock_ais):
     """Test run_sql when no months are selected."""
