@@ -9,11 +9,11 @@ from qgis.core import QgsProject, QgsVectorLayer, QgsField, QgsFeature, QgsPolyg
 
 
 if TYPE_CHECKING:
-    from open_mrat import OpenMRAT
+    from omrat import OMRAT
 
 
 class OObject:
-    def __init__(self, parent: OpenMRAT) -> None:
+    def __init__(self, parent: OMRAT) -> None:
         self.p = parent
         self.deph_id = 0
         self.area = None

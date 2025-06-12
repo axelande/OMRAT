@@ -2,7 +2,7 @@ from qgis.core import QgsVectorLayer, QgsPointXY, QgsGeometry, QgsField, QgsFeat
 from qgis.PyQt.QtCore import QVariant
 from qgis.PyQt.QtWidgets import QApplication
 
-from ..open_mrat import OpenMRAT
+from ..omrat import OMRAT
 from conftest import omrat
 
 
@@ -21,7 +21,7 @@ def create_object(points) -> QgsVectorLayer:
     return lyr
 
 
-def test_add_object(omrat: OpenMRAT):
+def test_add_object(omrat: OMRAT):
     omrat.dockwidget.pbAddSimpleObject.click()
     obj = create_object([[17.5136058924, 56.8086347034],
                          [17.5137435342, 56.6331630685],

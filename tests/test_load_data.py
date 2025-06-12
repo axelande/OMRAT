@@ -7,12 +7,12 @@ from pandas.testing import assert_series_equal
 import pytest
 from qgis.PyQt.QtWidgets import QApplication
 
-from open_mrat import OpenMRAT
+from omrat import OMRAT
 from tests.conftest import omrat
 
 
 @pytest.fixture()
-def load_data(omrat:OpenMRAT):
+def load_data(omrat:OMRAT):
     omrat.run()
     omrat.load_work()
     yield omrat
@@ -23,7 +23,7 @@ def test_the_loaded_data(load_data):
     assert load_data.dockwidget.twRouteList.rowCount() == 3
     
 
-def tes3t_run_calculation(omrat:OpenMRAT):
+def tes3t_run_calculation(omrat:OMRAT):
     omrat.dockwidget.pbRunModel.click()
     exp_drift = pd.Series({'tot_sum': 0.0006511175081618417, 
                  'l': {'1': {'lin_sum': 0.0006511175081618417, 
@@ -48,7 +48,7 @@ def tes3t_run_calculation(omrat:OpenMRAT):
     assert_series_equal(pd.Series(omrat.calc.powered_dict), exp_power, check_exact=False)
 
 
-def tes3t_repair_func(omrat:OpenMRAT):
+def tes3t_repair_func(omrat:OMRAT):
       omrat.dockwidget.pbTestRepair.click()
       assert omrat.repair.ax.viewLim.xmax == 4.2
       

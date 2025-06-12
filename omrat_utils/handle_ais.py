@@ -112,10 +112,13 @@ class AIS:
             cb = getattr(self.acw, f'CB_{i}')
             if cb.isChecked():
                 self.months.append(i)
-        self.db = DB(db_host=ais_settings.db_host, 
-                     db_name=ais_settings.db_name, 
-                     db_user=ais_settings.db_user, 
-                     db_pass=ais_settings.db_password)
+        try:
+            self.db = DB(db_host=ais_settings.db_host, 
+                        db_name=ais_settings.db_name, 
+                        db_user=ais_settings.db_user, 
+                        db_pass=ais_settings.db_password)
+        except Exception:
+            pass
         self.max_deviation = float(self.acw.leMaxDev.text())
     
     def update_ais_settings(self):

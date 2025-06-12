@@ -6,10 +6,10 @@ from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from open_mrat import OpenMRAT
+    from omrat import OMRAT
     
 class GatherData:
-    def __init__(self, parent: OpenMRAT) -> None:
+    def __init__(self, parent: OMRAT) -> None:
         self.p = parent
         self.data = {}
                

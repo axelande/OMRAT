@@ -49,10 +49,10 @@ from omrat_utils.storage import Storage
 from omrat_utils.handle_object import OObject
 from omrat_utils.handle_ship_cat import ShipCategories
 from omrat_utils.gather_data import GatherData
-from open_mrat_dockwidget import OpenMRATDockWidget
+from omrat_widget import OMRATDockWidget
 
 
-class OpenMRAT:
+class OMRAT:
     """QGIS Plugin Implementation."""
 
     def __init__(self, iface, testing=False):
@@ -74,7 +74,7 @@ class OpenMRAT:
             locale_path = os.path.join(
                 self.plugin_dir,
                 'i18n',
-                f'OpenMRAT_{locale}.qm')
+                f'OMRAT_{locale}.qm')
 
             if os.path.exists(locale_path):
                 self.translator = QTranslator()
@@ -271,7 +271,7 @@ class OpenMRAT:
             for m in to_remove:
                 print(m)
                 del sys.modules[m]
-        QgsMessageLog.logMessage("Plugin unloaded", "OpenMRAT", Qgis.Info)
+        QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.Info)
         
     def point4326_from_wkt(self, coord_str:str, crs:str) -> QgsGeometry:
         coords = coord_str.split(' ')
@@ -401,7 +401,7 @@ class OpenMRAT:
             self.pluginIsActive = True
             if self.dockwidget == None:
                 # Create the dockwidget (after translation) and keep reference
-                self.dockwidget = OpenMRATDockWidget()
+                self.dockwidget = OMRATDockWidget()
             self.ship_cat = ShipCategories(self)
             self.ais = AIS(self)
             self.traffic = Traffic(self, self.dockwidget)

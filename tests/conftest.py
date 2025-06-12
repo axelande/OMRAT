@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 import qgis
 from qgis.core import QgsProject
 
-from open_mrat import OpenMRAT
+from omrat import OMRAT
 
 
 class actionAddFeature:
@@ -25,10 +25,10 @@ def omrat(qgis_iface):
     qgis_iface.actionSaveActiveLayerEdits = actionSaveActiveLayerEdits
     qgis_iface.actionToggleEditing = actionToggleEditing
     
-    # Patch DB before creating OpenMRAT/AIS
+    # Patch DB before creating OMRAT/AIS
     with patch("omrat_utils.handle_ais.DB") as MockDB:
         MockDB.return_value = MagicMock()
-        omrat = OpenMRAT(qgis_iface, True)
+        omrat = OMRAT(qgis_iface, True)
         omrat.run()
         yield omrat
         # Clean up after the test

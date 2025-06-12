@@ -9,10 +9,10 @@ from qgis.PyQt.QtWidgets import QFileDialog
 from .gather_data import GatherData
 
 if TYPE_CHECKING:
-    from open_mrat import OpenMRAT
+    from omrat import OMRAT
 
 class Storage:
-    def __init__(self, parent: OpenMRAT) -> None:
+    def __init__(self, parent: OMRAT) -> None:
         self.p = parent
         
     def store_all(self):

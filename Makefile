@@ -1,5 +1,5 @@
 #/***************************************************************************
-# OpenMRAT
+# OMRAT
 #
 # This is an open source implementation of Pedersens equations from 1995
 #							 -------------------
@@ -38,15 +38,15 @@ LOCALES =
 # translation
 SOURCES = \
 	__init__.py \
-	open_mrat.py open_mrat_dockwidget.py
+	omrat.py omrat_widget.py
 
-PLUGINNAME = open_mrat
+PLUGINNAME = omrat
 
 PY_FILES = \
 	__init__.py \
-	open_mrat.py open_mrat_dockwidget.py
+	omrat.py omrat_widget.py
 
-UI_FILES = open_mrat_dockwidget_base2.ui
+UI_FILES = omrat_base.ui
 
 EXTRAS = metadata.txt icon.png
 
