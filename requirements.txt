@@ -7,4 +7,3 @@ scipy
 shapely
 geopandas
 matplotlib
-pyaisdb
