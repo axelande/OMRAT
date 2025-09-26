@@ -1,13 +1,13 @@
 import os
 
 import numpy as np
-from pyaisdb.database import DB
 from shapely import wkt
 
+from compute.database import DB
 from ui.ais_connection_widget import AISConnectionWidget
 from ui import ais_settings
 
-def update_ais_settings_file(db_host, db_user, db_pass, db_name):
+def update_ais_settings_file(db_host:str, db_user:str, db_pass:str, db_name:str):
     ais_settings_path = os.path.join(os.path.dirname(__file__), '..', 'ui', 'ais_settings.py')
     with open(ais_settings_path, 'w', encoding='utf-8') as f:
         f.write(f"""db_host = '{db_host}'
@@ -27,7 +27,6 @@ def get_pl(db, lat1, lat2, lon1, lon2, l_width):
         lat1=lat1, lat2=lat2,
         lon1=lon1, lon2=lon2, l_w=l_width/2)
     pl = db.execute_and_return(sql)[0][0]
-    print(pl)
     return pl
 
 def get_type(toc, sh_type):

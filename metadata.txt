@@ -21,6 +21,7 @@ repository=https://github.com/axelande/OMRAT
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.3.1 - Moved database file to the compute folder
   Version 0.3.0 - Changed name from OpenMRAT to OMRAT and fixed tests etc.
   Version 0.2.0 - Major update! Breaking out the plugin from docked mode, added much more etc.
   Version 0.1.1 - Added auto tests on github

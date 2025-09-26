@@ -7,5 +7,5 @@
 			"path": "C:/OSGeo4W/apps/Python312/Lib/site-packages"
 		}
 	],
-	"settings": {}
+	"settings": {"python.analysis.typeCheckingMode": "strict"}
 }

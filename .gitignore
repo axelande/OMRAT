@@ -2,3 +2,4 @@ run_dev_vscode.bat
 __pycache__/
 .pytest_cashe/
 help/build/
+zip_build/

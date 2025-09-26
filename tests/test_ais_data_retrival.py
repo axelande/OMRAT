@@ -62,7 +62,7 @@ ais_return = [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, -2361.8
 ]
 
 
-def test_run_sql_no_months(mock_ais):
+def test_run_sql_no_months(mock_ais: AIS):
     """Test run_sql when no months are selected."""
     mock_ais.months = []
     mock_ais.db.execute_and_return.return_value = [
