@@ -47,11 +47,11 @@ def main(parameters, arguments):
         print("A protocol error occurred")
         print(f"URL: {hide_password(err.url, 0)}")
         print(f"HTTP/HTTPS headers: {err.headers}")
-        print("Error code: %d" % err.errcode)
+        print(f"Error code: {int(err.errcode)}")
         print(f"Error message: {err.errmsg}")
     except xmlrpc.client.Fault as err:
         print("A fault occurred")
-        print("Fault code: %d" % err.faultCode)
+        print(f"Fault code: {int(err.faultCode)}")
         print(f"Fault string: {err.faultString}")
 
 

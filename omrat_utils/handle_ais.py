@@ -19,13 +19,11 @@ db_name = '{db_name}'
 
 def get_pl(db, lat1, lat2, lon1, lon2, l_width):
     """Collects the passage line as text"""
-    sql = """SELECT st_astext(st_makeline(ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
-    {l_w}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(90))::geometry,
+    sql = f"""SELECT st_astext(st_makeline(ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
+    {l_width/2}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(90))::geometry,
     ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
-    {l_w}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(270))::geometry
-    ))""".format(
-        lat1=lat1, lat2=lat2,
-        lon1=lon1, lon2=lon2, l_w=l_width/2)
+    {l_width/2}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(270))::geometry
+    ))"""
     pl = db.execute_and_return(sql)[0][0]
     return pl
 
@@ -193,27 +191,26 @@ class AIS:
         sql = "with segments as ("
         if len(self.months) > 0:
             for month in self.months:
-                sql += """select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
-                FROM {schema}.segments_{year}_{month} ss
-                JOIN {schema}.states_{year} st on st.rowid=ss.state_id
-                JOIN {schema}.statics_{year} si on si.rowid=st.static_id
+                sql += f"""select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
+                FROM {self.schema}.segments_{self.year}_{month} ss
+                JOIN {self.schema}.states_{self.year} st on st.rowid=ss.state_id
+                JOIN {self.schema}.statics_{self.year} si on si.rowid=st.static_id
                 WHERE ST_intersects(segment, ST_geomfromtext('{pl}', 4326))
-                UNION """.format(schema=self.schema, year=self.year, month=month,
-                                pl=pl)
+                UNION """
         else:
-            sql += """select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
-                                FROM {schema}.segments_{year} ss
-                                JOIN {schema}.states_{year} st on st.rowid=ss.state_id
-                                JOIN {schema}.statics_{year} si on si.rowid=st.static_id
+            sql += f"""select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
+                                FROM {self.schema}.segments_{self.year} ss
+                                JOIN {self.schema}.states_{self.year} st on st.rowid=ss.state_id
+                                JOIN {self.schema}.statics_{self.year} si on si.rowid=st.static_id
                                 WHERE ST_intersects(segment, ST_geomfromtext('{pl}', 4326))
-            """.format(schema=self.schema, year=self.year, pl=pl)
+            """
 
-        sql = sql[:-6] + """), get_vessel_info as(select mmsi, ship_type, loa, breadth_moulded as beam, height as air_draught
+        sql = sql[:-6] + f"""), get_vessel_info as(select mmsi, ship_type, loa, breadth_moulded as beam, height as air_draught
         FROM vessels.seaweb_data)
         SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 then loa else dim_a + dim_b end as loa, case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 then loa else dim_c + dim_d end as beam, type_and_cargo, draught, ship_type, date1, sog, air_draught, st_distance(st_intersection(segment, st_geomfromtext('{pl}',4326))::geography, st_startpoint(st_geomfromtext('{pl}', 4326))::geography)-st_length(st_geomfromtext('{pl}', 4326)::geography)/2 as dist_from_start, cog
         FROM segments ss
         left outer JOIN get_vessel_info sd on ss.mmsi=sd.mmsi
-        """.format(pl=pl)
+        """
         ais_data = self.db.execute_and_return(sql)
         return ais_data
 

@@ -44,8 +44,7 @@ class DB:
                 options="-c statement_timeout=" + str(self.time_out) + "000"
             )
         except psycopg2.OperationalError as e:
-            raise Exception("Error connecting to database on '%s'. %s" %
-                              (self.db_host, str(e)))
+            raise Exception(f"Error connecting to database on '{self.db_host}'. {e!s}")
 
     def _disconnect(self):
         if hasattr(self, 'conn'):
