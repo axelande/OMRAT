@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cashe/
 help/build/
 zip_build/
+.coverage
