@@ -30,7 +30,7 @@ def mock_ais():
         return ais
 
 dt = datetime(2024, 2, 14, 3, 47, 25, tzinfo=timezone(timedelta(seconds=3600)))
-ais_return = [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, -2361.856017700104, 36), 
+ais_return = [True, [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, -2361.856017700104, 36), 
  (158.0, 23.0, 79, 7.7, 'container ship _fully cellular_', dt, 12.6, 0.0, -2379.829346660104, 36), 
  (219.0, 31.0, 69, 7.1, 'Passenger/Ro-Ro Ship (Vehicles)', dt, 21.4, 0.0, -1738.2160136101043, 37), 
  (90.0, 15.0, 75, 4.7, None, dt, 10.8, None, 1621.059160829896, 218), 
@@ -59,15 +59,15 @@ ais_return = [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, -2361.8
  (184.0, 28.0, 80, 10.8, None, dt, 12.0, None, 2356.5352839998955, 217), 
  (238.0, 35.0, 71, 7.4, None, dt, 18.9, None, 1245.5481197398958, 217),
  (90.0, 15.0, 70, 5.8, None, dt, 11.0, None, 1965.424991579896, 218), 
-]
+]]
 
 
 def test_run_sql_no_months(mock_ais: AIS):
     """Test run_sql when no months are selected."""
     mock_ais.months = []
-    mock_ais.db.execute_and_return.return_value = [
+    mock_ais.db.execute_and_return.return_value = [True,[
         (100, 20, "type_and_cargo", 5.0, "ship_type", "2023-01-01", 15.0, 10.0, 100.0, 180.0)
-    ]
+    ]]
     pl = "LINESTRING(10 20, 30 40)"
     result = mock_ais.run_sql(pl)
 
@@ -85,9 +85,9 @@ def test_run_sql_no_months(mock_ais: AIS):
 def test_run_sql_with_months(mock_ais):
     """Test run_sql when specific months are selected."""
     mock_ais.months = [1, 2]
-    mock_ais.db.execute_and_return.return_value = [
+    mock_ais.db.execute_and_return.return_value = [True,[
         (200, 25, "type_and_cargo", 6.0, "ship_type", "2023-02-01", 16.0, 11.0, 200.0, 190.0)
-    ]
+    ]]
     pl = "LINESTRING(50 60, 70 80)"
     result = mock_ais.run_sql(pl)
 
@@ -105,7 +105,7 @@ def test_run_sql_with_months(mock_ais):
 
 def test_run_sql_empty_result(mock_ais):
     """Test run_sql when the query returns no results."""
-    mock_ais.db.execute_and_return.return_value = []
+    mock_ais.db.execute_and_return.return_value = [True, []]
     pl = "LINESTRING(0 0, 10 10)"
     result = mock_ais.run_sql(pl)
 
@@ -123,7 +123,7 @@ def mock_table():
     table = MagicMock()
     table.rowCount.return_value = 1
     table.item.side_effect = lambda row, col: MagicMock(text=PropertyMock(return_value=[
-        '1', '1', '14.33188 55.21143', '14.52057 55.35013', '5000'
+        '1', '1', '14.33188 55.21143', '14.52057 55.35013', 5000
     ][col]))
     return table
 
@@ -163,9 +163,9 @@ def test_update_legs(mock_ais, mock_table):
     mock_ais.omrat.qgis_geoms.leg_dirs = {'1': ['East going', 'West going']}
     mock_ais.omrat.traffic.run_update_plot = MagicMock()
     mock_ais.db.execute_and_return = MagicMock(side_effect=[
-        [['LINESTRING(14.435042123303658 55.24939672092081,14.372456499980117 55.276595228118936)']],
+        [True, [['LINESTRING(14.435042123303658 55.24939672092081,14.372456499980117 55.276595228118936)']]],
         ais_return,# Mock ais_data query result
-        [[37.0]],  # Mock leg bearing query result
+        [True, [[37.0]]],  # Mock leg bearing query result
         
     ])
 
