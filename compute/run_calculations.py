@@ -1,32 +1,40 @@
 import json
 import sys
-sys.path.append('.')
+from typing import Any, TYPE_CHECKING
 
+from PyQt5.QtWidgets import QLabel
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib as mpl
 mpl.use('Qt5Agg')
 import geopandas as gpd
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from numpy import exp, log
 from pyproj import CRS, Transformer
-from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem, QTreeWidgetItem, QTreeWidget
+from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem, QTreeWidgetItem, QTreeWidget, QWidget
 from scipy import stats
 from scipy.stats import norm, uniform
 import shapely.wkt as sw
 from shapely.ops import transform
+from shapely.geometry import LineString
+from shapely.geometry.base import BaseGeometry
 
+sys.path.append('.')
 from basic_equations import get_drifting_prob, get_drift_time, get_Fcoll, powered_na
 from geometries.route import get_multiple_ed
 from geometries.route import get_multi_drift_distance, get_best_utm 
 from geometries.get_drifting_overlap import visualize_interactive
-
 from ui.result_widget import ResultWidget
 
-def get_distribution(segment_data:dict, direction:int) -> list:
+if TYPE_CHECKING:
+    from omrat import OMRAT
+    
+def get_distribution(segment_data:dict[str, Any], direction:int) -> tuple[list[Any], list[float]]:
     d = direction + 1 # given as 0, 1 and should be 1, 2
-    distributions = []
-    weights = []
+    distributions: list[Any] = []
+    weights: list[float] = []
     
     for i in range(1, 4):
         if f'weight{d}_{i}' in segment_data:
@@ -50,17 +58,19 @@ def get_distribution(segment_data:dict, direction:int) -> list:
         weights.append(0)
     return distributions, weights
     
-def clean_traffic(data) -> list:
+def clean_traffic(data:dict[str, Any]) -> list[tuple[LineString, list[Any], list[float], list[dict[str, float]], str]]:
     """List all ships that on each segment/direction"""
-    traffics = []
+    traffics: list[tuple[LineString, list[Any], list[float], list[dict[str, float]], str]] = []
     for segment, dirs in data["traffic_data"].items():
         for k, (di, var) in enumerate(dirs.items()):
             distributions, weights = get_distribution(data["segment_data"][segment], k)
             if k == 0:
-                geom = sw.loads(f'LineString({data["segment_data"][segment]["Start Point"]}, {data["segment_data"][segment]["End Point"]})')
+                geom_base: BaseGeometry = sw.loads(f'LineString({data["segment_data"][segment]["Start Point"]}, {data["segment_data"][segment]["End Point"]})')
             else:
-                geom = sw.loads(f'LineString({data["segment_data"][segment]["End Point"]}, {data["segment_data"][segment]["Start Point"]})')
-            leg_traffic = []
+                geom_base: BaseGeometry = sw.loads(f'LineString({data["segment_data"][segment]["End Point"]}, {data["segment_data"][segment]["Start Point"]})')
+            assert(isinstance(geom_base, LineString))
+            geom: LineString = geom_base
+            leg_traffic: list[dict[str, float]] = []
             name = f"Leg {segment}-{data['segment_data'][segment]['Dirs'][k]}"
             for i, row in enumerate(var['Frequency (ships/year)']):
                 for j, value in enumerate(row):
@@ -69,54 +79,22 @@ def clean_traffic(data) -> list:
                     if isinstance(value, str):
                         value = int(value)
                     if value > 0:
-                        info = {'freq': value,
-                                'speed': var['Speed (knots)'][i][j], 
-                                'draught': var['Draught (meters)'][i][j], 
-                                'height': var['Ship heights (meters)'][i][j],
+                        info: dict[str, float] = {'freq': value,
+                                'speed': float(var['Speed (knots)'][i][j]), 
+                                'draught': float(var['Draught (meters)'][i][j]), 
+                                'height': float(var['Ship heights (meters)'][i][j]),
                                 'ship_type': i,
                                 'ship_size': j,
                                 'direction': di,
                                 }
                         leg_traffic.append(info)
-            traffics.append([geom, distributions, weights, leg_traffic, name])
+            traffics.append((geom, distributions, weights, leg_traffic, name))
     return traffics
 
-def drift_accidents(data, w:int = 100, h:int = 100) -> dict:
-    """Estimates the probability of drifting accidents"""
-    objs = load_areas(data)
-    wind_rose_tot = sum(data["drift"]["rose"].values())
-    not_anchor = 1 - data['drift']['anchor_p']
-    drift_speed = data['drift']["speed"] * 1852 # m/h
-    drift = None
-    if data['drift']['repair']['use_lognormal'] == 0:
-        drift = stats.lognorm(data['drift']['repair']['std'], data['drift']['repair']['loc'], data['drift']['repair']['scale'])
-    res = {'tot_sum': 0, 'l':{}, 'o':{}, 'all':{}}
-    for lin in clean_traffic(data):
-        # TODO: Check that the height and darught are relevant for the ship on the segment
-        line_length = get_line_length(lin)
-        drift_prob = get_drifting_prob(float(data['drift']['drift_p']), line_length, float(lin['speed']) * 1852)
-        distances, _, _, directions = get_multi_drift_distance(lin["geom"], objs, lin["mean"], lin["std"], h, w)
-        add_empty_segment_to_res_dict(res, lin)
-        for i in range(len(objs)):
-            o_name = f"{objs[i]['type']} - {objs[i]['id']}"
-            obj_sum = 0
-            for dist, direction in zip(distances[i], directions[i]):
-                prob_not_repaired = get_not_repaired(data, drift_speed, dist, drift)
-                obj_sum += (lin['freq'] * drift_prob * prob_not_repaired * not_anchor * 
-                            (data['drift']['rose'][direction] / wind_rose_tot / (w * h)))
-            write_res2dict(res, lin, o_name, obj_sum) 
-    return res
 
-def get_line_length(lin):
-    """Returns the segment length in meters."""
-    utm = get_best_utm([lin["geom"]])
-    project = Transformer.from_crs(CRS('EPSG:4326'), utm, always_xy=True).transform
-    line_length = transform(project, lin["geom"]).length
-    return line_length
-
-def load_areas(data):
+def load_areas(data:dict[str, Any])-> list[dict[str, Any]]:
     """Loads the objects and depths into one objs dict"""
-    objs = []
+    objs:list[dict[str, Any]] = []
     for id, height, wkt in data['objects']:
         objs.append({'type': 'Structure', 'id': id, 'height': height, 'wkt': sw.loads(wkt)})
     for id, depth, wkt in data['depths']:
@@ -153,7 +131,7 @@ def add_empty_segment_to_res_dict(res, lin):
         res['l'][lin['segment']][lin['direction']] = 0
     res['all'][f"{lin['segment']} - {lin['direction']}"] = {}
 
-def populate_details(twRes: QTableWidget, res_dict: dict):
+def populate_details(twRes: QTableWidget, res_dict: dict[str, Any]):
     twRes.clear()
     twRes.setColumnCount(len(res_dict['o']))
     twRes.setHorizontalHeaderLabels(list(res_dict['o'].keys()))
@@ -164,7 +142,7 @@ def populate_details(twRes: QTableWidget, res_dict: dict):
             item = QTableWidgetItem(f"{res_dict['all'][r_key][c_key]:.2e}")
             twRes.setItem(row, col, item)
 
-def populate_segment(tree: QTreeWidget, res_dict):
+def populate_segment(tree: QTreeWidget, res_dict: dict[str, Any]):
     tree.clear()
     tree.setColumnCount(3)
     tree.setHeaderLabels(['Segment', 'Direction', 'Probability'])
@@ -186,7 +164,7 @@ def populate_segment(tree: QTreeWidget, res_dict):
             dir_item.setText(2, f"{val:.2e}")
             segment_item.addChild(dir_item)
  
-def populate_object(tree: QTreeWidget, res_dict):
+def populate_object(tree: QTreeWidget, res_dict: dict[str, Any]):
     tree.clear()
     tree.setColumnCount(2)
     tree.setHeaderLabels(['Object', 'Probability'])
@@ -254,75 +232,60 @@ def transform_to_utm(lines, objects):
     return transformed_lines, transformed_objects, utm_crs
 
 class Calculation:
-    def __init__(self, parent) -> None:
+    def __init__(self, parent: "OMRAT") -> None:
         self.p = parent
-        self.canvas = None
-        #self.powered_dict = powered_accidents(data)
-
-    def run_model(self):
-        self.rw = ResultWidget()
-        self.rw.show()
-        self.rw.cbResType.currentIndexChanged.connect(self.populate)
-        self.populate(self.drift_dict)
-        if not self.p.testing:
-            self.rw.exec_()
+        self.canvas: QWidget | None = None
     
-    def run_drift_visualization(self, data):
-        lines = []
-        distributions = []
-        weights = []
-        line_names = []
+    def run_drift_visualization(self, data:dict[str, Any]):
+        lines: list[LineString] = []
+        distributions: list[list[Any]] = []
+        weights:list[list[float]] = []
+        line_names: list[str] = []
         if data.get('traffic_data', {}) == {}:
             return 
         # Collect lines and distributions
-        for geom, distribution, weight, leg_traffic, name in clean_traffic(data):
+        for geom, distribution, weight, _, name in clean_traffic(data):
             lines.append(geom)
             distributions.append(distribution)
             weights.append(weight)
             line_names.append(name)
 
         # Collect objects
-        objects = []
-        for id, height, wkt in data['objects']:
+        objects:list[BaseGeometry] = []
+        for _, _, wkt in data['objects']:
             objects.append(sw.loads(wkt))
 
         # Transform lines and objects to UTM
         transformed_lines, transformed_objects, utm_crs = transform_to_utm(lines, objects)
         print('lines:')
         print(transformed_lines)
-        longest_length = max(line.length for line in transformed_lines)
+        longest_length:float = max(line.length for line in transformed_lines)
         transformed_objects = [gpd.GeoDataFrame(geometry=[obj]) for obj in transformed_objects]
 
         # Pass transformed geometries to visualize_interactive
-        fig = plt.figure(figsize=(12, 10))
+        fig: Figure = plt.figure(figsize=(12, 10))
+
         gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1.2])
 
-        self.ax1 = fig.add_subplot(gs[0, 0])
-        self.ax2 = fig.add_subplot(gs[0, 1])
-        self.ax3 = fig.add_subplot(gs[1, :])
+        self.ax1: Axes = fig.add_subplot(gs[0, 0])
+        self.ax2: Axes = fig.add_subplot(gs[0, 1])
+        self.ax3: Axes = fig.add_subplot(gs[1, :])
         self.ax1.set_aspect('equal')
         for ax in self.ax1, self.ax2:
             ax.set_xticks([])
             ax.set_yticks([])
             ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
         if self.canvas is not None:
-            self.p.dockwidget.result_layout.removeWidget(self.canvas)
-            self.canvas.deleteLater()  # Ensure the old canvas is deleted
-            self.canvas = None
+            if self.p.main_widget is not None:
+                self.p.main_widget.result_layout.removeWidget(self.canvas)
+                self.canvas.deleteLater()  # Ensure the old canvas is deleted
+                self.canvas = None
         self.canvas = FigureCanvas(fig)
-        self.p.dockwidget.result_layout.addWidget(self.canvas)
-        result_text = self.p.dockwidget.result_values
-        visualize_interactive(fig, self.ax1, self.ax2, self.ax3, transformed_lines, line_names, transformed_objects, distributions, 
-                              weights, result_text,distance=longest_length * 3)
-        
-    def populate(self, res_dict: dict = None):
-        if res_dict == 0:
-            res_dict = self.drift_dict
-        if res_dict == 1:
-            res_dict = self.powered_dict
-        populate_details(self.rw.twRes, res_dict)
-        populate_segment(self.rw.treewSegment, res_dict)
-        populate_object(self.rw.treewObject, res_dict)
+        if self.p.main_widget is not None:
+            self.p.main_widget.result_layout.addWidget(self.canvas)
+            result_text: QLabel = self.p.main_widget.result_values
+            visualize_interactive(fig, self.ax1, self.ax2, self.ax3, transformed_lines, line_names, transformed_objects, distributions, 
+                                weights, result_text, distance=longest_length * 3.0)
 
 
 if __name__ == '__main__':

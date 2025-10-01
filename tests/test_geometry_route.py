@@ -22,12 +22,12 @@ def create_object(points) -> QgsVectorLayer:
 
 
 def test_add_object(omrat: OMRAT):
-    omrat.dockwidget.pbAddSimpleObject.click()
+    omrat.main_widget.pbAddSimpleObject.click()
     obj = create_object([[17.5136058924, 56.8086347034],
                          [17.5137435342, 56.6331630685],
                          [17.5398315995, 56.6836007601],
                          [17.5362169055, 56.7324570938],
                          [17.5136058924, 56.8086347034]])
     omrat.object.object_area = obj
-    omrat.dockwidget.pbAddSimpleObject.click()
-    assert omrat.dockwidget.twObjectList.rowCount() == 1
+    omrat.main_widget.pbAddSimpleObject.click()
+    assert omrat.main_widget.twObjectList.rowCount() == 1

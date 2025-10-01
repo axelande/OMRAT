@@ -18,13 +18,13 @@ def load_data(omrat:OMRAT):
     yield omrat
     
 def test_the_loaded_data(load_data):
-    assert load_data.dockwidget.twObjectList.rowCount() == 1
-    assert load_data.dockwidget.twDepthList.rowCount() == 1
-    assert load_data.dockwidget.twRouteList.rowCount() == 3
+    assert load_data.main_widget.twObjectList.rowCount() == 1
+    assert load_data.main_widget.twDepthList.rowCount() == 1
+    assert load_data.main_widget.twRouteList.rowCount() == 3
     
 
 def tes3t_run_calculation(omrat:OMRAT):
-    omrat.dockwidget.pbRunModel.click()
+    omrat.main_widget.pbRunModel.click()
     exp_drift = pd.Series({'tot_sum': 0.0006511175081618417, 
                  'l': {'1': {'lin_sum': 0.0006511175081618417, 
                              'North going': 0.0003163098044510794, 
@@ -49,6 +49,6 @@ def tes3t_run_calculation(omrat:OMRAT):
 
 
 def tes3t_repair_func(omrat:OMRAT):
-      omrat.dockwidget.pbTestRepair.click()
+      omrat.main_widget.pbTestRepair.click()
       assert omrat.repair.ax.viewLim.xmax == 4.2
       

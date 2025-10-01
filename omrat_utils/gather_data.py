@@ -3,6 +3,7 @@ import json
 import os
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
+from typing import Any
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -17,18 +18,18 @@ class GatherData:
         """Extends the segment_data in self.data, must be called after it is created."""
         for j, col in enumerate(['Segment Id', 'Route Id', 'Start Point', 'End Point', 'Width']):
             for i, key in enumerate(self.data['segment_data'].keys()):
-                value = self.p.dockwidget.twRouteList.item(i, j).text()
+                value = self.p.main_widget.twRouteList.item(i, j).text()
                 self.data["segment_data"][key][col] = value
         
-    def get_all_for_save(self) -> dict:
+    def get_all_for_save(self) -> dict[str, Any]:
         self.data['pc'] = self.p.causation_f.data
         self.data['drift'] = self.p.drift_values
         self.p.traffic.change_dist_segment() # Saves the current settings on the leg
         self.data['traffic_data'] = self.p.traffic_data
         self.data['segment_data'] = self.p.segment_data
         self.get_segment_tbl()
-        self.data['depths'] = self.obtain_table_data(self.p.dockwidget.twDepthList)
-        self.data['objects'] = self.obtain_table_data(self.p.dockwidget.twObjectList)
+        self.data['depths'] = self.obtain_table_data(self.p.main_widget.twDepthList)
+        self.data['objects'] = self.obtain_table_data(self.p.main_widget.twObjectList)
         return self.data
     
     def obtain_table_data(self, tbl) -> list:
@@ -50,11 +51,11 @@ class GatherData:
         self.p.segment_data = data['segment_data']
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']
-        self.populate_segment_tbl(data['segment_data'], self.p.dockwidget.twRouteList)
+        self.populate_segment_tbl(data['segment_data'], self.p.main_widget.twRouteList)
         self.populate_cbTrafficSelectSeg()
         self.p.traffic.change_dist_segment()
-        self.populate_tbl(data['depths'], self.p.dockwidget.twDepthList)
-        self.populate_tbl(data['objects'], self.p.dockwidget.twObjectList)
+        self.populate_tbl(data['depths'], self.p.main_widget.twDepthList)
+        self.populate_tbl(data['objects'], self.p.main_widget.twObjectList)
         
         # Load data to canvas
         self.p.load_lines(data)
@@ -65,10 +66,10 @@ class GatherData:
             
     def populate_cbTrafficSelectSeg(self):
         """Sets the segment names in cbTrafficSelectSeg"""
-        self.p.dockwidget.cbTrafficSelectSeg.clear()
+        self.p.main_widget.cbTrafficSelectSeg.clear()
         for key in self.p.segment_data.keys():
-            self.p.dockwidget.cbTrafficSelectSeg.addItem(str(key))
-        self.p.traffic.c_seg = self.p.dockwidget.cbTrafficSelectSeg.currentText()
+            self.p.main_widget.cbTrafficSelectSeg.addItem(str(key))
+        self.p.traffic.c_seg = self.p.main_widget.cbTrafficSelectSeg.currentText()
 
     def populate_tbl(self, data:list, tbl:QTableWidget):
         tbl.setRowCount(len(data))
@@ -86,4 +87,4 @@ class GatherData:
                 print(col)
                 item = QTableWidgetItem(str(data[key][col]))
                 print(data[key][col])
-                self.p.dockwidget.twRouteList.setItem(i, j, item)
+                self.p.main_widget.twRouteList.setItem(i, j, item)

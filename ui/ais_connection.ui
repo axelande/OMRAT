@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>418</width>
+    <width>433</width>
     <height>543</height>
    </rect>
   </property>
@@ -335,6 +335,27 @@ structure:</string>
    </item>
   </layout>
  </widget>
+ <tabstops>
+  <tabstop>leDBHost</tabstop>
+  <tabstop>leDBName</tabstop>
+  <tabstop>leUserName</tabstop>
+  <tabstop>lePassword</tabstop>
+  <tabstop>leProvider</tabstop>
+  <tabstop>SBYear</tabstop>
+  <tabstop>CB_1</tabstop>
+  <tabstop>CB_2</tabstop>
+  <tabstop>CB_3</tabstop>
+  <tabstop>CB_4</tabstop>
+  <tabstop>CB_5</tabstop>
+  <tabstop>CB_6</tabstop>
+  <tabstop>CB_7</tabstop>
+  <tabstop>CB_8</tabstop>
+  <tabstop>CB_9</tabstop>
+  <tabstop>CB_10</tabstop>
+  <tabstop>CB_11</tabstop>
+  <tabstop>CB_12</tabstop>
+  <tabstop>leMaxDev</tabstop>
+ </tabstops>
  <resources/>
  <connections>
   <connection>

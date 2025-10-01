@@ -18,6 +18,6 @@ class MockButtonEvent:
 
 def test_calculate_drift(load_data):
     load_data.run_calculation()
-    assert load_data.dockwidget.result_values.text() == 'Sum of weighted overlaps for this line: 5.822e-02'
+    assert load_data.main_widget.result_values.text() == 'Sum of weighted overlaps for this line: 5.822e-02'
     
     a=1

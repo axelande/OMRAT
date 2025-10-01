@@ -1,15 +1,16 @@
+from typing import Any
+
 import geopandas as gpd
-from shapely.geometry import LineString, Polygon
-from shapely.affinity import translate
+from matplotlib.patches import Polygon as MplPolygon
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import norm, uniform
-from matplotlib.patches import Polygon as MplPolygon
-from matplotlib.collections import PatchCollection
-from shapely.geometry import Point
+from PyQt5.QtWidgets import QLabel
+from shapely.affinity import translate
+from shapely.geometry import LineString, Polygon, Point
+from shapely.geometry.base import BaseGeometry
 
 
-def create_polygon_from_line(line: LineString, distributions: list, weights: list) -> Polygon:
+def create_polygon_from_line(line: LineString, distributions: list[Any], weights: list[float]) -> Polygon:
     """
     Create a polygon from a LineString based on multiple distributions and their weights.
     """
@@ -31,13 +32,13 @@ def create_polygon_from_line(line: LineString, distributions: list, weights: lis
     return polygon
 
 
-def extend_polygon_in_directions(polygon: Polygon, distance: float) -> list:
+def extend_polygon_in_directions(polygon: Polygon, distance: float) -> tuple[list[BaseGeometry], list[LineString]]:
     """
     Extend a polygon in 8 directions (0°, 45°, ..., 315°) by a given distance,
     creating 8 separate polygons that span from the original polygon to the extended areas.
     """
-    extended_polygons = []  # List to store the 8 separate polygons
-    centre_lines = []
+    extended_polygons: list[BaseGeometry] = []  # List to store the 8 separate polygons
+    centre_lines: list[LineString] = []
 
     for angle in range(0, 360, 45):
         # Translate the polygon in the given direction
@@ -138,7 +139,7 @@ def visualize(ax2, line, intersection, distances, distributions, weights, weight
     plt.tight_layout()
     ax2.figure.canvas.draw()
 
-def visualize_interactive(fig, ax1, ax2, ax3, lines, line_names, objs_gdf_list, distributions, weights, result_text, distance=50_000):
+def visualize_interactive(fig, ax1, ax2, ax3, lines, line_names, objs_gdf_list, distributions, weights, result_text:QLabel, distance:float=50_000):
     """
     Interactive visualization with three subplots:
     - ax1: Example lines to select from.

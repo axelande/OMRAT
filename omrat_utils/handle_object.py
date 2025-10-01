@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class OObject:
-    def __init__(self, parent: OMRAT) -> None:
+    def __init__(self, parent: "OMRAT") -> None:
         self.p = parent
         self.deph_id = 0
         self.area = None
@@ -44,9 +44,8 @@ class OObject:
             self.add_simple_depth()
         if self.area_type == 'object':
             self.add_simple_object()
-
     
-    def load_area(self, name, wkt):
+    def load_area(self, name:str, wkt:str):
         area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
         pr = area.dataProvider()
         fet = QgsFeature()
@@ -58,51 +57,67 @@ class OObject:
     
     def add_simple_depth(self):
         self.area_type = 'depth'
-        if self.p.dockwidget.pbAddSimpleDepth.text() == 'Save':
+        if self.p.main_widget.pbAddSimpleDepth.text() == 'Save':
             self.store_depth()
-            self.p.dockwidget.pbAddSimpleDepth.setText('Add manual')
+            self.p.main_widget.pbAddSimpleDepth.setText('Add manual')
             self.loaded_areas.append(self.area)
         else:
             self.deph_id += 1
             self.add_area(f'Depth_{self.deph_id}')
-            self.p.dockwidget.pbAddSimpleDepth.setText('Save')
+            self.p.main_widget.pbAddSimpleDepth.setText('Save')
             
     def store_depth(self):
-        self.p.dockwidget.twDepthList.setRowCount(self.deph_id)
+        self.p.main_widget.twDepthList.setRowCount(self.deph_id)
         item1 = QTableWidgetItem(f'{self.deph_id}')
         item2 = QTableWidgetItem(f'10')
         polies = self.area.getFeatures()
         for poly in polies:
             item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
-            self.p.dockwidget.twDepthList.setItem(self.deph_id - 1, 0, item1)
-            self.p.dockwidget.twDepthList.setItem(self.deph_id - 1, 1, item2)
-            self.p.dockwidget.twDepthList.setItem(self.deph_id - 1, 2, item3)
+            self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 0, item1)
+            self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 1, item2)
+            self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 2, item3)
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
         
     def add_simple_object(self):
         self.area_type = 'object'
-        if self.p.dockwidget.pbAddSimpleObject.text() == 'Save':
+        if self.p.main_widget.pbAddSimpleObject.text() == 'Save':
             self.store_object()
-            self.p.dockwidget.pbAddSimpleObject.setText('Add manual')
+            self.p.main_widget.pbAddSimpleObject.setText('Add manual')
             self.loaded_areas.append(self.area)
         else:
             self.object_id += 1
             self.add_area(f'Object_{self.object_id}')
-            self.p.dockwidget.pbAddSimpleObject.setText('Save')
+            self.p.main_widget.pbAddSimpleObject.setText('Save')
             
     def store_object(self):
-        self.p.dockwidget.twObjectList.setRowCount(self.object_id)
+        self.p.main_widget.twObjectList.setRowCount(self.object_id)
         item1 = QTableWidgetItem(f'{self.object_id}')
         item2 = QTableWidgetItem(f'10')
         polies = self.area.getFeatures()
         for poly in polies:
             item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
-            self.p.dockwidget.twObjectList.setItem(self.object_id - 1, 0, item1)
-            self.p.dockwidget.twObjectList.setItem(self.object_id - 1, 1, item2)
-            self.p.dockwidget.twObjectList.setItem(self.object_id - 1, 2, item3)
+            self.p.main_widget.twObjectList.setItem(self.object_id - 1, 0, item1)
+            self.p.main_widget.twObjectList.setItem(self.object_id - 1, 1, item2)
+            self.p.main_widget.twObjectList.setItem(self.object_id - 1, 2, item3)
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
+        
+    def load_depths(self) -> None:
+        # Todo: add this
+        pass
+    
+    def remove_depth(self) -> None:
+        # Todo: add this
+        pass
+    
+    def load_objects(self) -> None:
+        # Todo: add this
+        pass
+    
+    def remove_object(self) -> None:
+        # Todo: add this
+        pass
         
     def unload(self):
         if self.area is not None:

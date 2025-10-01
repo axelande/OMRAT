@@ -7,9 +7,13 @@
         "tests", "--cov=."
     ],
     "python.analysis.extraPaths": ["%OSGEO4W_ROOT%/apps/qgis/python",
-    "%OSGEO4W_ROOT%/apps/qgis/python/plugins"],
+    "%OSGEO4W_ROOT%/apps/qgis/python/plugins", 
+    "%OSGEO4W_ROOT%/apps/Python312/Lib/site-packages/PyQt5"],
     "python.createEnvironment.contentButton": "show",
     "editor.rulers": [120],
     "python.formatting.provider": "black",
-    "python.formatting.blackArgs": ["--line-length", "120"]
+    "python.formatting.blackArgs": ["--line-length", "120"],
+    "python.analysis.typeCheckingMode": "strict",
+	"python.analysis.inlayHints.functionReturnTypes": true,
+	"python.analysis.inlayHints.variableTypes": true
 }

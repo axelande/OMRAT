@@ -1,12 +1,17 @@
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from omrat import OMRAT
+
+
 from qgis.PyQt.QtWidgets import QDialogButtonBox
 
 from ui.causation_factor_widget import CausationFactorsWidget
 
 class CausationFactors:
-    def __init__(self, parent):
+    def __init__(self, parent: "OMRAT") -> None:
         self.p = parent
         self.cfw = CausationFactorsWidget()
-        self.data = {'p_pc': 1.6E-4, 'd_pc':1}
+        self.data: dict[str, float] = {'p_pc': 1.6E-4, 'd_pc':1}
         
     def commit_changes(self):
         p_pc = float(self.cfw.lePoweredPc.text())
@@ -18,8 +23,9 @@ class CausationFactors:
         self.cfw.leDriftingPc.setText(f"{self.data['d_pc']}")
     
     def run(self):
-        self.dsw.show()
+        self.cfw.show()
         self.set_values()
-        self.buttonBox = self.dsw.findChild(QDialogButtonBox, 'buttonBox')
-        self.buttonBox.accepted.connect(self.commit_changes)
-        self.dsw.exec_()
+        self.buttonBox: QDialogButtonBox | None = self.cfw.findChild(QDialogButtonBox, 'buttonBox')
+        if isinstance(self.buttonBox, QDialogButtonBox):
+            self.buttonBox.accepted.connect(self.commit_changes)
+        self.cfw.exec_()

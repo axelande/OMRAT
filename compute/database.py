@@ -1,6 +1,7 @@
 """A database class DB"""
+from typing import Any
 import psycopg2
-import psycopg2.extras
+from psycopg2._psycopg import connection
 import pandas as pd
 
 __author__ = 'Axel Hörteborn'
@@ -27,8 +28,9 @@ class DB:
         self.db_pass = db_pass
         self.db_port = "5432"
         self.time_out = time_out
-        self.conn = True
-        self._connect()
+        self.conn: connection | None = None
+        if self.db_host != "":
+            self._connect()
 
     def __del__(self):
         self._disconnect()
@@ -82,7 +84,7 @@ class DB:
             else:
                 return [False]
 
-    def execute_and_return(self, sql: str, return_error: bool = False) -> list:
+    def execute_and_return(self, sql: str, return_error: bool = False) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
         """Execute the query and returns the result as a list of list
         Parameters
         ----------
@@ -104,17 +106,17 @@ class DB:
         c = self.conn.cursor()
         try:
             c.execute(sql)
-            data = c.fetchall()
+            data: list[list[Any]] = c.fetchall()
             if return_error:
-                return [True, data]
+                return True, data
             else:
                 return data
         except Exception as e:
             self._reconnect()
             if return_error:
-                return [False, e]
+                return False, [[e]]
             else:
-                return [False]
+                return [[False]]
 
     def execute(self, sql: str, commit: bool = True, return_error: bool = False):
         """Execute the query

@@ -21,18 +21,21 @@
  *                                                                         *
  ***************************************************************************/
 """
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt, QVariant, QMetaType
-from qgis.PyQt.QtGui import QIcon, QColor
-from qgis.PyQt.QtWidgets import QAction, QTableWidgetItem, QMenu, QMenuBar
+from typing import Any, Callable
+from PyQt5.QtWidgets import QToolBar, QMessageBox
+from pytest_qgis import QgsMapCanvas
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaType
+from qgis.PyQt.QtGui import QIcon, QAction
+from qgis.PyQt.QtWidgets import QMenuBar, QWidget
+from qgis._core import QgsVectorDataProvider
 from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject, 
-                       QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFields, QgsPalLayerSettings, QgsVectorLayerSimpleLabeling)
-from qgis.core import QgsSingleSymbolRenderer, QgsLineSymbol, QgsPointXY, QgsMessageLog, Qgis
+                       QgsField, QgsFields)
+from qgis.core import QgsPointXY, QgsMessageLog, Qgis
 
-from qgis.gui import QgsMapToolPan
+from qgis.gui import QgsMapToolPan, QgisInterface
 import gc
 import sys
 import os
-from operator import xor
 import os.path
 sys.path.append('.')
 # Initialize Qt resources from file resources.py
@@ -49,13 +52,12 @@ from omrat_utils.storage import Storage
 from omrat_utils.handle_object import OObject
 from omrat_utils.handle_ship_cat import ShipCategories
 from omrat_utils.gather_data import GatherData
-from omrat_widget import OMRATDockWidget
+from omrat_widget import OMRATMainWidget
 
 
 class OMRAT:
     """QGIS Plugin Implementation."""
-
-    def __init__(self, iface, testing=False):
+    def __init__(self, iface:QgisInterface, testing:bool=False):
         """Constructor.
 
         :param iface: An interface instance that will be passed to this class
@@ -70,42 +72,42 @@ class OMRAT:
         self.plugin_dir = os.path.dirname(__file__)
         if not self.testing:
             # initialize locale
-            locale = QSettings().value('locale/userLocale')[0:2]
-            locale_path = os.path.join(
+            locale: str = QSettings().value('locale/userLocale')[0:2]
+            locale_path: str = os.path.join(
                 self.plugin_dir,
                 'i18n',
                 f'OMRAT_{locale}.qm')
 
             if os.path.exists(locale_path):
-                self.translator = QTranslator()
+                self.translator: QTranslator = QTranslator()
                 self.translator.load(locale_path)
                 QCoreApplication.installTranslator(self.translator)
 
-            # Declare instance attributes
-            self.actions = []
-            self.menu = self.tr(u'&Open Maritime Risk Analysis Tool')
-            # TODO: We are going to let the user set this up in a future iteration
-            self.toolbar = self.iface.addToolBar(u'OMRAT')
-            self.toolbar.setObjectName(u'OMRAT')
+        # Declare instance attributes
+        self.actions: list[Any] = []
+        self.menu: str = self.tr(u'&Open Maritime Risk Analysis Tool')
+        self.toolbar: QToolBar = self.iface.addToolBar(u'OMRAT')
+        self.toolbar.setObjectName(u'OMRAT')
 
             #print "** INITIALIZING OMRAT"
-        self.qgis_geoms = HandleQGISIface(self)
-        self.drift_settings = DriftSettings(self)
-        self.causation_f = CausationFactors(self)
-        self.calc = Calculation(self)
-        self.object = OObject(self)
         self.pluginIsActive = False
-        self.dockwidget = None
         self.segment_id = 0
-        self.traffic_data = {}
-        self.segment_data = {}
-        self.traffic = None
+        self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
+        self.segment_data: dict[str, Any] = {}
         self.cur_route_id = 1
+        self.main_widget = OMRATMainWidget()
+        self.qgis_geoms: HandleQGISIface = HandleQGISIface(self)
+        self.drift_settings: DriftSettings = DriftSettings(self)
+        self.causation_f: CausationFactors = CausationFactors(self)
+        self.calc: Calculation | None = Calculation(self)
+        self.ship_cat = ShipCategories(self)
+        self.ais = AIS(self)
+        self.traffic = Traffic(self, self.main_widget)
+        self.object = OObject(self)
         self.drift_values = self.drift_settings.drift_values
         self.causation_values = self.causation_f.data
 
-    # noinspection PyMethodMayBeStatic
-    def tr(self, message):
+    def tr(self, message:str):
         """Get the translation for a string using Qt translation API.
 
         We implement this ourselves since we do not inherit QObject.
@@ -116,21 +118,19 @@ class OMRAT:
         :returns: Translated version of message.
         :rtype: QString
         """
-        # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
         return QCoreApplication.translate('OMRAT', message)
-
 
     def add_action(
         self,
-        icon_path,
-        text,
-        callback,
-        enabled_flag=True,
-        add_to_menu=True,
-        add_to_toolbar=True,
-        status_tip=None,
-        whats_this=None,
-        parent=None):
+        icon_path:str,
+        text:str,
+        callback: Callable[[], None],
+        enabled_flag:bool=True,
+        add_to_menu:bool=True,
+        add_to_toolbar:bool=True,
+        status_tip:str|None=None,
+        whats_this:str|None=None,
+        parent:QWidget|None=None) -> QAction:
         """Add a toolbar icon to the toolbar.
 
         :param icon_path: Path to the icon for this action. Can be a resource
@@ -192,7 +192,6 @@ class OMRAT:
 
         return action
 
-
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
@@ -204,34 +203,50 @@ class OMRAT:
             parent=self.iface.mainWindow())
 
     #--------------------------------------------------------------------------
+    
+    def show_error_popup(self, message: str, function_name:str) -> None:
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle(self.tr(f"Failure in {function_name}"))
+        msg_box.setText(self.tr("A failure occurred:"))
+        msg_box.setInformativeText(message)
+        msg_box.exec()
 
     def onClosePlugin(self):
-        """Cleanup necessary items here when plugin dockwidget is closed"""
+        """Cleanup necessary items here when plugin main_widget is closed"""
 
         # Disconnect signals
-        self.dockwidget.pbAddRoute.clicked.disconnect()
-        self.dockwidget.pbStopRoute.clicked.disconnect()
-        self.dockwidget.pbUpdateAIS.clicked.disconnect()
-        self.dockwidget.pbEditTrafficData.clicked.disconnect()
-        self.dockwidget.pbAddSimpleDepth.clicked.disconnect()
-        self.dockwidget.pbAddSimpleObject.clicked.disconnect()
-        self.dockwidget.pbRunModel.clicked.disconnect()
+        if self.main_widget.is_active:
+            self.main_widget.pbAddRoute.clicked.disconnect()
+            self.main_widget.pbStopRoute.clicked.disconnect()
+            self.main_widget.pbLoadRoute.clicked.disconnect()
+            self.main_widget.pbRemoveRoute.clicked.disconnect()
+            self.main_widget.pbUpdateAIS.clicked.disconnect()
+            self.main_widget.pbEditTrafficData.clicked.disconnect()
+            self.main_widget.pbAddSimpleDepth.clicked.disconnect()
+            self.main_widget.pbLoadDepth.clicked.disconnect()
+            self.main_widget.pbRemoveDepth.clicked.disconnect()
+            self.main_widget.pbAddSimpleObject.clicked.disconnect()
+            self.main_widget.pbLoadObject.clicked.disconnect()
+            self.main_widget.pbRemoveObject.clicked.disconnect()
+            self.main_widget.pbRunModel.clicked.disconnect()
 
         # Set plugin state to inactive
         self.pluginIsActive = False
+        self.main_widget.is_active = False
 
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         # Call the unload method of Traffic
-        if hasattr(self, 'traffic') and self.traffic is not None:
-            self.traffic.unload()
-            self.traffic = None
+        self.traffic.unload()
 
         # Call the unload method of AIS
-        if hasattr(self, 'ais') and self.ais is not None:
-            self.ais.unload()
-            self.ais = None
+        self.ais.unload()
+        
+        # Unload geometries
+        self.object.unload()
+        self.qgis_geoms.unload()
 
         # Remove actions from menu and toolbar
         for action in self.actions:
@@ -242,28 +257,20 @@ class OMRAT:
 
         # Remove the toolbar
         if hasattr(self, 'toolbar'):
-            del self.toolbar
-            
-        # Unload geometries
-        print(dir(self.object))
-        self.object.unload()
-        self.qgis_geoms.unload()
-        self.qgis_geoms = None
-        del self.qgis_geoms
+            del self.toolbar    
 
         # Disconnect signals and clean up dock widget
-        if self.dockwidget is not None:
-            try:
-                self.onClosePlugin()
-            except Exception as e:
-                print(f"Error during onClosePlugin: {e}")
-            # Disconnect cbTrafficSelectSeg signal
-            try:
-                self.dockwidget.cbTrafficSelectSeg.currentIndexChanged.disconnect()
-                print("Disconnected cbTrafficSelectSeg.currentIndexChanged")
-            except TypeError:
-                print("No connection for cbTrafficSelectSeg.currentIndexChanged")
-            self.dockwidget = None
+        try:
+            self.onClosePlugin()
+        except Exception as e:
+            print(f"Error during onClosePlugin: {e}")
+        # Disconnect cbTrafficSelectSeg signal
+        try:
+            self.main_widget.cbTrafficSelectSeg.currentIndexChanged.disconnect()
+            print("Disconnected cbTrafficSelectSeg.currentIndexChanged")
+        except TypeError:
+            print("No connection for cbTrafficSelectSeg.currentIndexChanged")
+        self.main_widget.deleteLater()
         gc.collect()
         for folder in ['omrat_utils', 'compute', 'geometries.get_drifting_overlap', 'geometries.route', 
                        'geometries.handle_qgis_iface']:
@@ -273,16 +280,16 @@ class OMRAT:
                 del sys.modules[m]
         QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.Info)
         
-    def point4326_from_wkt(self, coord_str:str, crs:str) -> QgsGeometry:
-        coords = coord_str.split(' ')
-        coords = [float(coord) for coord in coords]
-        q_point = QgsPointXY(coords[0], coords[1])
+    def point4326_from_wkt(self, coord_str:str, crs:str) -> QgsPoint:
+        coords_str: list[str] = coord_str.split(' ')
+        coords: list[float] = [float(coord) for coord in coords_str]
+        q_point = QgsPoint(coords[0], coords[1])
         return q_point
         
-    def load_lines(self, data):
+    def load_lines(self, data:dict[str, dict[str, Any]]) -> None:
         self.segment_id = 0
         crs = self.iface.mapCanvas().mapSettings().destinationCrs().authid()
-        for key, seg_data in data["segment_data"].items():
+        for _, seg_data in data["segment_data"].items():
             name = f"Segment {seg_data['Route Id']} - {seg_data['Segment Id']}"
             vl = QgsVectorLayer(f"LineString?crs=EPSG:4326", name, "memory")
             QgsProject.instance().addMapLayer(vl)
@@ -296,23 +303,25 @@ class OMRAT:
             fields.append(QgsField("startPoint", QMetaType.QString))
             fields.append(QgsField("endPoint", QMetaType.QString))
             fields.append(QgsField("label", QMetaType.QString)) 
-
-            vl.dataProvider().addAttributes(fields.toList())
+            provider: QgsVectorDataProvider | None = vl.dataProvider()
+            if provider is None:
+                return
+            provider.addAttributes(fields.toList())
             vl.updateFields()
 
             # Create feature
             fet = QgsFeature(fields)
             start = self.point4326_from_wkt(seg_data["Start Point"], crs)
             end = self.point4326_from_wkt(seg_data["End Point"], crs)
-            fet.setGeometry(QgsLineString([QgsPoint(start), QgsPoint(end)]))
+            fet.setGeometry(QgsLineString([start, end]))
             fet.setAttributes([seg_data["Segment Id"], seg_data["Route Id"], seg_data["Start Point"], 
                                seg_data["End Point"], f"LEG_{seg_data['Segment Id']}_{seg_data['Route Id']}"])
-            self.qgis_geoms.style_layer(vl)
-            fet.setId(1)
-
-            vl.dataProvider().addFeatures([fet])
-            self.qgis_geoms.label_layer(vl)
-            vl.updateExtents()
+            if self.qgis_geoms is not None:
+                self.qgis_geoms.style_layer(vl)
+                fet.setId(1)
+                provider.addFeature(fet)
+                self.qgis_geoms.label_layer(vl)
+                vl.updateExtents()
             
             # Validate geometry
             if not fet.geometry().isGeosValid():
@@ -324,26 +333,20 @@ class OMRAT:
             vl.triggerRepaint()
 
         # Refresh map canvas
-        self.iface.mapCanvas().refresh()
-        
-    def get_length_and_dir_from_line(self, p1, p2):
-        degrees = p1.azimuth(p2)
+        self.iface.mapCanvas().refresh()    
 
-    def format_wkt(self, point):
-        return f'{point.x():.6f} {point.y():.6f}'
+    def reset_route_table(self) -> None:
+        if self.main_widget is not None:
+            self.main_widget.twRouteList.setColumnCount(5)
+            self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment Id', 'Route Id', 
+                                                                'Start Point', 'End Point', 'Width'])
+            self.main_widget.twRouteList.setColumnWidth(1, 75)
+            self.main_widget.twRouteList.setColumnWidth(2, 125)
+            self.main_widget.twRouteList.setColumnWidth(3, 125)
+            self.main_widget.twRouteList.setColumnWidth(4, 75)
+            self.main_widget.twRouteList.setRowCount(0)
     
-
-    def reset_route_table(self):
-        self.dockwidget.twRouteList.setColumnCount(5)
-        self.dockwidget.twRouteList.setHorizontalHeaderLabels(['Segment Id', 'Route Id', 
-                                                               'Start Point', 'End Point', 'Width'])
-        self.dockwidget.twRouteList.setColumnWidth(1, 75)
-        self.dockwidget.twRouteList.setColumnWidth(2, 125)
-        self.dockwidget.twRouteList.setColumnWidth(3, 125)
-        self.dockwidget.twRouteList.setColumnWidth(4, 75)
-        self.dockwidget.twRouteList.setRowCount(0)
-    
-    def show_traffic_widget(self):
+    def show_traffic_widget(self) -> None:
         self.traffic.traffic_data = self.traffic_data
         self.traffic.fill_cbTrafficSelectSeg()
         self.traffic.update_direction_select()
@@ -360,7 +363,8 @@ class OMRAT:
     def run_calculation(self):
         gd = GatherData(self)
         data = gd.get_all_for_save()
-        self.calc.run_drift_visualization(data)
+        if self.calc is not None:
+            self.calc.run_drift_visualization(data)
         #self.calc.run_model()
         
     def open_drift(self):
@@ -369,9 +373,8 @@ class OMRAT:
     def stop_route(self):
         """Stop the current route, commit changes, and set the active tool to 'Pan Map'."""
         # Disable the "Stop Route" button
-        self.dockwidget.pbStopRoute.setEnabled(False)
+        self.main_widget.pbStopRoute.setEnabled(False)
 
-        # Commit changes and stop editing for all layers in self.vector_layers
         for layer in self.qgis_geoms.vector_layers:
             if layer.isEditable():
                 layer.commitChanges()  # Save changes
@@ -381,17 +384,29 @@ class OMRAT:
         self.cur_route_id += 1
 
         # Set the active tool to "Pan Map"
-        canvas = self.iface.mapCanvas()
+        canvas: QgsMapCanvas | None = self.iface.mapCanvas()
         map_tool_pan = QgsMapToolPan(canvas)
-        canvas.setMapTool(map_tool_pan)
-        self.iface.actionPan().trigger()
+        if canvas is not None:
+            canvas.setMapTool(map_tool_pan)
+        actionPan: QAction | None = self.iface.actionPan()
+        if actionPan is not None:
+            actionPan.trigger()
         
-    def ais_settings(self):
+    def ais_settings(self) -> None:
         self.ais.run()
         
-    def update_ais(self):
+    def update_ais(self) -> None:
         self.ais.update_legs()
-        self.dockwidget.cbTrafficSelectSeg.setEnabled(True)
+        self.main_widget.cbTrafficSelectSeg.setEnabled(True)
+    
+    def remove_route(self)-> None:
+        # To implement
+        pass
+    
+    def load_route(self)-> None:
+        # To implement
+        pass
+    
     #--------------------------------------------------------------------------
 
     def run(self):
@@ -399,23 +414,14 @@ class OMRAT:
 
         if not self.pluginIsActive:
             self.pluginIsActive = True
-            if self.dockwidget == None:
-                # Create the dockwidget (after translation) and keep reference
-                self.dockwidget = OMRATDockWidget()
-            self.ship_cat = ShipCategories(self)
-            self.ais = AIS(self)
-            self.traffic = Traffic(self, self.dockwidget)
-
-            # show the dockwidget
-            # TODO: fix to allow choice of dock location
-            #if not self.testing:
-            #    self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dockwidget)
-            self.dockwidget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
-            self.dockwidget.pbStopRoute.clicked.connect(self.stop_route)
-            self.dockwidget.pbUpdateAIS.clicked.connect(self.update_ais)
-            self.dockwidget.pbEditTrafficData.clicked.connect(self.show_traffic_widget)
+            self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
+            self.main_widget.pbStopRoute.clicked.connect(self.stop_route)
+            self.main_widget.pbRemoveRoute.clicked.connect(self.remove_route)
+            self.main_widget.pbLoadRoute.clicked.connect(self.load_route)
+            self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
+            self.main_widget.pbEditTrafficData.clicked.connect(self.show_traffic_widget)
             
-            menubar = QMenuBar(self.dockwidget)
+            menubar = QMenuBar(self.main_widget)
             menubar.setMinimumSize(320,20)
 
             fileMenu = menubar.addMenu('File')
@@ -428,14 +434,16 @@ class OMRAT:
             fileMenu.addAction("Load", self.load_work)
             SettingMenu.addAction("Drift settings", self.open_drift)
             SettingMenu.addAction("AIS connection settings", self.ais_settings)
-            #self.dockwidget.actionSave_project.clicked.connect(self.save_work)
-            #self.dockwidget.actionOpen_project.clicked.connect(self.load_work)
-            self.dockwidget.cbTrafficSelectSeg.currentIndexChanged.connect(self.traffic.change_dist_segment)
-            self.dockwidget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)
-            self.dockwidget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
-            self.dockwidget.pbRunModel.clicked.connect(self.run_calculation)
+            #self.main_widget.actionSave_project.clicked.connect(self.save_work)
+            #self.main_widget.actionOpen_project.clicked.connect(self.load_work)
+            self.main_widget.cbTrafficSelectSeg.currentIndexChanged.connect(self.traffic.change_dist_segment)
+            self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)
+            self.main_widget.pbLoadDepth.clicked.connect(self.object.load_depths)
+            self.main_widget.pbRemoveDepth.clicked.connect(self.object.remove_depth)
+            self.main_widget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
+            self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
+            self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)
+            self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
             
             self.reset_route_table()
-            self.dockwidget.show()
-
-
+            self.main_widget.show()

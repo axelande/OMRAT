@@ -1,11 +1,19 @@
+from _collections_abc import dict_items
 import os
+from typing import Any, cast, Tuple, TYPE_CHECKING
+if TYPE_CHECKING:
+    from omrat import OMRAT
 
 import numpy as np
+from qgis.core import QgsProject
+from qgis.PyQt.QtCore import QSettings
+from qgis.PyQt.QtWidgets import QTableWidget
 from shapely import wkt
+from shapely.geometry import Point
+from shapely.geometry.base import BaseGeometry
 
 from compute.database import DB
 from ui.ais_connection_widget import AISConnectionWidget
-from ui import ais_settings
 
 def update_ais_settings_file(db_host:str, db_user:str, db_pass:str, db_name:str):
     ais_settings_path = os.path.join(os.path.dirname(__file__), '..', 'ui', 'ais_settings.py')
@@ -17,17 +25,21 @@ db_name = '{db_name}'
 """)
 
 
-def get_pl(db, lat1, lat2, lon1, lon2, l_width):
+def get_pl(db:DB, lat1:float, lat2:float, lon1:float, lon2:float, l_width:float) -> str:
     """Collects the passage line as text"""
     sql = f"""SELECT st_astext(st_makeline(ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
     {l_width/2}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(90))::geometry,
     ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
     {l_width/2}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(270))::geometry
     ))"""
-    pl = db.execute_and_return(sql)[0][0]
+    ok, res = cast(tuple[bool, list[list[Any]]], db.execute_and_return(sql, return_error=True))
+    if ok:
+        pl: str = res[0][0]
+    else:
+        pl = ""
     return pl
 
-def get_type(toc, sh_type):
+def get_type(toc:float, sh_type:str) -> int:
     """Return ship type in accordance with OMRAT."""
     if toc > 79 and toc < 90 and 'product' in sh_type.lower():
         type__cat = 1
@@ -60,10 +72,11 @@ def get_type(toc, sh_type):
         type__cat = 13
     return type__cat
 
-def close_to_line(bearing, cog, max_angle) -> bool:
+def close_to_line(bearing:float, cog:float, max_angle:float) -> bool:
     """Returns True if the cog is less than the max_angle towards the bearing else False"""
     if max_angle > 180:
-        return 'Error'
+        raise ValueError("Maximum deviation must be lower than 180 degrees")
+        return
     if bearing > 360:
         bearing = np.mod(bearing, 360)
     if cog > 360:
@@ -81,12 +94,13 @@ def close_to_line(bearing, cog, max_angle) -> bool:
             return False
 
 class AIS:
-    def __init__(self, omrat):
-        self.db = DB()
+    def __init__(self, omrat:"OMRAT"):
+        self.settings: QSettings = QSettings()
+        self.db: DB | None = None
         self.omrat = omrat
         self.acw = AISConnectionWidget()
         self.set_start_ais_settings()
-        self.dist_data = {}
+        self.dist_data: dict[str, dict[str, np.ndarray]] = {}
         
     def unload(self):
         """If signals from omrat was used they are disconnected"""
@@ -98,24 +112,28 @@ class AIS:
         self.acw.exec_()
     
     def set_start_ais_settings(self):
-        self.acw.leDBHost.setText(ais_settings.db_host)
-        self.acw.leDBName.setText(ais_settings.db_name)
-        self.acw.leUserName.setText(ais_settings.db_user)
-        self.acw.lePassword.setText(ais_settings.db_password)
+        db_host: str = self.settings.value("omrat/db_host", "")
+        db_name: str = self.settings.value("omrat/db_name", "")
+        db_user: str = self.settings.value("omrat/db_user", "")
+        db_pass: str = self.settings.value("omrat/db_pass", "")
+        self.acw.leDBHost.setText(db_host)
+        self.acw.leDBName.setText(db_name)
+        self.acw.leUserName.setText(db_user)
+        self.acw.lePassword.setText(db_pass)
         self.schema = self.acw.leProvider.text()
         self.year = self.acw.SBYear.value()
-        self.months = []
+        self.months: list[int] = []
         for i in range(1, 13):
             cb = getattr(self.acw, f'CB_{i}')
             if cb.isChecked():
                 self.months.append(i)
         try:
-            self.db = DB(db_host=ais_settings.db_host, 
-                        db_name=ais_settings.db_name, 
-                        db_user=ais_settings.db_user, 
-                        db_pass=ais_settings.db_password)
+            self.db = DB(db_host=db_host, 
+                        db_name=db_name, 
+                        db_user=db_user, 
+                        db_pass=db_pass)
         except Exception:
-            pass
+            self.db = None
         self.max_deviation = float(self.acw.leMaxDev.text())
     
     def update_ais_settings(self):
@@ -132,29 +150,38 @@ class AIS:
                 self.months.append(i)
         self.db = DB(db_host=db_host, db_name=db_name, db_user=db_user, db_pass=db_pass)
         self.max_deviation = float(self.acw.leMaxDev.text())
-        update_ais_settings_file(db_host, db_user, db_pass, db_name)
+        for key, value in zip(["db_host", "db_user", "db_pass", "db_name"], [db_host, db_user, db_pass, db_name]):
+            self.settings.setValue(f"omrat/{key}", value)
         
-    def update_legs(self, key=None, leg_d=None):
+    def update_legs(self, key:str|None=None):
         """Update AIS data for all legs or a specific leg."""
-        segment_data = self.get_segment_data_from_table()
-        legs = [(key, leg_d)] if key and leg_d else segment_data.items()
-        print(legs)
+        if self.db is None:
+            return
+        segment_data: dict[str, dict[str, str]] = self.get_segment_data_from_table()
+        leg_d=None
+        legs: dict_items[str, dict[str, str]] = segment_data.items()
         for key, leg_d in legs:
             dirs = self.omrat.qgis_geoms.leg_dirs[key]
             self.omrat.traffic.create_empty_dict(key, dirs)
             start_p = wkt.loads(f"POINT({leg_d['Start Point']})")
+            assert isinstance(start_p, Point)
             end_p = wkt.loads(f"POINT({leg_d['End Point']})")
+            assert isinstance(end_p, Point)
             pl = get_pl(self.db, lat1=start_p.y,
                         lat2=end_p.y,
                         lon1=start_p.x,
                         lon2=end_p.x, 
-                        l_width=leg_d['Width'])
-            ais_data = self.run_sql(pl)
+                        l_width=float(leg_d['Width']))
+            try:
+                ais_data = self.run_sql(pl)
+            except Exception as e:
+                self.omrat.show_error_popup(str(e), "AIS.update_legs")
+                return
             sql = f"""select degrees(ST_Azimuth(ST_Point({start_p.x}, {start_p.y})::geography, 
             ST_Point({end_p.x}, {end_p.y})::geography))
             """
-            leg_bearing = self.db.execute_and_return(sql)[0][0]
-            line1, line2 = self.update_ais_data(key, ais_data, leg_bearing, dirs)
+            _, leg_bearing = cast(tuple[bool, list[list[Any]]], self.db.execute_and_return(sql, return_error=True))
+            line1, line2 = self.update_ais_data(key, ais_data, leg_bearing[0][0], dirs)
             self.convert_list2avg()
             self.update_dist_data(line1, line2, key)
         self.omrat.traffic.dont_save = True
@@ -164,7 +191,7 @@ class AIS:
         for key1 in self.omrat.traffic.traffic_data.keys():
             for key2 in self.omrat.traffic.traffic_data[key1].keys():
                 for key3 in self.omrat.traffic.traffic_data[key1][key2].keys():
-                    for idx1, row in enumerate(self.omrat.traffic.traffic_data[key1][key2][key3]):
+                    for idx1, _ in enumerate(self.omrat.traffic.traffic_data[key1][key2][key3]):
                         for idx2, val in enumerate(self.omrat.traffic.traffic_data[key1][key2][key3][idx1]):
                             if isinstance(val, list):
                                 if len(val) > 0:
@@ -172,7 +199,7 @@ class AIS:
                                 else:
                                     self.omrat.traffic.traffic_data[key1][key2][key3][idx1][idx2] = np.inf
 
-    def update_dist_data(self, line1, line2, key):
+    def update_dist_data(self, line1:np.ndarray, line2:np.ndarray, key:str) -> None:
         self.dist_data[key] = {'line1': line1, 'line2': line2}
         self.omrat.segment_data[key]['mean1_1'] = line1.mean()
         self.omrat.segment_data[key]['std1_1'] = line1.std()
@@ -180,14 +207,17 @@ class AIS:
         self.omrat.segment_data[key]['std2_1'] = line2.std()
         self.omrat.segment_data[key]['weight1_1'] = 100
         self.omrat.segment_data[key]['weight2_1'] = 100
-        if float(self.omrat.dockwidget.leNormMean1_1.text()) == 0.0:
-            self.omrat.dockwidget.leNormMean1_1.setText(str(line1.mean()))
-            self.omrat.dockwidget.leNormMean2_1.setText(str(line2.mean()))
-            self.omrat.dockwidget.leNormStd1_1.setText(str(line1.std()))
-            self.omrat.dockwidget.leNormStd2_1.setText(str(line2.std()))
+        if float(self.omrat.main_widget.leNormMean1_1.text()) == 0.0:
+            self.omrat.main_widget.leNormMean1_1.setText(str(line1.mean()))
+            self.omrat.main_widget.leNormMean2_1.setText(str(line2.mean()))
+            self.omrat.main_widget.leNormStd1_1.setText(str(line1.std()))
+            self.omrat.main_widget.leNormStd2_1.setText(str(line2.std()))
     
-    def run_sql(self, pl):
+    def run_sql(self, pl:str) -> list[list[Any]]:
         """Runs the SQL query to get the passages"""
+        if self.db is None:
+            # Should not occur
+            raise RuntimeError(self.omrat.tr("No database connection was found"))
         sql = "with segments as ("
         if len(self.months) > 0:
             for month in self.months:
@@ -211,13 +241,16 @@ class AIS:
         FROM segments ss
         left outer JOIN get_vessel_info sd on ss.mmsi=sd.mmsi
         """
-        ais_data = self.db.execute_and_return(sql)
-        return ais_data
+        ok, ais_data = cast(tuple[bool, list[list[Any]]], self.db.execute_and_return(sql, return_error=True))
+        if ok:
+            return ais_data
+        else:
+            raise TypeError(ais_data[0][0])
 
-    def update_ais_data(self, leg_key, ais_data, leg_bearing, dirs) -> list:
-        line1 = []
-        line2 = []
-        for loa, beam, toc, draugt, sh_type, date1, sog, air_draught, dist, cog in ais_data:
+    def update_ais_data(self, leg_key:str, ais_data:list[list[Any]], leg_bearing:float, dirs:list[str]) -> tuple[np.ndarray, np.ndarray]:
+        line1:list[float] = []
+        line2:list[float] = []
+        for loa, beam, toc, draugt, sh_type, _, sog, air_draught, dist, cog in ais_data:
             if close_to_line(leg_bearing + 180, cog, self.max_deviation):
                 line1.append(dist)
                 l1 = True
@@ -228,16 +261,15 @@ class AIS:
                 # print(leg_bearing, cog, self.max_deviation)
                 continue
             dir_ = dirs[0] if l1 else dirs[1]
-            found_loa = False
             if loa is None:
                 loa = 100
             loa = int(loa)
+            loa_cat = -1
             for loa_i in range(len(self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'])):
                 if loa_i * 25 < loa <= (loa_i * 25 + 25):
                     loa_cat = loa_i
-                    found_loa = True
                     continue
-            if not found_loa:
+            if loa_cat < 0:
                 loa_cat = 4
             if sh_type is None:
                 sh_type = ''
@@ -253,29 +285,29 @@ class AIS:
             if draugt is not None:
                 self.omrat.traffic.traffic_data[leg_key][dir_]['Draught (meters)'][loa_cat][type_cat].append(
                     float(draugt))
-        line1 = np.array(line1)
-        line2 = np.array(line2)
-        return [line1, line2]
+        np_line1 = np.array(line1)
+        np_line2 = np.array(line2)
+        return np_line1, np_line2
 
-    def get_segment_data_from_table(self):
+    def get_segment_data_from_table(self) -> dict[str, dict[str, str]]:
         """Extract segment data from the QTableWidget (twRouteList)."""
-        segment_data = {}
-        table = self.omrat.dockwidget.twRouteList
-        row_count = table.rowCount()
+        segment_data: dict[str, dict[str, str]] = {}
+        table:QTableWidget = self.omrat.main_widget.twRouteList
+        row_count: int = table.rowCount()
 
         for row in range(row_count):
-            segment_id = table.item(row, 0).text() if table.item(row, 0) else None
-            route_id = table.item(row, 1).text() if table.item(row, 1) else None
-            start_point = table.item(row, 2).text() if table.item(row, 2) else None
-            end_point = table.item(row, 3).text() if table.item(row, 3) else None
-            width = table.item(row, 4).text() if table.item(row, 4) else None
+            segment_id: str | None = table.item(row, 0).text() if table.item(row, 0) else None
+            route_id: str | None = table.item(row, 1).text() if table.item(row, 1) else None
+            start_point: str | None = table.item(row, 2).text() if table.item(row, 2) else None
+            end_point: str | None = table.item(row, 3).text() if table.item(row, 3) else None
+            width: str|None = table.item(row, 4).text() if table.item(row, 4) else None
 
             if segment_id and route_id and start_point and end_point and width:
                 segment_data[segment_id] = {
                     'Route Id': route_id,
                     'Start Point': start_point,
                     'End Point': end_point,
-                    'Width': float(width)
+                    'Width': width
                 }
 
         return segment_data

@@ -13,3 +13,10 @@ class AISConnectionWidget(QtWidgets.QDialog, FORM_CLASS):
         """Constructor."""
         super(AISConnectionWidget, self).__init__(parent)
         self.setupUi(self)
+        self.leDBHost: QtWidgets.QLineEdit
+        self.leDBName: QtWidgets.QLineEdit
+        self.leUserName: QtWidgets.QLineEdit
+        self.lePassword: QtWidgets.QLineEdit
+        self.leProvider: QtWidgets.QLineEdit
+        self.SBYear: QtWidgets.QSpinBox
+        self.leMaxDev: QtWidgets.QLineEdit

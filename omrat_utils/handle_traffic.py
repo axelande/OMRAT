@@ -2,33 +2,40 @@ from dataclasses import dataclass, field
 from operator import xor
 import json
 from functools import partial
-from typing import Union
+from typing import Optional, Any, TYPE_CHECKING, cast, Union
+if TYPE_CHECKING:
+    from omrat import OMRAT, OMRATMainWidget
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib as mpl
 mpl.use('Qt5Agg')
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
 import numpy as np
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtWidgets import QTableWidgetItem, QSpinBox, QDoubleSpinBox
+from qgis.PyQt.QtWidgets import QTableWidgetItem, QSpinBox, QDoubleSpinBox, QLineEdit
 from scipy import stats
 
 from ui.traffic_data_widget import TrafficDataWidget
 from geometries import isint
 
 
+WidgetType = Union[QLineEdit, QSpinBox, QDoubleSpinBox]
+
 @dataclass
 class Normal:
-    mean =  None
-    std = 0
-    probability = 0
+    mean: Optional[float] = None
+    std: float = 0.0
+    probability: float = 0.0
 
 @dataclass
 class Uniform:
-    lower = 0
-    upper= 0
-    probability = 100
+    lower: float = 0.0
+    upper: float = 0.0
+    probability: float = 100.0
+
 
 @dataclass
 class Params:
@@ -41,17 +48,16 @@ class Params:
         # Combine regular cards and the super card for iteration
         return iter([self.normal1, self.normal2, self.normal3, self.uniform])
 class Traffic:
-    def __init__(self, omrat, dw):
+    def __init__(self, omrat: "OMRAT", dw:"OMRATMainWidget"):
         self.dw = dw
         self.omrat = omrat
-        self.W = omrat.dockwidget
-        self.traffic_data = self.omrat.traffic_data
-        self.c_seg = None
+        self.traffic_data: dict[str, dict[str, dict[str, Any]]] = self.omrat.traffic_data
+        self.c_seg = "1"
         self.current_table = []
         self.variables = ['Frequency (ships/year)', 'Speed (knots)', 'Draught (meters)', 'Ship heights (meters)', 'Ship Beam (meters)']
         self.last_var = 'Frequency (ships/year)'
         self.last_dist_seg = '1'
-        self.canvas = None
+        self.canvas: FigureCanvas | None = None
         self.dont_save = False
         
         self.tdw = TrafficDataWidget()
@@ -63,22 +69,22 @@ class Traffic:
     def main_connect(self):
         """Connects the values in the main widget"""
         connect_weights = [
-            self.W.leNormWeight1_1, self.W.leNormWeight1_2, self.W.leNormWeight1_3,
-            self.W.leNormWeight2_1, self.W.leNormWeight2_2, self.W.leNormWeight2_3
+            self.dw.leNormWeight1_1, self.dw.leNormWeight1_2, self.dw.leNormWeight1_3,
+            self.dw.leNormWeight2_1, self.dw.leNormWeight2_2, self.dw.leNormWeight2_3
         ]
         for widget in connect_weights:
             widget.textChanged.connect(lambda _, w=widget: self.adjust_weights(w))
-        self.W.sbUniformP1.valueChanged.connect(lambda _, w=self.W.sbUniformP1: self.adjust_weights(w))
-        self.W.sbUniformP2.valueChanged.connect(lambda _, w=self.W.sbUniformP2: self.adjust_weights(w))
+        self.dw.sbUniformP1.valueChanged.connect(lambda _, w=self.dw.sbUniformP1: self.adjust_weights(w))
+        self.dw.sbUniformP2.valueChanged.connect(lambda _, w=self.dw.sbUniformP2: self.adjust_weights(w))
 
         # Connect other widgets to run_update_plot
-        widgets_to_update = [
-            self.W.leNormMean1_1, self.W.leNormMean1_2, self.W.leNormMean1_3,
-            self.W.leNormStd1_1, self.W.leNormStd1_2, self.W.leNormStd1_3,
-            self.W.leUniformMin1, self.W.leUniformMax1,
-            self.W.leNormWeight2_1, self.W.leNormMean2_1, self.W.leNormMean2_2, self.W.leNormMean2_3,
-            self.W.leNormStd2_1, self.W.leNormStd2_2, self.W.leNormStd2_3,
-            self.W.leUniformMin2, self.W.leUniformMax2
+        widgets_to_update:list[Any] = [
+            self.dw.leNormMean1_1, self.dw.leNormMean1_2, self.dw.leNormMean1_3,
+            self.dw.leNormStd1_1, self.dw.leNormStd1_2, self.dw.leNormStd1_3,
+            self.dw.leUniformMin1, self.dw.leUniformMax1,
+            self.dw.leNormWeight2_1, self.dw.leNormMean2_1, self.dw.leNormMean2_2, self.dw.leNormMean2_3,
+            self.dw.leNormStd2_1, self.dw.leNormStd2_2, self.dw.leNormStd2_3,
+            self.dw.leUniformMin2, self.dw.leUniformMax2
         ]
 
         for widget in widgets_to_update:
@@ -97,17 +103,17 @@ class Traffic:
 
     def set_table_headings(self):
         """Sets the column and row names of the table"""
-        types = []
+        types: list[str] = []
         for i in range(self.omrat.ship_cat.scw.cvTypes.rowCount()):
             it = self.omrat.ship_cat.scw.cvTypes.item(i, 0)
             text = it.text() if it is not None else ""
             types.append(text)
-        sizes = []
+        sizes: list[str] = []
         for i in range(self.omrat.ship_cat.scw.twLengths.rowCount()):
             it1 = self.omrat.ship_cat.scw.twLengths.item(i, 0)
-            text1 = it1.text() if it is not None else ""
+            text1 = it1.text() if it1 is not None else ""
             it2 = self.omrat.ship_cat.scw.twLengths.item(i, 1)
-            text2 = it2.text() if it is not None else ""
+            text2 = it2.text() if it2 is not None else ""
             sizes.append(f'{text1} - {text2}')
         self.tdw.twTrafficData.setColumnCount(len(sizes))
         self.tdw.twTrafficData.setHorizontalHeaderLabels(sizes)
@@ -202,18 +208,19 @@ class Traffic:
             self.run_update_plot()
         self.dont_save= False
         
-    def create_empty_dict(self, s_key, dirs):
+    def create_empty_dict(self, s_key:str, dirs:list[str]):
         """Creates an empty dict for the segment with all types"""
         self.traffic_data[s_key] = {}
         rows = self.tdw.twTrafficData.rowCount()
         cols = self.tdw.twTrafficData.columnCount()
+        
         for di in dirs:
             self.traffic_data[s_key][di] = {}
             for idx, key in enumerate(self.variables):
                 self.traffic_data[s_key][di][key] = []
-                for row in range(rows):
-                    line = []
-                    for col in range(cols):
+                for _ in range(rows):
+                    line:list[Any] = []
+                    for _ in range(cols):
                         if idx == 0:
                             line.append(0)
                         else:
@@ -221,45 +228,44 @@ class Traffic:
                     self.traffic_data[s_key][di][key].append(line)
     
     def run_update_plot(self):
-        leg_name = self.W.cbTrafficSelectSeg.currentText()
+        leg_name = self.dw.cbTrafficSelectSeg.currentText()
         if leg_name not in self.omrat.ais.dist_data:
             return
         d = self.omrat.ais.dist_data[leg_name]
         p1, p2 = self.get_leg_params()
         self.plot_data(d['line1'], d['line2'], p1, p2)
         
-    @staticmethod
-    def _assign(widget) -> float:
-        if widget.text() == '-':
-            return -0
-        if widget.text() != "":
-            return float(widget.text().replace(',', '.').replace('--',''))
-        else:
-            return None
+    def _assign(self, widget: WidgetType) -> float:
+        if isinstance(widget, QLineEdit):
+            return float(widget.text())
+        elif isinstance(widget, QSpinBox):
+            return float(widget.value())
+        raise TypeError(f"Unsupported widget type: {type(widget)}")
+
             
-    def get_leg_params(self) -> list:
+    def get_leg_params(self) -> tuple[Params, Params]:
         """Retrieve the values from the widget and pass them further as Params objs"""
         p1 = Params()
         p2 = Params()
         for di, p in zip(["1", "2"], [p1, p2]):
             for i in range(1, 4):
                 item = getattr(p, f'normal{i}')
-                item.mean = self._assign(getattr(self.W,f'leNormMean{di}_{i}'))
-                item.std = self._assign(getattr(self.W,f'leNormStd{di}_{i}'))
-                item.probability = self._assign(getattr(self.W, f'leNormWeight{di}_{i}'))
-            p.uniform.lower = self._assign(getattr(self.W, f'leUniformMin{di}'))
-            p.uniform.upper = self._assign(getattr(self.W, f'leUniformMax{di}'))
-            p.uniform.probability = self._assign(getattr(self.W, f'sbUniformP{di}'))
-        return [p1, p2]
+                item.mean = self._assign(getattr(self.dw,f'leNormMean{di}_{i}'))
+                item.std = self._assign(getattr(self.dw,f'leNormStd{di}_{i}'))
+                item.probability = self._assign(getattr(self.dw, f'leNormWeight{di}_{i}'))
+            p.uniform.lower = self._assign(getattr(self.dw, f'leUniformMin{di}'))
+            p.uniform.upper = self._assign(getattr(self.dw, f'leUniformMax{di}'))
+            p.uniform.probability = self._assign(getattr(self.dw, f'sbUniformP{di}'))
+        return p1, p2
     
-    def plot_data(self, data, data2, parameters1: Params, parameters2: Params):
+    def plot_data(self, data:np.ndarray, data2:np.ndarray, parameters1: Params, parameters2: Params):
         """Makes the plot in the top left corner"""
         # Create the figure and axes
-        fig = plt.figure(figsize=(10, 6))
+        fig: Figure = plt.figure(figsize=(10, 6)) # type: ignore
         gs = gridspec.GridSpec(1, 1)
-        ax = fig.add_subplot(gs[0, 0])
-        ax.hist(data, bins=50, density=True, alpha=0.6, color='b', label=self.omrat.dockwidget.laDir1.text())
-        ax.hist(data2, bins=50, density=True, alpha=0.6, color='g', label=self.omrat.dockwidget.laDir2.text())
+        ax: Axes = fig.add_subplot(gs[0, 0]) # type: ignore
+        ax.hist(data, bins=50, density=True, alpha=0.6, color='b', label=self.omrat.main_widget.laDir1.text())
+        ax.hist(data2, bins=50, density=True, alpha=0.6, color='g', label=self.omrat.main_widget.laDir2.text())
         self.add_dist2plot(ax, parameters1, data, True)
         self.add_dist2plot(ax, parameters2, data2, False)
 
@@ -270,37 +276,38 @@ class Traffic:
 
         # Remove the previous canvas if it exists
         if self.canvas is not None:
-            self.W.DistributionWidget.removeWidget(self.canvas)
+            self.dw.DistributionWidget.removeWidget(self.canvas)
             self.canvas.deleteLater()  # Ensure the old canvas is deleted
-            self.canvas = None
 
         # Add the new canvas
         fig.tight_layout()
         self.canvas = FigureCanvas(fig)
-        self.W.DistributionWidget.addWidget(self.canvas)
+        self.dw.DistributionWidget.addWidget(self.canvas)
         self.canvas.draw()
         plt.close(fig)
     
-    def add_dist2plot(self, ax, parameters:Params, data:np.array, first:bool):
+    def add_dist2plot(self, ax:Axes, parameters:Params, data:np.ndarray, first:bool):
         """Adds the distributions to the plot"""
         try:
             if parameters.normal1.mean is None:
-                parameters.normal1.mean, parameters.normal1.std = stats.norm.fit(data)
-                parameters.normal1.mean = round(parameters.normal1.mean)
-                parameters.normal1.std = round(parameters.normal1.std)
+                
+                fit_result: tuple[float, float] = stats.norm.fit(data) # type: ignore
+                mean, std = fit_result
+                parameters.normal1.mean = round(mean)
+                parameters.normal1.std = round(std)
                 if first:
-                    self.W.leNormMean1_1.setText(str(parameters.normal1.mean))
-                    self.W.leNormStd1_1.setText(str(parameters.normal1.std))
-                    self.W.leNormWeight1_1.setText("1")
+                    self.dw.leNormMean1_1.setText(str(parameters.normal1.mean))
+                    self.dw.leNormStd1_1.setText(str(parameters.normal1.std))
+                    self.dw.leNormWeight1_1.setText("1")
                 else:
-                    self.W.leNormMean2_1.setText(str(parameters.normal1.mean))
-                    self.W.leNormStd2_1.setText(str(parameters.normal1.std))
-                    self.W.leNormWeight2_1.setText("1")
+                    self.dw.leNormMean2_1.setText(str(parameters.normal1.mean))
+                    self.dw.leNormStd2_1.setText(str(parameters.normal1.std))
+                    self.dw.leNormWeight2_1.setText("1")
                 
                 parameters.normal1.probability = 1
                 parameters.uniform.lower = data.min()
                 parameters.uniform.upper = data.max()
-            x = np.linspace(data.min(), data.max(), 1000)
+            x: np.ndarray = np.linspace(data.min(), data.max(), 1000, dtype=float)
             tot_y = np.zeros(x.size)
             tot_p = 0
             
@@ -327,7 +334,7 @@ class Traffic:
         except Exception as e:
             print(e)
             
-    def update_traffic_tbl(self, caller):
+    def update_traffic_tbl(self, caller:str):
         """Updates Traffic data table with the data from traffic_data, 
         using the correct type and segment"""
         if self.run_update:
@@ -335,15 +342,19 @@ class Traffic:
         if caller == 'segment':
             self.c_seg = self.tdw.cbTrafficSelectSeg.currentText()
             self.update_direction_select()
+        assert self.tdw.twTrafficData is not None
         rows = self.tdw.twTrafficData.rowCount()
         cols = self.tdw.twTrafficData.columnCount()
-        self.last_var = self.tdw.cbSelectType.currentText()
+        self.last_var: str = self.tdw.cbSelectType.currentText()
         self.c_di = self.tdw.cbTrafficDirectionSelect.currentText()
+        if any([self.c_seg== "", self.c_di== "", self.last_var== ""]):
+            return    
         for row in range(rows):
             for col in range(cols):
-                val = self.traffic_data[self.c_seg][self.c_di][self.last_var][row][col]
+                val:float|int|str = self.traffic_data[self.c_seg][self.c_di][self.last_var][row][col]
 
                 if val == '':
+                    item = QSpinBox()
                     val = 0
                 elif val == np.inf:
                     item = QSpinBox()
@@ -395,32 +406,35 @@ class Traffic:
         self.run_update = True
         self.tdw.exec_()
 
-    def adjust_weights(self, changed_widget):
+    def adjust_weights(self, changed_widget: QSpinBox | QLineEdit) -> None:
         """Adjust the weights so that their sum equals 100 while maintaining order."""
-        widgets1 = [
-            self.W.leNormWeight1_1,
-            self.W.leNormWeight1_2,
-            self.W.leNormWeight1_3,
-            self.W.sbUniformP1
+        widgets1: list[Any] = [
+            self.dw.leNormWeight1_1,
+            self.dw.leNormWeight1_2,
+            self.dw.leNormWeight1_3,
+            self.dw.sbUniformP1
         ]
-        widgets2 = [
-            self.W.leNormWeight2_1,
-            self.W.leNormWeight2_2,
-            self.W.leNormWeight2_3,
-            self.W.sbUniformP2
+        widgets2: list[Any] = [
+            self.dw.leNormWeight2_1,
+            self.dw.leNormWeight2_2,
+            self.dw.leNormWeight2_3,
+            self.dw.sbUniformP2
         ]
         if changed_widget in widgets1:
             widgets = widgets1
         elif changed_widget in widgets2:
             widgets = widgets2
         else:
-            print(widgets1, widgets2)
-            print(changed_widget)
             print("Widget not found")
+            return
 
         # Get the total weight and the changed value
         total_weight = 100
-        changed_value = float(changed_widget.text()) if hasattr(changed_widget, 'text') else changed_widget.value()
+        if hasattr(changed_widget, 'text'):
+            changed_value = float(changed_widget.text())
+        else:
+            widget_sb: QSpinBox = cast(QSpinBox, changed_widget)
+            changed_value = float(widget_sb.value())
 
         # Calculate the remaining weight
         remaining_weight = total_weight - changed_value
@@ -452,7 +466,7 @@ class Traffic:
         # Ensure the total sum is exactly 100
         self.ensure_total_sum(widgets)
 
-    def ensure_total_sum(self, widgets):
+    def ensure_total_sum(self, widgets:list[Any]):
         """Ensure the total sum of weights equals 100."""
         total = sum(
             float(w.text()) if hasattr(w, 'text') and w.text() != '' else w.value() if hasattr(w, 'value') else 0
@@ -470,10 +484,10 @@ class Traffic:
 
     def unload(self):
         """Cleanup resources and disconnect signals."""
-        # Disconnect signals connected to self.W
+        # Disconnect signals connected to self.dw
         connect_weights = [
-            self.W.leNormWeight1_1, self.W.leNormWeight1_2, self.W.leNormWeight1_3,
-            self.W.leNormWeight2_1, self.W.leNormWeight2_2, self.W.leNormWeight2_3
+            self.dw.leNormWeight1_1, self.dw.leNormWeight1_2, self.dw.leNormWeight1_3,
+            self.dw.leNormWeight2_1, self.dw.leNormWeight2_2, self.dw.leNormWeight2_3
         ]
         for widget in connect_weights:
             try:
@@ -482,43 +496,42 @@ class Traffic:
                 pass
 
         try:
-            self.W.sbUniformP1.valueChanged.disconnect()
-            self.W.sbUniformP2.valueChanged.disconnect()
+            self.dw.sbUniformP1.valueChanged.disconnect()
+            self.dw.sbUniformP2.valueChanged.disconnect()
         except TypeError:
             pass
 
         # Disconnect other widgets connected to run_update_plot
         widgets_to_update = [
-            self.W.leNormMean1_1, self.W.leNormMean1_2, self.W.leNormMean1_3,
-            self.W.leNormStd1_1, self.W.leNormStd1_2, self.W.leNormStd1_3,
-            self.W.leUniformMin1, self.W.leUniformMax1,
-            self.W.leNormWeight2_1, self.W.leNormMean2_1, self.W.leNormMean2_2, self.W.leNormMean2_3,
-            self.W.leNormStd2_1, self.W.leNormStd2_2, self.W.leNormStd2_3,
-            self.W.leUniformMin2, self.W.leUniformMax2
+            self.dw.leNormMean1_1, self.dw.leNormMean1_2, self.dw.leNormMean1_3,
+            self.dw.leNormStd1_1, self.dw.leNormStd1_2, self.dw.leNormStd1_3,
+            self.dw.leUniformMin1, self.dw.leUniformMax1,
+            self.dw.leNormWeight2_1, self.dw.leNormMean2_1, self.dw.leNormMean2_2, self.dw.leNormMean2_3,
+            self.dw.leNormStd2_1, self.dw.leNormStd2_2, self.dw.leNormStd2_3,
+            self.dw.leUniformMin2, self.dw.leUniformMax2
         ]
         for widget in widgets_to_update:
             try:
                 if hasattr(widget, 'textChanged'):
                     widget.textChanged.disconnect()
                 elif hasattr(widget, 'valueChanged'):
-                    widget.valueChanged.disconnect()
+                    widget.valueChanged.disconnect() # type: ignore
             except TypeError:
                 pass
 
         # Disconnect signals from TrafficDataWidget (tdw)
         try:
             if hasattr(self, "tdw"):
-                if self.tdw is not None:
-                    self.tdw.cbSelectType.currentIndexChanged.disconnect()
-                    self.tdw.cbTrafficDirectionSelect.currentIndexChanged.disconnect()
-                    self.tdw.accepted.disconnect()
+                self.tdw.cbSelectType.currentIndexChanged.disconnect()
+                self.tdw.cbTrafficDirectionSelect.currentIndexChanged.disconnect()
+                self.tdw.accepted.disconnect()
         except TypeError:
             pass
 
         # Remove all widgets from DistributionWidget
-        if self.W.DistributionWidget is not None:
-            while self.W.DistributionWidget.count() > 0:
-                item = self.W.DistributionWidget.takeAt(0)
+        if self.dw.DistributionWidget is not None:
+            while self.dw.DistributionWidget.count() > 0:
+                item = self.dw.DistributionWidget.takeAt(0)
                 widget = item.widget()
                 if widget is not None:
                     widget.deleteLater()
@@ -527,8 +540,5 @@ class Traffic:
         self.traffic_data.clear()
 
         # Remove reference to TrafficDataWidget
-        self.tdw = None
-        self.omrat = None
-        self.W = None
-
+        self.tdw.deleteLater()
         print("Traffic resources cleaned up.")

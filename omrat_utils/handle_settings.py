@@ -1,3 +1,4 @@
+from typing import Any
 from qgis.PyQt.QtWidgets import QDialogButtonBox
 
 from omrat_utils.repair_time import Repair
@@ -15,7 +16,7 @@ class DriftSettings:
                   'scale': .85,
                   'use_lognormal': True}
         # This is set here as default values, however it is overwritten while loading user data
-        self.drift_values = {'drift_p': 1, 'anchor_p': .95,'anchor_d': 7, 'speed':1, 'rose': rose, 'repair': repair}
+        self.drift_values:dict[str, Any] = {'drift_p': 1, 'anchor_p': .95,'anchor_d': 7, 'speed':1, 'rose': rose, 'repair': repair}
         
     def commit_changes(self):
         n = float(self.dsw.leDriftN.text())

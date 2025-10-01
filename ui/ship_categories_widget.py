@@ -13,3 +13,6 @@ class ShipCategoriesWidget(QtWidgets.QDialog, FORM_CLASS):
         """Constructor."""
         super(ShipCategoriesWidget, self).__init__(parent)
         self.setupUi(self)
+        
+        self.cvTypes:QtWidgets.QTableWidget
+        self.twLengths:QtWidgets.QTableWidget

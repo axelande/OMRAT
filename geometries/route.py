@@ -2,6 +2,7 @@ import numpy as np
 import math
 from scipy import stats
 from shapely.geometry import LineString, Polygon, Point
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform, split
 from qgis.core import QgsPointXY, QgsLineString, QgsGeometry
 from pyproj import CRS, Transformer
@@ -9,7 +10,7 @@ from pyproj.aoi import AreaOfInterest
 from pyproj.database import query_utm_crs_info
 
 
-def get_best_utm(l_obj:list) -> CRS:
+def get_best_utm(l_obj:list[BaseGeometry]) -> CRS:
     """returns the best CRS text for the project."""
     ll, ur = _get_ll_ur(l_obj)
     utm_crs_list = query_utm_crs_info(
@@ -25,10 +26,10 @@ def get_best_utm(l_obj:list) -> CRS:
     return utm_crs
 
 
-def _get_ll_ur(l_obj):
+def _get_ll_ur(l_obj:list[BaseGeometry]) -> list[list[float]]:
     """Get lower left and upper right based on a list of object"""
-    ll = [90, 180]
-    ur = [-90, -180]
+    ll: list[float] = [90, 180]
+    ur: list[float] = [-90, -180]
     for obj in l_obj:
         if isinstance(obj, Polygon):
             xx, yy = obj.exterior.coords.xy
@@ -160,11 +161,11 @@ def get_multiple_ed(line:LineString, objs:list, mu:float, std:float,
                 break
     return distances, lines, points
 
-def get_multi_drift_distance(line:LineString, objs:list, mu: float, std: float, 
+def get_multi_drift_distance(line:LineString, objs:list[BaseGeometry], mu: float, std: float, 
                              width:int = 100, height:int = 100) -> float:
     project = get_proj_tansformer(line)
     line_utm = transform(project, line)
-    utm_objs = []
+    utm_objs: list[BaseGeometry] = []
     for obj in objs:
         utm_objs.append(transform(project, obj["wkt"]))
     max_distance = 50_000

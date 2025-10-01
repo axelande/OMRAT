@@ -129,7 +129,7 @@ def mock_table():
 
 def test_get_segment_data_from_table_valid_data(mock_ais, mock_table):
     """Test get_segment_data_from_table with valid data."""
-    mock_ais.omrat.dockwidget.twRouteList = mock_table
+    mock_ais.omrat.main_widget.twRouteList = mock_table
     result = mock_ais.get_segment_data_from_table()
 
     # Verify the result
@@ -148,7 +148,7 @@ def test_get_segment_data_from_table_missing_data(mock_ais, mock_table):
     mock_table.item.side_effect = lambda row, col: MagicMock(text=PropertyMock(return_value=[
         '1', None, '14.33188 55.21143', '14.52057 55.35013', '5000'
     ][col]))
-    mock_ais.omrat.dockwidget.twRouteList = mock_table
+    mock_ais.omrat.main_widget.twRouteList = mock_table
     result = mock_ais.get_segment_data_from_table()
 
     # Verify the result is empty due to missing data
@@ -157,7 +157,7 @@ def test_get_segment_data_from_table_missing_data(mock_ais, mock_table):
 def test_update_legs(mock_ais, mock_table):
     """Test update_legs with mocked segment data."""
     # Mock the QTableWidget
-    mock_ais.omrat.dockwidget.twRouteList = mock_table
+    mock_ais.omrat.main_widget.twRouteList = mock_table
 
     # Mock other dependencies
     mock_ais.omrat.qgis_geoms.leg_dirs = {'1': ['East going', 'West going']}
