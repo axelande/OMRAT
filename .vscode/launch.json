@@ -12,6 +12,23 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "redirectOutput": true
+        },
+        {
+            "name": "Attach to QGIS",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "127.0.0.1",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "C:/Users/axa/AppData/Roaming/QGIS/QGIS3/profiles/default/python/plugins/omrat>"
+                }
+            ],
+            "justMyCode": false
         }
     ]
 }
+

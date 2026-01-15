@@ -111,7 +111,7 @@ def test_on_width_changed(omrat):
                                     ]
     
     item5 = QTableWidgetItem(f'8000')
-    omrat.main_widget.twRouteList.setItem(0, 4, item5)
+    omrat.main_widget.twRouteList.setItem(0, 5, item5)
     tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
     tangent_feature = next(tangent_layer.getFeatures())
     updated_tangent_geom = tangent_feature.geometry().asPolyline()

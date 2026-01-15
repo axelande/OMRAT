@@ -4,22 +4,83 @@ import os
 from typing import TYPE_CHECKING
 
 from qgis.PyQt.QtCore import QSettings, QVariant
-from qgis.PyQt.QtWidgets import QFileDialog, QTableWidgetItem
-from qgis.core import QgsProject, QgsVectorLayer, QgsField, QgsFeature, QgsPolygon, QgsGeometry
+from qgis.PyQt.QtWidgets import QFileDialog, QTableWidgetItem, QTableWidget
+from qgis._core import QgsVectorDataProvider
+from qgis.core import QgsProject, QgsVectorLayer,  QgsFeature, QgsGeometry, QgsFeatureRequest, QgsField
+import requests
+import processing
+import tempfile
 
 
 if TYPE_CHECKING:
     from omrat import OMRAT
 
+def get_leg_coordinates(tbl: QTableWidget) -> list[tuple[float, float]]:
+    """Extract all start/end coordinates from the route table."""
+    coords: list[tuple[float, float]] = []
+    for row in range(tbl.rowCount()):
+        start_str = tbl.item(row, 3)
+        end_str = tbl.item(row, 4)
+        if start_str is None or end_str is None:
+            continue
+        for coord_str in [start_str.text(), end_str.text()]:
+            try:
+                # WKT: 'POINT (lon lat)'
+                coord = coord_str.split(' ')
+                lon, lat = float(coord[0]), float(coord[1])
+                coords.append((lon, lat))
+            except Exception:
+                continue
+    return coords
+
+def get_bbox(coords: list[tuple[float, float]]) -> tuple[float, float, float, float]:
+    """Return min/max lat/lon from a list of (lon, lat) tuples."""
+    lats = [lat for _, lat in coords]
+    lons = [lon for lon, _ in coords]
+    return min(lats), max(lats), min(lons), max(lons)
+
+def expand_bbox(min_lat: float, max_lat: float, min_lon: float, max_lon: float, extension_percent: float) -> tuple[float, float, float, float]:
+    """Expand the bounding box by a percentage."""
+    lat_range = max_lat - min_lat
+    lon_range = max_lon - min_lon
+    lat_ext = lat_range * extension_percent / 100.0
+    lon_ext = lon_range * extension_percent / 100.0
+    return min_lat - lat_ext, max_lat + lat_ext, min_lon - lon_ext, max_lon + lon_ext
+
+def build_gebco_url(min_lat: float, max_lat: float, min_lon: float, max_lon: float, api_key: str) -> str:
+    return (
+        f"https://portal.opentopography.org/API/globaldem?"
+        f"demtype=GEBCOIceTopo&south={min_lat}&north={max_lat}&west={min_lon}&east={max_lon}"
+        f"&outputFormat=GTiff&API_Key={api_key}"
+    )
+
+def download_geotiff(url: str, save_path: str = "gebco_download.tif") -> str:
+    """
+    Download a GeoTIFF file from the given URL and save it to disk.
+    Returns the path to the saved file.
+    """
+    response = requests.get(url, stream=True)
+    response.raise_for_status()  # Raises an error for bad responses
+
+    with open(save_path, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+    return save_path
 
 class OObject:
     def __init__(self, parent: "OMRAT") -> None:
         self.p = parent
         self.deph_id = 0
-        self.area = None
+        self.area: QgsVectorLayer | None = None
         self.object_id = 0
         self.area_type = ''
-        self.loaded_areas = []
+        self.loaded_depth_areas: list[QgsVectorLayer] = []
+        self.loaded_object_areas: list[QgsVectorLayer] = []
+        # Track row mapping and edit buffers to update tables on geometry change
+        self.depth_layer_row: dict[str, int] = {}
+        self.object_layer_row: dict[str, int] = {}
+        self.depth_buffer_edits = []
+        self.object_buffer_edits = []
         
     def add_area(self, name='area') -> QgsVectorLayer:
         if self.area is not None:
@@ -45,22 +106,172 @@ class OObject:
         if self.area_type == 'object':
             self.add_simple_object()
     
-    def load_area(self, name:str, wkt:str):
+    def load_area(self, name:str, wkt:str, row: int | None = None):
         area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
-        pr = area.dataProvider()
+        pr: QgsVectorDataProvider | None = area.dataProvider()
         fet = QgsFeature()
         fet.setGeometry(QgsGeometry.fromWkt(wkt))
-        pr.addFeatures( [ fet ] )
+        if pr is not None:
+            pr.addFeature(fet)
         QgsProject.instance().addMapLayer(area)
+        # Keep layer in edit mode and connect geometryChanged to update corresponding table row
+        if not area.isEditable():
+            area.startEditing()
+        buf = area.editBuffer()
+        layer_id = area.id()
+        if self.area_type == 'depth':
+            if row is None:
+                row = self.p.main_widget.twDepthList.rowCount() - 1
+            self.depth_layer_row[layer_id] = row
+            if buf is not None:
+                buf.geometryChanged.connect(lambda fid, geom, lid=layer_id: self.on_area_geometry_changed_wrapper(lid, 'depth', fid, geom))
+                self.depth_buffer_edits.append(buf)
+        elif self.area_type == 'object':
+            if row is None:
+                row = self.p.main_widget.twObjectList.rowCount() - 1
+            self.object_layer_row[layer_id] = row
+            if buf is not None:
+                buf.geometryChanged.connect(lambda fid, geom, lid=layer_id: self.on_area_geometry_changed_wrapper(lid, 'object', fid, geom))
+                self.object_buffer_edits.append(buf)
         self.p.iface.actionSaveActiveLayerEdits().trigger()
-        self.loaded_areas.append(area)
+        if self.area_type == 'depth':
+            self.loaded_depth_areas.append(area)
+        elif self.area_type == 'object':
+            self.loaded_object_areas.append(area)
+
+    def on_area_geometry_changed_wrapper(self, layer_id: str, kind: str, fid: int, geom: QgsGeometry):
+        # Update WKT in the appropriate table when geometry changes
+        wkt = geom.asWkt(precision=5)
+        if kind == 'depth':
+            row = self.depth_layer_row.get(layer_id)
+            if row is not None and 0 <= row < self.p.main_widget.twDepthList.rowCount():
+                self.p.main_widget.twDepthList.setItem(row, 2, QTableWidgetItem(wkt))
+        else:
+            row = self.object_layer_row.get(layer_id)
+            if row is not None and 0 <= row < self.p.main_widget.twObjectList.rowCount():
+                self.p.main_widget.twObjectList.setItem(row, 2, QTableWidgetItem(wkt))
+
+    def update_depth_intervals(self) -> None:
+        """Update TWDepthIntervals with intervals from 0 to LEMaxDepth using SBDepthInterval."""
+        try:
+            interval = int(self.p.main_widget.SBDepthInterval.value())
+            max_depth = int(float(self.p.main_widget.LEMaxDepth.text()))
+        except Exception:
+            self.p.show_error_popup("Please enter valid numbers for interval and max depth.", "update_depth_intervals")
+            return
+
+        self.p.main_widget.TWDepthIntervals.setRowCount(0)
+        value = 0
+        row = 0
+        while value <= max_depth:
+            self.p.main_widget.TWDepthIntervals.insertRow(row)
+            self.p.main_widget.TWDepthIntervals.setItem(row, 0, QTableWidgetItem(str(value)))
+            value += interval
+            row += 1
+        # If last value is less than max_depth, add max_depth as final interval
+        if value - interval < max_depth:
+            self.p.main_widget.TWDepthIntervals.insertRow(row)
+            self.p.main_widget.TWDepthIntervals.setItem(row, 0, QTableWidgetItem(str(max_depth)))
+            
+    def obtain_gebco_data(self):
+        tbl = self.p.main_widget.twRouteList
+        coords = get_leg_coordinates(tbl)
+        if not coords:
+            self.p.show_error_popup("You need to create legs first.", "obtain_gebco_data")
+            return
+
+        min_lat, max_lat, min_lon, max_lon = get_bbox(coords)
+        extension_str = self.p.main_widget.LEGebcoExtension.text()
+        try:
+            extension = float(extension_str)
+        except ValueError:
+            self.p.show_error_popup("Extension must be a number.", "obtain_gebco_data")
+            return
+
+        min_lat, max_lat, min_lon, max_lon = expand_bbox(min_lat, max_lat, min_lon, max_lon, extension)
+        api_key = self.p.main_widget.LEOpenTopoAPIKey.text()
+        url = build_gebco_url(min_lat, max_lat, min_lon, max_lon, api_key)
+
+        # Download geotiff (implement your download logic here)
+        geotiff_path = download_geotiff(url, save_path='E:/temp/geo_test.tif')
+        intervals = [float(self.p.main_widget.TWDepthIntervals.item(i, 0).text()) for i in range(self.p.main_widget.TWDepthIntervals.rowCount())]
+        self.vectorize_and_add_geotiff(geotiff_path, intervals)
+        
+    def vectorize_and_add_geotiff(
+        self,
+        geotiff_path: str,
+        intervals: list[float],
+    ) -> None:
+        """
+        Vectorize the GeoTIFF raster using depth intervals and add the resulting polygons to QGIS.
+        """
+        # Create a unique layer name for the memory layer
+        
+        temp_path = os.path.join(tempfile.gettempdir(), "tmp.gpkg")
+
+        processing.run(
+            "gdal:polygonize",
+            {
+                "INPUT": geotiff_path,
+                "BAND": 1,
+                "FIELD": "VALUE",
+                "EIGHT_CONNECTEDNESS": False,
+                "OUTPUT": temp_path
+            }
+        )
+
+        vector_layer = QgsVectorLayer(temp_path, "temp_depths", "ogr")
+
+        if not vector_layer.isValid():
+            self.p.show_error_popup("Polygonized layer could not be loaded.", "vectorize_and_add_geotiff")
+            return
+
+        # Filter polygons by intervals and add to loaded_depth_areas
+        for idx, interval in enumerate(intervals[:-1]):
+            expr = f'"VALUE" <= {-interval} and "VALUE" > {-intervals[idx + 1]}'
+            # Create a feature request with the expression
+            request = QgsFeatureRequest().setFilterExpression(expr)
+            # Materialize a new layer with only the filtered features
+            features = [feat for feat in vector_layer.getFeatures(request)]
+            if not features:
+                continue
+
+            # Merge geometries
+            merged_geom = features[0].geometry()
+            for feat in features[1:]:
+                merged_geom = merged_geom.combine(feat.geometry())
+
+            # Create a new memory layer for the merged polygon
+            mem_layer = QgsVectorLayer("Polygon?crs=epsg:4326", f"Depth_{interval}_{intervals[idx+1]}", "memory")
+            pr = mem_layer.dataProvider()
+            pr.addAttributes([QgsField("interval", QVariant.Double)])
+            mem_layer.updateFields()
+
+            # Create feature with merged geometry and interval value
+            new_feat = QgsFeature(mem_layer.fields())
+            new_feat.setGeometry(merged_geom)
+            new_feat.setAttribute("interval", interval)
+            pr.addFeature(new_feat)
+            mem_layer.updateExtents()
+
+            QgsProject.instance().addMapLayer(mem_layer)
+            self.loaded_depth_areas.append(mem_layer)
+
+            # Update the table with WKT
+            row = self.p.main_widget.twDepthList.rowCount()
+            self.p.main_widget.twDepthList.insertRow(row)
+            self.p.main_widget.twDepthList.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            self.p.main_widget.twDepthList.setItem(row, 1, QTableWidgetItem(f"{interval}-{intervals[idx+1]}"))
+            wkt = new_feat.geometry().asWkt(precision=5)
+            self.p.main_widget.twDepthList.setItem(row, 2, QTableWidgetItem(wkt))
     
     def add_simple_depth(self):
         self.area_type = 'depth'
         if self.p.main_widget.pbAddSimpleDepth.text() == 'Save':
             self.store_depth()
             self.p.main_widget.pbAddSimpleDepth.setText('Add manual')
-            self.loaded_areas.append(self.area)
+            assert(self.area is not None)
+            self.loaded_depth_areas.append(self.area)
         else:
             self.deph_id += 1
             self.add_area(f'Depth_{self.deph_id}')
@@ -84,7 +295,7 @@ class OObject:
         if self.p.main_widget.pbAddSimpleObject.text() == 'Save':
             self.store_object()
             self.p.main_widget.pbAddSimpleObject.setText('Add manual')
-            self.loaded_areas.append(self.area)
+            self.loaded_object_areas.append(self.area)
         else:
             self.object_id += 1
             self.add_area(f'Object_{self.object_id}')
@@ -102,23 +313,85 @@ class OObject:
             self.p.main_widget.twObjectList.setItem(self.object_id - 1, 2, item3)
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
-        
+
+    def _select_file(self, title: str) -> str | None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self.p.main_widget,
+            title,
+            "",
+            "Shapefiler (*.shp)"
+        )
+        return file_path if file_path else None
+
+    def _load_layer(self, file_path: str, layer_name: str, target_list: list) -> QgsVectorLayer | None:
+        layer = QgsVectorLayer(file_path, layer_name, "ogr")
+        if not layer.isValid():
+            print(f"Ogiltigt lager: {layer_name}")
+            return None
+        QgsProject.instance().addMapLayer(layer)
+        target_list.append(layer)
+        return layer
+
+    def _populate_table(self, layer: QgsVectorLayer, table_widget, attr_name: str) -> None:
+        row_index = table_widget.rowCount()
+        for feature in layer.getFeatures():
+            geom = feature.geometry()
+            wkt: str = geom.asWkt(precision=5)
+            value = feature.attribute(attr_name) if attr_name in layer.fields().names() else 0.0
+
+            table_widget.insertRow(row_index)
+            table_widget.setItem(row_index, 0, QTableWidgetItem(str(row_index + 1)))
+            table_widget.setItem(row_index, 1, QTableWidgetItem(str(value)))
+            table_widget.setItem(row_index, 2, QTableWidgetItem(wkt))
+            row_index += 1
+
+    def load_objects(self) -> None:
+        file_path = self._select_file("Välj shapefil med objektområden")
+        if file_path is None:
+            return
+
+        layer = self._load_layer(file_path, "Loaded Objects", self.loaded_object_areas)
+        if layer is None:
+            return
+
+        self._populate_table(layer, self.p.main_widget.twObjectList, "object")  # Use the correct attribute name if different
+
     def load_depths(self) -> None:
-        # Todo: add this
-        pass
+        file_path = self._select_file("Välj shapefil med djupområden")
+        if file_path is None:
+            return
+
+        layer = self._load_layer(file_path, "Loaded Depths", self.loaded_depth_areas)
+        if layer is None:
+            return
+
+        self._populate_table(layer, self.p.main_widget.twDepthList, "depth")
+
     
     def remove_depth(self) -> None:
-        # Todo: add this
-        pass
-    
-    def load_objects(self) -> None:
-        # Todo: add this
-        pass
-    
+        table = self.p.main_widget.twDepthList
+        selected_rows: set[int] = {item.row() for item in table.selectedItems()}
+
+        for row in sorted(selected_rows, reverse=True):
+            table.removeRow(row)
+
+            # Remove the layers if they are selected
+            if row < len(self.loaded_depth_areas):
+                layer = self.loaded_depth_areas.pop(row)
+                QgsProject.instance().removeMapLayer(layer.id())
+
     def remove_object(self) -> None:
-        # Todo: add this
-        pass
-        
+        table = self.p.main_widget.twObjectList
+        selected_rows: set[int] = {item.row() for item in table.selectedItems()}
+
+        for row in sorted(selected_rows, reverse=True):
+            table.removeRow(row)
+
+            # Remove the layers if they are selected
+            if row < len(self.loaded_object_areas):
+                layer = self.loaded_object_areas.pop(row)
+                QgsProject.instance().removeMapLayer(layer.id())
+
     def unload(self):
         if self.area is not None:
             try:
@@ -126,9 +399,24 @@ class OObject:
             except TypeError:
                 pass
         self.area = None
-
-        for layer in self.loaded_areas:
-            QgsProject.instance().removeMapLayer(layer.id())  # Remove the layer from QGIS
-        self.loaded_areas = []
-
-        
+        # Disconnect any geometryChanged connections
+        try:
+            for buf in self.depth_buffer_edits:
+                buf.geometryChanged.disconnect()
+        except Exception:
+            pass
+        try:
+            for buf in self.object_buffer_edits:
+                buf.geometryChanged.disconnect()
+        except Exception:
+            pass
+        self.depth_buffer_edits = []
+        self.object_buffer_edits = []
+        for layer in self.loaded_depth_areas:
+            QgsProject.instance().removeMapLayer(layer.id())
+        self.loaded_depth_areas = []
+        self.depth_layer_row = {}
+        self.object_layer_row = {}
+        for layer in self.loaded_object_areas:
+            QgsProject.instance().removeMapLayer(layer.id())
+        self.loaded_object_areas = []

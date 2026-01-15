@@ -158,14 +158,19 @@ class AIS:
         if self.db is None:
             return
         segment_data: dict[str, dict[str, str]] = self.get_segment_data_from_table()
-        leg_d=None
-        legs: dict_items[str, dict[str, str]] = segment_data.items()
-        for key, leg_d in legs:
-            dirs = self.omrat.qgis_geoms.leg_dirs[key]
-            self.omrat.traffic.create_empty_dict(key, dirs)
-            start_p = wkt.loads(f"POINT({leg_d['Start Point']})")
+        if key is None:
+            legs: dict_items[str, dict[str, str]] = segment_data.items()
+        else:
+            legs = [[key, segment_data[key]]] # type: ignore
+        for leg_key, leg_d in legs:
+            if leg_key not in self.omrat.qgis_geoms.leg_dirs.keys():
+                # Use the current leg_key to look up segment direction labels
+                self.omrat.qgis_geoms.leg_dirs[leg_key] = self.omrat.segment_data[leg_key]["Dirs"]
+            dirs = self.omrat.qgis_geoms.leg_dirs[leg_key]
+            self.omrat.traffic.create_empty_dict(leg_key, dirs)
+            start_p = wkt.loads(f"Point ({leg_d['Start_Point']})")
             assert isinstance(start_p, Point)
-            end_p = wkt.loads(f"POINT({leg_d['End Point']})")
+            end_p = wkt.loads(f"Point ({leg_d['End_Point']})")
             assert isinstance(end_p, Point)
             pl = get_pl(self.db, lat1=start_p.y,
                         lat2=end_p.y,
@@ -181,11 +186,14 @@ class AIS:
             ST_Point({end_p.x}, {end_p.y})::geography))
             """
             _, leg_bearing = cast(tuple[bool, list[list[Any]]], self.db.execute_and_return(sql, return_error=True))
-            line1, line2 = self.update_ais_data(key, ais_data, leg_bearing[0][0], dirs)
+            line1, line2 = self.update_ais_data(leg_key, ais_data, leg_bearing[0][0], dirs)
             self.convert_list2avg()
-            self.update_dist_data(line1, line2, key)
-        self.omrat.traffic.dont_save = True
-        self.omrat.traffic.run_update_plot()
+            self.update_dist_data(line1, line2, leg_key)
+            key = leg_key
+        if key is not None:
+            self.omrat.main_widget.leNormMean1_1.setText('')
+            self.omrat.distributions.run_update_plot(key)
+            self.omrat.main_widget.cbTrafficSelectSeg.setCurrentIndex(self.omrat.main_widget.cbTrafficSelectSeg.count()-1)
         
     def convert_list2avg(self):
         for key1 in self.omrat.traffic.traffic_data.keys():
@@ -200,18 +208,29 @@ class AIS:
                                     self.omrat.traffic.traffic_data[key1][key2][key3][idx1][idx2] = np.inf
 
     def update_dist_data(self, line1:np.ndarray, line2:np.ndarray, key:str) -> None:
-        self.dist_data[key] = {'line1': line1, 'line2': line2}
         self.omrat.segment_data[key]['mean1_1'] = line1.mean()
         self.omrat.segment_data[key]['std1_1'] = line1.std()
         self.omrat.segment_data[key]['mean2_1'] = line2.mean()
         self.omrat.segment_data[key]['std2_1'] = line2.std()
         self.omrat.segment_data[key]['weight1_1'] = 100
         self.omrat.segment_data[key]['weight2_1'] = 100
+        self.omrat.segment_data[key]['dist1'] = line1
+        self.omrat.segment_data[key]['dist2'] = line2
         if float(self.omrat.main_widget.leNormMean1_1.text()) == 0.0:
             self.omrat.main_widget.leNormMean1_1.setText(str(line1.mean()))
             self.omrat.main_widget.leNormMean2_1.setText(str(line2.mean()))
             self.omrat.main_widget.leNormStd1_1.setText(str(line1.std()))
             self.omrat.main_widget.leNormStd2_1.setText(str(line2.std()))
+        for j in range(1, 3):
+            for i in range(2, 4):
+                self.omrat.segment_data[key][f'mean{j}_{i}'] = 0
+                self.omrat.segment_data[key][f'std{j}_{i}'] = 0
+                self.omrat.segment_data[key][f'weight{j}_{i}'] = 0
+            self.omrat.segment_data[key][f'u_min{j}'] = 0
+            self.omrat.segment_data[key][f'u_max{j}'] = 0
+            self.omrat.segment_data[key][f'u_p{j}'] = 0
+        self.omrat.segment_data[key]['ai1'] = 180
+        self.omrat.segment_data[key]['ai2'] = 180
     
     def run_sql(self, pl:str) -> list[list[Any]]:
         """Runs the SQL query to get the passages"""
@@ -298,15 +317,17 @@ class AIS:
         for row in range(row_count):
             segment_id: str | None = table.item(row, 0).text() if table.item(row, 0) else None
             route_id: str | None = table.item(row, 1).text() if table.item(row, 1) else None
-            start_point: str | None = table.item(row, 2).text() if table.item(row, 2) else None
-            end_point: str | None = table.item(row, 3).text() if table.item(row, 3) else None
-            width: str|None = table.item(row, 4).text() if table.item(row, 4) else None
+            leg_name: str | None = table.item(row, 2).text() if table.item(row, 2) else None
+            start_point: str | None = table.item(row, 3).text() if table.item(row, 3) else None
+            end_point: str | None = table.item(row, 4).text() if table.item(row, 4) else None
+            width: str|None = table.item(row, 5).text() if table.item(row, 5) else None
 
             if segment_id and route_id and start_point and end_point and width:
                 segment_data[segment_id] = {
-                    'Route Id': route_id,
-                    'Start Point': start_point,
-                    'End Point': end_point,
+                    'Route_Id': route_id,
+                    'Leg_name': leg_name,
+                    'Start_Point': start_point,
+                    'End_Point': end_point,
                     'Width': width
                 }
 

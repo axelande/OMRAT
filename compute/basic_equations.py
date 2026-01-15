@@ -26,5 +26,14 @@ def powered_na(distance, mean_time, ship_speed):
     ai = mean_time * ship_speed
     return exp(-distance / ai)
     
-    
+def get_not_repaired(data: dict[str,str|float|bool], drift_speed:float, dist:float) -> float:
+    """Get the probability that the ship isn't repaired"""
+    drift_time = get_drift_time(dist, drift_speed) / 3600
+    if data['use_lognormal'] == 1:
+        drift = stats.lognorm(data['std'], data['loc'], data['scale'])
+        prob_not_repaired = 1 - drift.cdf(drift_time)
+    else:
+        x = drift_time # used in the eval func
+        prob_not_repaired = 1 - eval(data['func'])
+    return prob_not_repaired 
 

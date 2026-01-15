@@ -135,9 +135,10 @@ def test_get_segment_data_from_table_valid_data(mock_ais, mock_table):
     # Verify the result
     assert result == {
         '1': {
-            'Route Id': '1',
-            'Start Point': '14.33188 55.21143',
-            'End Point': '14.52057 55.35013',
+            'Route_Id': '1',
+            'Leg_name': 'Leg_1_1',
+            'Start_Point': '14.33188 55.21143',
+            'End_Point': '14.52057 55.35013',
             'Width': 5000.0
         }
     }
@@ -146,7 +147,7 @@ def test_get_segment_data_from_table_missing_data(mock_ais, mock_table):
     """Test get_segment_data_from_table with missing data."""
     # Simulate missing data in the table
     mock_table.item.side_effect = lambda row, col: MagicMock(text=PropertyMock(return_value=[
-        '1', None, '14.33188 55.21143', '14.52057 55.35013', '5000'
+        '1', None, 'Leg_1_1', '14.33188 55.21143', '14.52057 55.35013', '5000'
     ][col]))
     mock_ais.omrat.main_widget.twRouteList = mock_table
     result = mock_ais.get_segment_data_from_table()

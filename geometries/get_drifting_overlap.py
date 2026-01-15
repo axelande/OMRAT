@@ -1,16 +1,27 @@
-from typing import Any
-
+from typing import Any, Callable, Sequence
 import geopandas as gpd
 from matplotlib.patches import Polygon as MplPolygon
 import matplotlib.pyplot as plt
+from matplotlib.backend_bases import PickEvent
 import numpy as np
-from PyQt5.QtWidgets import QLabel
+from qgis.PyQt.QtWidgets import QLabel, QWidget
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.gridspec as gridspec
 from shapely.affinity import translate
-from shapely.geometry import LineString, Polygon, Point
+from shapely.geometry import LineString, Polygon, Point, MultiPolygon
 from shapely.geometry.base import BaseGeometry
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+
+from compute.basic_equations import get_not_repaired
+from ui.show_geom_res import ShowGeomRes
 
 
-def create_polygon_from_line(line: LineString, distributions: list[Any], weights: list[float]) -> Polygon:
+def create_polygon_from_line(
+    line: LineString,
+    distributions: list[Any],
+    weights: list[float]
+) -> Polygon:
     """
     Create a polygon from a LineString based on multiple distributions and their weights.
     """
@@ -32,7 +43,10 @@ def create_polygon_from_line(line: LineString, distributions: list[Any], weights
     return polygon
 
 
-def extend_polygon_in_directions(polygon: Polygon, distance: float) -> tuple[list[BaseGeometry], list[LineString]]:
+def extend_polygon_in_directions(
+    polygon: Polygon,
+    distance: float
+) -> tuple[list[BaseGeometry], list[LineString]]:
     """
     Extend a polygon in 8 directions (0°, 45°, ..., 315°) by a given distance,
     creating 8 separate polygons that span from the original polygon to the extended areas.
@@ -54,7 +68,10 @@ def extend_polygon_in_directions(polygon: Polygon, distance: float) -> tuple[lis
     return extended_polygons, centre_lines
 
 
-def compare_polygons_with_objs(extended_polygons: list, objs_gdf_list: list):
+def compare_polygons_with_objs(
+    extended_polygons: list[BaseGeometry],
+    objs_gdf_list: list[gpd.GeoDataFrame]
+) -> dict[str, list[list[bool]]]:
     """
     Compare the extended polygons with the objects in a list of GeoDataFrames.
 
@@ -65,7 +82,7 @@ def compare_polygons_with_objs(extended_polygons: list, objs_gdf_list: list):
     Returns:
     - results: Dictionary with overlap results for each polygon and GeoDataFrame.
     """
-    results = {}
+    results: dict[str, Any] = {}
     for i, polygon in enumerate(extended_polygons):
         results[f"Polygon_{i}"] = []
         for objs_gdf in objs_gdf_list:
@@ -74,7 +91,12 @@ def compare_polygons_with_objs(extended_polygons: list, objs_gdf_list: list):
     return results
 
 
-def estimate_weighted_overlap(intersection: Polygon, line: LineString, distributions: list, weights: list) -> float:
+def estimate_weighted_overlap(
+    intersection: BaseGeometry,
+    line: LineString,
+    distributions: list[Any],
+    weights: list[float]
+) -> tuple[float, np.ndarray]:
     """
     Estimate the weighted overlap of the intersection area based on multiple distributions.
 
@@ -92,10 +114,17 @@ def estimate_weighted_overlap(intersection: Polygon, line: LineString, distribut
 
     # Find the closest point on the line to the intersection polygon
     closest_point = line.interpolate(line.project(intersection.centroid))
+    
+    if isinstance(intersection, Polygon):
 
-    # Sample points within the intersection polygon
-    sample_points = np.array(intersection.exterior.coords)
-
+        # Sample points within the intersection polygon
+        sample_points = np.array(intersection.exterior.coords)
+    
+    elif isinstance(intersection, MultiPolygon):
+        sample_points = np.vstack([np.array(poly.exterior.coords) for poly in intersection.geoms])
+    else:
+        raise ValueError("Unkown geom type type")
+    sample_points = np.atleast_2d(sample_points)
     # Calculate the distance of each point from the closest point on the line
     distances = np.sqrt((sample_points[:, 0] - closest_point.x)**2 + (sample_points[:, 1] - closest_point.y)**2)
 
@@ -109,13 +138,21 @@ def estimate_weighted_overlap(intersection: Polygon, line: LineString, distribut
     return weighted_overlap, distances
 
 
-def visualize(ax2, line, intersection, distances, distributions, weights, weighted_overlap: float):
-    ax2.clear()
+def visualize(
+    ax3: Axes,
+    distances: np.ndarray,
+    distributions: list[Any],
+    weights: list[float],
+    weighted_overlap: float,
+    data:dict[Any]
+) -> None:
+    ax3.clear()
     if weighted_overlap is None:
         return
 
     # Generate distances for the PDF curve
-    x = np.linspace(0, max(distances) * 1.5, 500)
+    x:np.ndarray = np.linspace(0, max(distances) * 1.5, 500)
+    assert(x, np.ndarray)
     combined_pdf = np.zeros_like(x)
     weights = np.array(weights) / np.sum(weights)
 
@@ -123,149 +160,507 @@ def visualize(ax2, line, intersection, distances, distributions, weights, weight
         combined_pdf += weight * dist.pdf(x)
 
     # Plot the combined PDF curve
-    ax2.plot(x, combined_pdf, label='Combined PDF', color='blue')
+    ax3.plot(x, combined_pdf, label='Prob. leg overlap', color='blue')
+    not_repaireds= []
+    for x_ in x:
+        not_repaireds.append(get_not_repaired(data['drift']['repair'], data['drift']['speed'],x_))
+    ax3.plot(x, not_repaireds, label='Prob. failure remains', color='red')
 
     # Highlight the extent of the intersection
     intersection_min = distances.min()
     intersection_max = distances.max()
-    ax2.axvspan(intersection_min, intersection_max, color='green', alpha=0.3, label='Intersection Extent')
+    ax3.axvspan(intersection_min, intersection_max, color='green', alpha=0.3, label='Intersection Extent')
 
     # Add labels and legend
-    ax2.set_title(f"Weighted Overlap: {weighted_overlap:.3e}")
-    ax2.set_xlabel("Distance from Closest Point")
-    ax2.set_ylabel("Probability Density")
-    ax2.legend()
+    # ax3.set_title(f"Weighted Overlap: {weighted_overlap:.3e}")
+    ax3.set_xlabel("Distance from Closest Point")
+    ax3.set_ylabel("Probability Density")
+    ax3.legend()
     plt.suptitle(f"Interactive Visualization: Click on an Extended Polygon")
     plt.tight_layout()
-    ax2.figure.canvas.draw()
+    ax3.figure.canvas.draw()
 
-def visualize_interactive(fig, ax1, ax2, ax3, lines, line_names, objs_gdf_list, distributions, weights, result_text:QLabel, distance:float=50_000):
-    """
-    Interactive visualization with three subplots:
-    - ax1: Example lines to select from.
-    - ax2: Base polygon and extended polygons for the selected line.
-    - ax3: Probability density function (PDF) for the selected extended polygon.
-    """
+class DriftingOverlapVisualizer:
+    def __init__(
+        self,
+        fig: Figure,
+        ax1: Axes,
+        ax2: Axes,
+        ax3: Axes,
+        lines: list[LineString],
+        line_names: list[str],
+        objs_gdf_list: list[gpd.GeoDataFrame],
+        distributions: list[list[Any]],
+        weights: list[list[float]],
+        data: dict[str, Any],
+        distance: float = 50_000,
+    ) -> None:
+        self.fig = fig
+        self.ax1 = ax1
+        self.ax2 = ax2
+        self.ax3 = ax3
+        self.lines = lines
+        self.line_names = line_names
+        self.objs_gdf_list = objs_gdf_list
+        self.distributions = distributions
+        self.weights = weights
+        self.data = data
+        self.distance = distance
 
-    # Plot the example lines in ax1
-    for i, (line, name) in enumerate(zip(lines, line_names)):
-        x, y = line.xy
-        ax1.plot(x, y, label=name, picker=True)  # Enable picking for the lines
-    ax1.set_title("Select a Line")
-    ax1.legend()
+        # State variables
+        self.current_line: LineString | None = None
+        self.current_base_polygon: Polygon | None = None
+        self.current_extended_polygons: list[BaseGeometry] | None = None
+        self.current_centre_lines: list[LineString] | None = None
+        self.current_coverages: list[float] | None = None
+        self.current_distances: list[np.ndarray] | None = None
+        self.current_weight: list[float] | None = None
+        self.current_distribution: list[Any] | None = None
+        
+        
+    def run_visualization(self):
+        self.setup_plot()
+        self.connect_events()
+        self.simulate_initial_selection()
 
-    # Placeholder for ax2 and ax3
-    ax2.set_title("Base and Extended Polygons")
-    ax3.set_title("Probability Density Function (PDF)")
+    def setup_plot(self) -> None:
+        assert(isinstance(self.ax1, Axes))
+        for line, name in zip(self.lines, self.line_names):
+            x, y = line.xy
+            self.ax1.plot(x, y, label=name, picker=True)
+        self.ax1.set_title("Select a Line")
+        legend1 = self.ax1.legend()
+        self.ax2.set_title("Base and Extended Polygons")
+        self.ax3.set_title("Probability Density Function (PDF)")
 
-    # Variables to store the current state
-    current_line = None
-    current_base_polygon = None
-    current_extended_polygons = None
-    current_centre_lines = None
-    current_coverages = None
-    current_distances = None
-    current_weight = None
-    current_distribution = None
+        # --- Make legend entries interactive ---
+        for legline, _ in zip(legend1.get_lines(), self.ax1.get_lines()):
+            legline.set_picker(True)  # Enable picking on the legend line
 
-    def on_line_click(event):
-        """Handle clicks on lines in ax1."""
-        nonlocal current_line, current_base_polygon, current_extended_polygons, current_centre_lines, current_coverages, current_distances, current_distribution, current_weight
+        def on_legend_pick(event:PickEvent):
+            legline = event.artist
+            # Find the corresponding original line
+            for lline, oline in zip(legend1.get_lines(), self.ax1.get_lines()):
+                if legline == lline:
+                    visible = not oline.get_visible()
+                    oline.set_visible(visible)
+                    # Optionally, fade legend entry if line is hidden
+                    legline.set_alpha(1.0 if visible else 0.2)
+                    self.fig.canvas.draw()
+                    break
 
-        # Find the clicked line
-        for i, (line, name) in enumerate(zip(lines, line_names)):
-            if event.artist.get_label() == name:
-                current_line = line
-                current_weight = weights[i]
-                current_distribution = distributions[i]
-                break
+        self.fig.canvas.mpl_connect('pick_event', on_legend_pick)
 
-        # Clear ax2 and ax3
-        ax2.clear()
-        ax3.clear()
+    def connect_events(self) -> None:
+        self.fig.canvas.mpl_connect('pick_event', self.on_line_click)
+        self.fig.canvas.mpl_connect('button_press_event', self.on_polygon_click)
 
-        # Create the base polygon and extended polygons for the selected line
-        current_base_polygon = create_polygon_from_line(current_line, current_distribution, current_weight)
-        current_extended_polygons, current_centre_lines = extend_polygon_in_directions(current_base_polygon, distance)
+    def on_line_click(self, event: Any) -> None:
+        """Handle line selection and update the visualization."""
+        idx: int | None = self._get_selected_line_index(event)
+        if idx is None:
+            return
+        self._set_current_line_state(idx)
+        if self.current_line is None or self.current_distribution is None or self.current_weight is None:
+            return
+        
+        self.ax2.clear()
+        self.ax3.clear()
+        self.current_base_polygon = create_polygon_from_line(self.current_line, self.current_distribution, self.current_weight)
+        self.current_extended_polygons, self.current_centre_lines = extend_polygon_in_directions(self.current_base_polygon, self.distance)
+        results = compare_polygons_with_objs(self.current_extended_polygons, self.objs_gdf_list)
+        covered = self._update_coverages_and_distances(results)
+        self._plot_polygons(covered)
+        self._plot_objects()
 
-        # Compare the extended polygons with the objects
-        results = compare_polygons_with_objs(current_extended_polygons, objs_gdf_list)
+    def _update_coverages_and_distances(
+        self, results: dict[str, list[list[bool]]]
+    ) -> list[bool]:
+        self.current_coverages = []
+        self.current_distances = []
+        covered: list[bool] = []
 
-        # Calculate coverages and distances
-        current_coverages = []
-        current_distances = []
-        covered = [False, False, False, False, False, False, False, False]
-        total_weighted_overlap = 0 
-        for i, polygon in enumerate(current_extended_polygons):
-            for objs_gdf_idx, objs_gdf in enumerate(objs_gdf_list):
+        for i, polygon in enumerate(self.current_extended_polygons):
+            covered.append(False)
+            for objs_gdf_idx, objs_gdf in enumerate(self.objs_gdf_list):
                 for j, obj in enumerate(objs_gdf.geometry):
-                    if results[f"Polygon_{i}"][objs_gdf_idx][j]:  # Check if overlap is True
+                    if results[f"Polygon_{i}"][objs_gdf_idx][j]:
                         intersection = polygon.intersection(obj)
                         coverage, distances = estimate_weighted_overlap(
-                            intersection, current_centre_lines[i], current_distribution, current_weight
+                            intersection, self.current_centre_lines[i], self.current_distribution, self.current_weight
                         )
-                        current_coverages.append(coverage)
-                        current_distances.append(distances)
-                        if coverage is not None:
-                            total_weighted_overlap += coverage  # <-- Accumulate
+                        self.current_coverages.append(coverage)
+                        self.current_distances.append(distances)
                         covered[i] = True
                     else:
-                        current_coverages.append(None)
-                        current_distances.append(None)
+                        self.current_coverages.append(0)
+                        self.current_distances.append(np.ndarray([]))
+        return covered
 
-        # Plot the base polygon and extended polygons in ax2
-        gpd.GeoSeries(current_base_polygon).plot(ax=ax2, color='blue', alpha=0.5)
-        print(covered)
-        for i, polygon in enumerate(current_extended_polygons):
-            if covered[i]:
-                mpl_polygon = MplPolygon(np.array(polygon.exterior.coords), closed=True, alpha=0.3)
-            else:
-                mpl_polygon = MplPolygon(np.array(polygon.exterior.coords), closed=True, alpha=0.1)
-            ax2.add_patch(mpl_polygon)
-        for objs_gdf in objs_gdf_list:
-            objs_gdf.plot(ax=ax2, color='red', alpha=0.7, label='Objects')
-        ax2.set_title("Drift directions")
-        fig.canvas.draw()
-        result_text.setText(f"Sum of weighted overlaps for this line: {total_weighted_overlap:.3e}")
+    def _plot_polygons(self, covered: list[bool]) -> None:
+        gpd.GeoSeries(self.current_base_polygon).plot(ax=self.ax2, color='blue', alpha=0.5)
+        assert(self.current_extended_polygons != None)
+        for i, polygon in enumerate(self.current_extended_polygons):
+            assert(isinstance(polygon, Polygon))
+            alpha = 0.3 if covered[i] else 0.1
+            mpl_polygon = MplPolygon(np.array(polygon.exterior.coords), closed=True, alpha=alpha)
+            self.ax2.add_patch(mpl_polygon)
 
-    def on_polygon_click(event):
-        """Handle clicks on extended polygons in ax2."""
-        if current_extended_polygons is None:
+    def _plot_objects(self) -> None:
+        for objs_gdf in self.objs_gdf_list:
+            objs_gdf.plot(ax=self.ax2, color='red', alpha=0.7, label='Objects')
+        self.ax2.set_title("Drift directions")
+        self.fig.canvas.draw()
+
+    def _get_selected_line_index(self, event: Any) -> int | None:
+        """Return the index of the selected line based on the event."""
+        for i, name in enumerate(self.line_names):
+            if event.artist.get_label() == name:
+                return i
+        return None
+
+    def _set_current_line_state(self, idx: int) -> None:
+        """Set the current line, weights, and distributions based on the selected index."""
+        self.current_line = self.lines[idx]
+        self.current_weight = self.weights[idx]
+        self.current_distribution = self.distributions[idx]
+        
+    def on_polygon_click(self, event: Any) -> None:
+        # Only respond to clicks in ax2
+        if event.inaxes != self.ax2:
+            print("wrong axes")
             return
-
-        # Check if the click is inside any extended polygon
-        for i, polygon in enumerate(current_extended_polygons):
+        if event.xdata is None or event.ydata is None:
+            print("No x/y")
+            return
+        if self.current_extended_polygons is None:
+            print("extended poly is None")
+            return
+        clicked = False
+        for i, polygon in enumerate(self.current_extended_polygons):
             if polygon.contains(Point(event.xdata, event.ydata)):
-                # Generate the PDF plot for the clicked polygon in ax3
-                if current_distances is not None:
-                    visualize(ax3, current_centre_lines[i], objs_gdf_list[0], distances=current_distances[i], distributions=current_distribution, weights=current_weight, weighted_overlap=current_coverages[i])
+                print(f"Polygon {i} was clicked!, {self.current_coverages[i]=}")
+                clicked = True
+                if self.current_distances is not None and self.current_distribution is not None and self.current_coverages is not None:
+                    if len(self.current_distances[i].shape) > 0:
+                        visualize(
+                            self.ax3,
+                            distances=self.current_distances[i],
+                            distributions=self.current_distribution,
+                            weights=self.current_weight,
+                            weighted_overlap=self.current_coverages[i],
+                            data=self.data
+                        )
                 else:
-                    ax3.clear()
+                    self.ax3.clear()
+                self.fig.canvas.draw()
                 break
-    
-    # Connect the click events to the handlers
-    fig.canvas.mpl_connect('pick_event', on_line_click)  # For selecting lines in ax1
-    fig.canvas.mpl_connect('button_press_event', on_polygon_click)  # For selecting polygons in ax2
+        if not clicked:
+            print("No polygon was clicked.")
 
-    # Simulate a pick event for the first line
-    class MockPickEvent:
-        def __init__(self, artist):
-            self.artist = artist
+    def simulate_initial_selection(self) -> None:
+        class MockPickEvent:
+            def __init__(self, artist: Any):
+                self.artist = artist
 
-    # Simulate a button press event for the first polygon
-    class MockButtonEvent:
-        def __init__(self, x, y):
-            self.xdata = x
-            self.ydata = y
+        class MockButtonEvent:
+            def __init__(self, x: float, y: float, inaxes: Axes | None):
+                self.xdata = x
+                self.ydata = y
+                self.inaxes = inaxes
 
-    # After plotting the lines in ax1, get the first line artist
-    line_artist = ax1.lines[-1]  # or find by label if needed
+        if self.ax1.lines:
+            line_artist = self.ax1.lines[-1]
+            self.on_line_click(MockPickEvent(line_artist))
+        if self.current_extended_polygons is not None:
+            centroid = self.current_extended_polygons[0].centroid
+            self.on_polygon_click(MockButtonEvent(centroid.x, centroid.y, self.ax2))
 
-    # Trigger on_line_click for the first line
-    on_line_click(MockPickEvent(line_artist))
+    @classmethod
+    def show_in_dialog(
+        cls,
+        dialog: ShowGeomRes,
+        lines: list[LineString],
+        line_names: list[str],
+        objs_gdf_list: list[gpd.GeoDataFrame],
+        distributions: list[list[Any]],
+        weights: list[list[float]],
+        data: dict[Any],
+        distance: float = 50_000
+    ) -> "DriftingOverlapVisualizer":
+        # Remove any existing canvas
+        layout = dialog.result_layout
+        for i in reversed(range(layout.count())):
+            widget = layout.itemAt(i).widget()
+            layout.removeWidget(widget)
+            widget.deleteLater()
 
-    # After on_line_click, you have current_extended_polygons available
-    # Get a point inside the first extended polygon (e.g., its centroid)
-    if current_extended_polygons:
-        centroid = current_extended_polygons[0].centroid
-        on_polygon_click(MockButtonEvent(centroid.x, centroid.y))
+        # Create figure and axes
+        fig = plt.figure(figsize=(12, 10))
+        gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1.2])
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1])
+        ax3 = fig.add_subplot(gs[1, :])
+        ax1.set_aspect('equal')
+        for ax in (ax1, ax2):
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+
+        # Add canvas to dialog
+        canvas = FigureCanvas(fig)
+        layout.addWidget(canvas)
+
+        # Use a label in the dialog for result text
+        # Create and run the visualizer
+        dov = cls(
+            fig, ax1, ax2, ax3, lines, line_names, objs_gdf_list,
+            distributions, weights, data, distance=distance
+        )
+        dov.canvas = canvas  # Optionally store for later
+        dov.run_visualization()
+        return dov
+
+def compute_total_overlap(
+    lines: list[LineString],
+    distributions: list[list[Any]],
+    weights: list[list[float]],
+    objs_gdf_list: list[gpd.GeoDataFrame],
+    distance: float
+) -> list[list[list[float]]]:
+    """
+    Compute the total weighted overlap between all legs (lines) and all objects.
+    Returns a list of list of list which corresponds legs[the 8 drift directions[distance avg side]]
+    """
+    total_overlap:list[list[list[float]]] = []
+    for idx, (line, dist, wgt) in enumerate(zip(lines, distributions, weights)):
+        total_overlap.append([])
+        base_polygon = create_polygon_from_line(line, dist, wgt)
+        extended_polygons, centre_lines = extend_polygon_in_directions(base_polygon, distance)
+        results = compare_polygons_with_objs(extended_polygons, objs_gdf_list)
+        for i, polygon in enumerate(extended_polygons):
+            total_overlap[idx].append([])
+            for objs_gdf_idx, objs_gdf in enumerate(objs_gdf_list):
+                for j, obj in enumerate(objs_gdf.geometry):
+                    if results[f"Polygon_{i}"][objs_gdf_idx][j]:
+                        intersection = polygon.intersection(obj)
+                        _, distances = estimate_weighted_overlap(intersection, centre_lines[i], dist, wgt)
+                        for k in range(len(distances)-1):
+                            total_overlap[idx][i].append((distances[k] + distances[k+1])/2)
+    return total_overlap
+
+def compute_min_distance_by_object(
+    lines: list[LineString],
+    distributions: list[list[Any]],
+    weights: list[list[float]],
+    objs_gdf_list: list[gpd.GeoDataFrame],
+    distance: float
+) -> list[list[list[float | None]]]:
+    """
+    For each leg and for each of the 8 drift directions, compute the minimum distance
+    from the leg's centre line to each object's intersection footprint, or None if no intersection.
+
+    Returns a 3-level list indexed as [leg_index][direction_index][object_index].
+    The value is the minimal distance (float) if intersecting, else None.
+    """
+    per_leg_dir_obj: list[list[list[float | None]]] = []
+    for idx, (line, dist, wgt) in enumerate(zip(lines, distributions, weights)):
+        # Prepare containers for this leg: 8 directions x N objects
+        n_objs = sum(len(gdf) for gdf in objs_gdf_list)
+        # Map flattened object index to (gdf_idx, row_idx)
+        obj_index_map: list[tuple[int, int]] = []
+        for gi, gdf in enumerate(objs_gdf_list):
+            for ri in range(len(gdf)):
+                obj_index_map.append((gi, ri))
+
+        per_dir: list[list[float | None]] = []
+
+        base_polygon = create_polygon_from_line(line, dist, wgt)
+        extended_polygons, centre_lines = extend_polygon_in_directions(base_polygon, distance)
+
+        # For each of the 8 directions
+        for d_idx, polygon in enumerate(extended_polygons):
+            # Initialize as None (no intersection)
+            min_dists: list[float | None] = [None] * n_objs
+            # Iterate per GeoDataFrame and each geometry
+            flat_idx = 0
+            for gi, objs_gdf in enumerate(objs_gdf_list):
+                for ri, obj in enumerate(objs_gdf.geometry):
+                    if polygon.intersects(obj):
+                        intersection = polygon.intersection(obj)
+                        try:
+                            _, distances = estimate_weighted_overlap(
+                                intersection, centre_lines[d_idx], dist, wgt
+                            )
+                            if distances.size > 0:
+                                md = float(np.min(distances))
+                                prev = min_dists[flat_idx]
+                                if prev is None or md < prev:
+                                    min_dists[flat_idx] = md
+                        except Exception:
+                            # Keep None on failure
+                            pass
+                    flat_idx += 1
+            per_dir.append(min_dists)
+        per_leg_dir_obj.append(per_dir)
+    return per_leg_dir_obj
+
+def compute_leg_overlap_fraction(
+    lines: list[LineString],
+    distributions: list[list[Any]],
+    weights: list[list[float]],
+    objs_gdf_list: list[gpd.GeoDataFrame]
+) -> list[list[float]]:
+    """
+    Estimate, per leg and per object, the fraction of the leg length that
+    overlaps laterally with each object based on the lateral spread (coverage_range).
+
+    Returns a 2-level list indexed as [leg_index][object_index] -> fraction in [0,1].
+    """
+    fractions: list[list[float]] = []
+    # Flatten objects index map to consistent ordering
+    obj_index_map: list[tuple[int, int]] = []
+    for gi, gdf in enumerate(objs_gdf_list):
+        for ri in range(len(gdf)):
+            obj_index_map.append((gi, ri))
+
+    for line, dists, wgts in zip(lines, distributions, weights):
+        # Compute weighted std used in coverage
+        w = np.array(wgts)
+        if w.sum() == 0:
+            # Avoid division by zero
+            w = np.ones_like(w)
+        w = w / w.sum()
+        # Combined std as in create_polygon_from_line
+        weighted_std = float(np.sqrt(sum(weight * (dist.std() ** 2) for dist, weight in zip(dists, w))))
+        coverage_range = 4.89 * weighted_std
+        # Symmetric strip around the original leg
+        strip = line.buffer(coverage_range)
+        leg_len = max(line.length, 1e-9)
+
+        per_obj_frac: list[float] = []
+        for gi, ri in obj_index_map:
+            obj = objs_gdf_list[gi].geometry.iloc[ri]
+            try:
+                inter = strip.intersection(obj)
+                if inter.is_empty:
+                    per_obj_frac.append(0.0)
+                else:
+                    overlap_geom = line.intersection(inter)
+                    frac = float(overlap_geom.length / leg_len) if overlap_geom.length > 0 else 0.0
+                    per_obj_frac.append(max(0.0, min(1.0, frac)))
+            except Exception:
+                per_obj_frac.append(0.0)
+        fractions.append(per_obj_frac)
+    return fractions
+
+def compute_dir_overlap_fraction_by_object(
+    lines: list[LineString],
+    distributions: list[list[Any]],
+    weights: list[list[float]],
+    objs_gdf_list: list[gpd.GeoDataFrame],
+    distance: float
+) -> list[list[list[float]]]:
+    """
+    For each leg and each of the 8 drift directions, estimate the fraction of the leg
+    length that overlaps with each object by expanding the direction polygon slightly
+    and measuring the portion of the original leg inside the intersection.
+
+    Returns a 3-level list indexed as [leg][direction][object] with fractions in [0,1].
+    """
+    per_leg_dir_obj: list[list[list[float]]] = []
+    # Flatten object indexing consistent with other helpers
+    obj_index_map: list[tuple[int, int]] = []
+    for gi, gdf in enumerate(objs_gdf_list):
+        for ri in range(len(gdf)):
+            obj_index_map.append((gi, ri))
+
+    for line, dists, wgts in zip(lines, distributions, weights):
+        # Weighted std for coverage expansion
+        w = np.array(wgts)
+        if w.sum() == 0:
+            w = np.ones_like(w)
+        w = w / w.sum()
+        weighted_std = float(np.sqrt(sum(weight * (dist.std() ** 2) for dist, weight in zip(dists, w))))
+        coverage_range = 4.89 * weighted_std
+
+        base_polygon = create_polygon_from_line(line, dists, w.tolist())
+        extended_polygons, centre_lines = extend_polygon_in_directions(base_polygon, distance)
+
+        per_dir: list[list[float]] = []
+        for d_idx, poly in enumerate(extended_polygons):
+            # Slightly expand polygon to form a corridor strip
+            expanded = poly.buffer(coverage_range)
+            # Use the directional centre line for overlap measurement
+            dir_line = centre_lines[d_idx]
+            dir_len = max(dir_line.length, 1e-9)
+            dir_fracs: list[float] = []
+            for gi, ri in obj_index_map:
+                obj = objs_gdf_list[gi].geometry.iloc[ri]
+                try:
+                    inter = expanded.intersection(obj)
+                    if inter.is_empty:
+                        dir_fracs.append(0.0)
+                    else:
+                        overlap_geom = dir_line.intersection(inter)
+                        frac = float(overlap_geom.length / dir_len) if overlap_geom.length > 0 else 0.0
+                        dir_fracs.append(max(0.0, min(1.0, frac)))
+                except Exception:
+                    dir_fracs.append(0.0)
+            per_dir.append(dir_fracs)
+        per_leg_dir_obj.append(per_dir)
+    return per_leg_dir_obj
+
+def compute_dir_leg_overlap_fraction_by_object(
+    lines: list[LineString],
+    distributions: list[list[Any]],
+    weights: list[list[float]],
+    objs_gdf_list: list[gpd.GeoDataFrame],
+    distance: float
+) -> list[list[list[float]]]:
+    """
+    For each leg and each of the 8 drift directions, estimate the fraction of the
+    ORIGINAL leg length that lies inside the intersection of the directional corridor
+    (expanded polygon) and each object. This respects the "fraction of the leg overlapping"
+    semantics but allows directional reach beyond the immediate strip around the leg.
+
+    Returns [leg][direction][object] fractions in [0,1].
+    """
+    per_leg_dir_obj: list[list[list[float]]] = []
+    obj_index_map: list[tuple[int, int]] = []
+    for gi, gdf in enumerate(objs_gdf_list):
+        for ri in range(len(gdf)):
+            obj_index_map.append((gi, ri))
+
+    for line, dists, wgts in zip(lines, distributions, weights):
+        w = np.array(wgts)
+        if w.sum() == 0:
+            w = np.ones_like(w)
+        w = w / w.sum()
+        weighted_std = float(np.sqrt(sum(weight * (dist.std() ** 2) for dist, weight in zip(dists, w))))
+        coverage_range = 4.89 * weighted_std
+
+        base_polygon = create_polygon_from_line(line, dists, w.tolist())
+        extended_polygons, _ = extend_polygon_in_directions(base_polygon, distance)
+
+        leg_len = max(line.length, 1e-9)
+        per_dir: list[list[float]] = []
+        for poly in extended_polygons:
+            expanded = poly.buffer(coverage_range)
+            dir_fracs: list[float] = []
+            for gi, ri in obj_index_map:
+                obj = objs_gdf_list[gi].geometry.iloc[ri]
+                try:
+                    inter = expanded.intersection(obj)
+                    if inter.is_empty:
+                        dir_fracs.append(0.0)
+                    else:
+                        overlap_geom = line.intersection(inter)
+                        frac = float(overlap_geom.length / leg_len) if overlap_geom.length > 0 else 0.0
+                        dir_fracs.append(max(0.0, min(1.0, frac)))
+                except Exception:
+                    dir_fracs.append(0.0)
+            per_dir.append(dir_fracs)
+        per_leg_dir_obj.append(per_dir)
+    return per_leg_dir_obj
+

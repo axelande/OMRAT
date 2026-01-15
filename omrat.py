@@ -22,15 +22,15 @@
  ***************************************************************************/
 """
 from typing import Any, Callable
-from PyQt5.QtWidgets import QToolBar, QMessageBox
+from functools import partial
 from pytest_qgis import QgsMapCanvas
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaType
-from qgis.PyQt.QtGui import QIcon, QAction
-from qgis.PyQt.QtWidgets import QMenuBar, QWidget
+from qgis.PyQt.QtGui import QIcon, QAction, QCloseEvent
+from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
 from qgis._core import QgsVectorDataProvider
-from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject, 
+from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject,
                        QgsField, QgsFields)
-from qgis.core import QgsPointXY, QgsMessageLog, Qgis
+from qgis.core import QgsPointXY, QgsMessageLog, Qgis, QgsApplication
 
 from qgis.gui import QgsMapToolPan, QgisInterface
 import gc
@@ -43,11 +43,14 @@ from resources import *
 
 # Import the code for the DockWidget
 from compute.run_calculations import Calculation
+from compute.calculation_task import CalculationTask
+from compute.iwrap_convertion import write_iwrap_xml
 from geometries.handle_qgis_iface import HandleQGISIface
 from omrat_utils.causation_factors import CausationFactors
 from omrat_utils.handle_ais import AIS
 from omrat_utils.handle_settings import DriftSettings
 from omrat_utils.handle_traffic import Traffic
+from omrat_utils.handle_distributions import Distributions
 from omrat_utils.storage import Storage
 from omrat_utils.handle_object import OObject
 from omrat_utils.handle_ship_cat import ShipCategories
@@ -91,11 +94,12 @@ class OMRAT:
 
             #print "** INITIALIZING OMRAT"
         self.pluginIsActive = False
+        self.been_closed = False
         self.segment_id = 0
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
         self.segment_data: dict[str, Any] = {}
         self.cur_route_id = 1
-        self.main_widget = OMRATMainWidget()
+        self.main_widget = OMRATMainWidget(plugin=self)
         self.qgis_geoms: HandleQGISIface = HandleQGISIface(self)
         self.drift_settings: DriftSettings = DriftSettings(self)
         self.causation_f: CausationFactors = CausationFactors(self)
@@ -103,6 +107,7 @@ class OMRAT:
         self.ship_cat = ShipCategories(self)
         self.ais = AIS(self)
         self.traffic = Traffic(self, self.main_widget)
+        self.distributions = Distributions(self)
         self.object = OObject(self)
         self.drift_values = self.drift_settings.drift_values
         self.causation_values = self.causation_f.data
@@ -211,7 +216,7 @@ class OMRAT:
         msg_box.setText(self.tr("A failure occurred:"))
         msg_box.setInformativeText(message)
         msg_box.exec()
-
+    
     def onClosePlugin(self):
         """Cleanup necessary items here when plugin main_widget is closed"""
 
@@ -221,8 +226,6 @@ class OMRAT:
             self.main_widget.pbStopRoute.clicked.disconnect()
             self.main_widget.pbLoadRoute.clicked.disconnect()
             self.main_widget.pbRemoveRoute.clicked.disconnect()
-            self.main_widget.pbUpdateAIS.clicked.disconnect()
-            self.main_widget.pbEditTrafficData.clicked.disconnect()
             self.main_widget.pbAddSimpleDepth.clicked.disconnect()
             self.main_widget.pbLoadDepth.clicked.disconnect()
             self.main_widget.pbRemoveDepth.clicked.disconnect()
@@ -234,7 +237,6 @@ class OMRAT:
         # Set plugin state to inactive
         self.pluginIsActive = False
         self.main_widget.is_active = False
-
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
@@ -264,23 +266,25 @@ class OMRAT:
             self.onClosePlugin()
         except Exception as e:
             print(f"Error during onClosePlugin: {e}")
-        # Disconnect cbTrafficSelectSeg signal
         try:
-            self.main_widget.cbTrafficSelectSeg.currentIndexChanged.disconnect()
-            print("Disconnected cbTrafficSelectSeg.currentIndexChanged")
+            self.main_widget.pbGetGebcoDephts.clicked.disconnect()
+            self.main_widget.PBUpdateDepthIntervals.clicked.disconnect()
+            self.main_widget.deleteLater()
         except TypeError:
-            print("No connection for cbTrafficSelectSeg.currentIndexChanged")
-        self.main_widget.deleteLater()
+            pass
         gc.collect()
         for folder in ['omrat_utils', 'compute', 'geometries.get_drifting_overlap', 'geometries.route', 
                        'geometries.handle_qgis_iface']:
             to_remove = [m for m in sys.modules if m.startswith(folder)]
             for m in to_remove:
-                print(m)
+                QgsMessageLog.logMessage(f"{m} unloaded", "OMRAT", Qgis.Info)
                 del sys.modules[m]
+        self.been_close = True
         QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.Info)
         
     def point4326_from_wkt(self, coord_str:str, crs:str) -> QgsPoint:
+        if '(' in coord_str:
+            coord_str = coord_str.split('(')[1].split(')')[0]
         coords_str: list[str] = coord_str.split(' ')
         coords: list[float] = [float(coord) for coord in coords_str]
         q_point = QgsPoint(coords[0], coords[1])
@@ -289,20 +293,15 @@ class OMRAT:
     def load_lines(self, data:dict[str, dict[str, Any]]) -> None:
         self.segment_id = 0
         crs = self.iface.mapCanvas().mapSettings().destinationCrs().authid()
-        for _, seg_data in data["segment_data"].items():
-            name = f"Segment {seg_data['Route Id']} - {seg_data['Segment Id']}"
+        for key, seg_data in data["segment_data"].items():
+            name = f"Segment {seg_data['Route_Id']} - {seg_data['Segment_Id']}"
             vl = QgsVectorLayer(f"LineString?crs=EPSG:4326", name, "memory")
             QgsProject.instance().addMapLayer(vl)
             
             self.segment_id += 1
             if not vl.isEditable():
                 vl.startEditing()
-            fields = QgsFields()
-            fields.append(QgsField("segmentId", QMetaType.Int))
-            fields.append(QgsField("routeId", QMetaType.Int))
-            fields.append(QgsField("startPoint", QMetaType.QString))
-            fields.append(QgsField("endPoint", QMetaType.QString))
-            fields.append(QgsField("label", QMetaType.QString)) 
+            fields = self.qgis_geoms.create_fields()
             provider: QgsVectorDataProvider | None = vl.dataProvider()
             if provider is None:
                 return
@@ -311,46 +310,66 @@ class OMRAT:
 
             # Create feature
             fet = QgsFeature(fields)
-            start = self.point4326_from_wkt(seg_data["Start Point"], crs)
-            end = self.point4326_from_wkt(seg_data["End Point"], crs)
+            start = self.point4326_from_wkt(seg_data["Start_Point"], crs)
+            end = self.point4326_from_wkt(seg_data["End_Point"], crs)
             fet.setGeometry(QgsLineString([start, end]))
-            fet.setAttributes([seg_data["Segment Id"], seg_data["Route Id"], seg_data["Start Point"], 
-                               seg_data["End Point"], f"LEG_{seg_data['Segment Id']}_{seg_data['Route Id']}"])
-            if self.qgis_geoms is not None:
-                self.qgis_geoms.style_layer(vl)
-                fet.setId(1)
-                provider.addFeature(fet)
-                self.qgis_geoms.label_layer(vl)
-                vl.updateExtents()
+            fet.setAttributes([seg_data["Segment_Id"], seg_data["Route_Id"], seg_data["Start_Point"], 
+                               seg_data["End_Point"], f"LEG_{seg_data['Segment_Id']}_{seg_data['Route_Id']}"])
+            self.qgis_geoms.style_layer(vl)
+            # Ensure feature id matches Segment_Id so geometry edits update correct row
+            try:
+                fid = int(str(seg_data["Segment_Id"]))
+            except Exception:
+                fid = self.segment_id
+            fet.setId(fid)
+            provider.addFeature(fet)
+            self.qgis_geoms.label_layer(vl)
+            vl.updateExtents()
             
             # Validate geometry
             if not fet.geometry().isGeosValid():
-                print(f"Invalid geometry for segment {seg_data['Segment Id']}")
+                print(f"Invalid geometry for segment {seg_data['Segment_Id']}")
                 continue
-
-            # Commit changes and refresh
-            vl.commitChanges()
+            # Keep layer editable and connect geometry change handler
+            edit_buffer = vl.editBuffer()
+            if edit_buffer is not None:
+                edit_buffer.geometryChanged.connect(partial(self.qgis_geoms.on_geometry_changed_wrapper, fid))
             vl.triggerRepaint()
+            self.qgis_geoms.vector_layers.append(vl)
 
+            # Preserve direction labels mapping for AIS
+            try:
+                self.qgis_geoms.leg_dirs[str(seg_data["Segment_Id"])]=list(seg_data.get("Dirs", []))
+            except Exception:
+                pass
+
+        # After loading, ensure subsequent new segments use a higher id
+        try:
+            max_id = max(int(str(v.get('Segment_Id'))) for v in data['segment_data'].values())
+        except Exception:
+            max_id = self.segment_id
+        self.qgis_geoms.segment_id = max_id
+        self.segment_id = max_id
         # Refresh map canvas
         self.iface.mapCanvas().refresh()    
 
     def reset_route_table(self) -> None:
-        if self.main_widget is not None:
-            self.main_widget.twRouteList.setColumnCount(5)
-            self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment Id', 'Route Id', 
-                                                                'Start Point', 'End Point', 'Width'])
-            self.main_widget.twRouteList.setColumnWidth(1, 75)
-            self.main_widget.twRouteList.setColumnWidth(2, 125)
-            self.main_widget.twRouteList.setColumnWidth(3, 125)
-            self.main_widget.twRouteList.setColumnWidth(4, 75)
-            self.main_widget.twRouteList.setRowCount(0)
+        self.main_widget.twRouteList.setColumnCount(7)
+        self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment_Id', 'Route_Id', 'Leg_name',
+                                                            'Start_Point', 'End_Point', 'Width', 'Update AIS'])
+        self.main_widget.twRouteList.setColumnWidth(0, 75)
+        self.main_widget.twRouteList.setColumnWidth(1, 75)
+        self.main_widget.twRouteList.setColumnWidth(2, 75)
+        self.main_widget.twRouteList.setColumnWidth(3, 125)
+        self.main_widget.twRouteList.setColumnWidth(4, 125)
+        self.main_widget.twRouteList.setColumnWidth(5, 75)
+        self.main_widget.twRouteList.setColumnWidth(6, 75)
+        self.main_widget.twRouteList.setRowCount(0)
     
-    def show_traffic_widget(self) -> None:
+    def run_traffic_module(self) -> None:
         self.traffic.traffic_data = self.traffic_data
         self.traffic.fill_cbTrafficSelectSeg()
         self.traffic.update_direction_select()
-        self.traffic.run()
         
     def save_work(self):
         store = Storage(self)
@@ -361,11 +380,145 @@ class OMRAT:
         store.load_all()
                
     def run_calculation(self):
+        """Run calculation in a background QgsTask for better UI responsiveness."""
+        gd = GatherData(self)
+        data = gd.get_all_for_save()
+        if self.calc is not None:
+            # Create and configure the background task
+            task = CalculationTask(
+                description='OMRAT: Computing probability holes',
+                calc_object=self.calc,
+                data=data
+            )
+
+            # Connect signals for progress updates and completion
+            task.progress_updated.connect(self._on_calculation_progress)
+            task.calculation_finished.connect(self._on_calculation_finished)
+            task.calculation_failed.connect(self._on_calculation_failed)
+
+            # Add task to QGIS task manager (runs in background)
+            QgsApplication.taskManager().addTask(task)
+
+            # Show message that calculation started
+            QgsMessageLog.logMessage(
+                'Calculation started in background. Check task manager for progress.',
+                'OMRAT',
+                Qgis.Info
+            )
+
+    def _on_calculation_progress(self, completed: int, total: int, message: str) -> None:
+        """Handle progress updates from the calculation task."""
+        # Log progress to QGIS message log
+        QgsMessageLog.logMessage(
+            f"Progress: {completed}/{total} - {message}",
+            'OMRAT',
+            Qgis.Info
+        )
+
+    def _on_calculation_finished(self, calc_object: Any) -> None:
+        """Handle successful completion of calculation."""
+        QgsMessageLog.logMessage(
+            'Calculation completed successfully!',
+            'OMRAT',
+            Qgis.Success
+        )
+        # The calc object already has the results, no need to do anything else
+        # The UI will be updated automatically since self.calc is the same object
+
+    def _on_calculation_failed(self, error_msg: str) -> None:
+        """Handle calculation failure."""
+        QgsMessageLog.logMessage(
+            f'Calculation failed: {error_msg}',
+            'OMRAT',
+            Qgis.Critical
+        )
+        QMessageBox.critical(
+            None,
+            'Calculation Failed',
+            f'The calculation failed with the following error:\n\n{error_msg}'
+        )
+
+    def choose_report_path(self) -> None:
+        """Open a Save File dialog and store path in LEReportPath."""
+        # Initial directory & filename from current field if present
+        initial = ''
+        try:
+            if hasattr(self.main_widget, 'LEReportPath') and self.main_widget.LEReportPath is not None:
+                initial = self.main_widget.LEReportPath.text() or ''
+        except Exception:
+            initial = ''
+        filename, _ = QFileDialog.getSaveFileName(
+            self.main_widget,
+            self.tr('Select report file'),
+            initial,
+            'Markdown Files (*.md);;All Files (*.*)'
+        )
+        if filename:
+            try:
+                self.main_widget.LEReportPath.setText(filename)
+            except Exception:
+                pass
+
+    def export_to_iwrap(self) -> None:
+        """Export current project data to IWRAP XML format."""
+        try:
+            # Get file path from user
+            filename, _ = QFileDialog.getSaveFileName(
+                self.main_widget,
+                self.tr('Export to IWRAP XML'),
+                '',
+                'IWRAP XML Files (*.xml);;All Files (*.*)'
+            )
+
+            if not filename:
+                return  # User cancelled
+
+            # Ensure .xml extension
+            if not filename.lower().endswith('.xml'):
+                filename += '.xml'
+
+            # Gather current project data
+            import tempfile
+            import json
+            gd = GatherData(self)
+            data = gd.get_all_for_save()
+
+            # Save to temporary JSON file
+            temp_json = tempfile.NamedTemporaryFile(mode='w', suffix='.omrat', delete=False, encoding='utf-8')
+            temp_json_path = temp_json.name
+            try:
+                json.dump(data, temp_json, indent=2)
+                temp_json.close()
+
+                # Convert to IWRAP XML
+                write_iwrap_xml(temp_json_path, filename)
+
+                # Show success message
+                QMessageBox.information(
+                    self.main_widget,
+                    self.tr('Export Successful'),
+                    self.tr(f'Project successfully exported to:\n{filename}')
+                )
+            finally:
+                # Clean up temporary file
+                try:
+                    if os.path.exists(temp_json_path):
+                        os.remove(temp_json_path)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            self.show_error_popup(
+                str(e),
+                'export_to_iwrap'
+            )
+
+    def show_drift_allision(self):
         gd = GatherData(self)
         data = gd.get_all_for_save()
         if self.calc is not None:
             self.calc.run_drift_visualization(data)
-        #self.calc.run_model()
+        
         
     def open_drift(self):
         self.drift_settings.run()
@@ -397,7 +550,6 @@ class OMRAT:
         
     def update_ais(self) -> None:
         self.ais.update_legs()
-        self.main_widget.cbTrafficSelectSeg.setEnabled(True)
     
     def remove_route(self)-> None:
         # To implement
@@ -411,7 +563,6 @@ class OMRAT:
 
     def run(self):
         """Run method that loads and starts the plugin"""
-
         if not self.pluginIsActive:
             self.pluginIsActive = True
             self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
@@ -419,7 +570,8 @@ class OMRAT:
             self.main_widget.pbRemoveRoute.clicked.connect(self.remove_route)
             self.main_widget.pbLoadRoute.clicked.connect(self.load_route)
             self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
-            self.main_widget.pbEditTrafficData.clicked.connect(self.show_traffic_widget)
+            self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
+            self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
             
             menubar = QMenuBar(self.main_widget)
             menubar.setMinimumSize(320,20)
@@ -432,18 +584,26 @@ class OMRAT:
             # mnuSub1 = viewMenu.addMenu('Sub-menu')
             fileMenu.addAction("Save", self.save_work)
             fileMenu.addAction("Load", self.load_work)
+            fileMenu.addSeparator()
+            fileMenu.addAction("Export to IWRAP XML", self.export_to_iwrap)
             SettingMenu.addAction("Drift settings", self.open_drift)
             SettingMenu.addAction("AIS connection settings", self.ais_settings)
             #self.main_widget.actionSave_project.clicked.connect(self.save_work)
             #self.main_widget.actionOpen_project.clicked.connect(self.load_work)
-            self.main_widget.cbTrafficSelectSeg.currentIndexChanged.connect(self.traffic.change_dist_segment)
             self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)
             self.main_widget.pbLoadDepth.clicked.connect(self.object.load_depths)
             self.main_widget.pbRemoveDepth.clicked.connect(self.object.remove_depth)
             self.main_widget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
             self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
             self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)
+            self.main_widget.pbViewDriftingAllision.clicked.connect(self.show_drift_allision)
             self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
-            
+            # Optional: report path chooser if present in UI
+            try:
+                if hasattr(self.main_widget, 'pbReportPath'):
+                    self.main_widget.pbReportPath.clicked.connect(self.choose_report_path)
+            except Exception:
+                pass
             self.reset_route_table()
+            self.run_traffic_module()
             self.main_widget.show()

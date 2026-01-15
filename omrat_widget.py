@@ -24,6 +24,7 @@
 
 import os
 
+
 from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import pyqtSignal
 
@@ -35,7 +36,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     closingPlugin = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, plugin=None, parent=None):
         """Constructor."""
         super(OMRATMainWidget, self).__init__(parent)
         # Set up the user interface from Designer.
@@ -44,24 +45,16 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # http://doc.qt.io/qt-5/designer-using-a-ui-file.html
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
+        self.plugin = plugin
         self.is_active = True
+        
+        # Route tab
+        self.twRouteList: QtWidgets.QTableWidget
         self.pbAddRoute: QtWidgets.QPushButton
         self.pbLoadRoute: QtWidgets.QPushButton
         self.pbRemoveRoute: QtWidgets.QPushButton
         self.pbStopRoute: QtWidgets.QPushButton
         self.pbUpdateAIS: QtWidgets.QPushButton
-        self.pbEditTrafficData: QtWidgets.QPushButton
-        self.pbAddSimpleDepth: QtWidgets.QPushButton
-        self.pbLoadDepth: QtWidgets.QPushButton
-        self.pbRemoveDepth: QtWidgets.QPushButton
-        self.pbAddSimpleObject: QtWidgets.QPushButton
-        self.pbLoadObject: QtWidgets.QPushButton
-        self.pbRemoveObject: QtWidgets.QPushButton
-        self.pbRunModel: QtWidgets.QPushButton
-        self.cbTrafficSelectSeg: QtWidgets.QComboBox
-        self.twRouteList: QtWidgets.QTableWidget
-        self.result_layout: QtWidgets.QLayout
-        self.result_values:QtWidgets.QLabel
         self.laDir1:QtWidgets.QLabel
         self.laDir2:QtWidgets.QLabel
         self.pbStopRoute: QtWidgets.QPushButton
@@ -92,9 +85,56 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.sbUniformP1:QtWidgets.QSpinBox
         self.sbUniformP2:QtWidgets.QSpinBox
         self.DistributionWidget: QtWidgets.QLayout
+
+        #Traffic
+        self.cbTrafficSelectSeg: QtWidgets.QComboBox     
+        self.cbSelectType: QtWidgets.QComboBox     
+        self.cbTrafficDirectionSelect: QtWidgets.QComboBox  
+        self.twTrafficData: QtWidgets.QTableWidget   
+        
+        # Depths
+        self.pbAddSimpleDepth: QtWidgets.QPushButton
+        self.pbLoadDepth: QtWidgets.QPushButton
+        self.pbRemoveDepth: QtWidgets.QPushButton
+        self.twDepthList: QtWidgets.QTableWidget
+        self.pbGetGebcoDephts: QtWidgets.QPushButton
+        self.PBUpdateDepthIntervals: QtWidgets.QPushButton
+        self.LEGebcoExtension : QtWidgets.QLineEdit
+        self.LEOpenTopoAPIKey: QtWidgets.QLineEdit
+        self.LEMaxDepth: QtWidgets.QLineEdit
+        self.SBDepthInterval:QtWidgets.QSpinBox
+        self.TWDepthIntervals: QtWidgets.QTableWidget
+        
+        # Objects
+        self.twObjectList: QtWidgets.QTableWidget   
+        self.pbAddSimpleObject: QtWidgets.QPushButton
+        self.pbLoadObject: QtWidgets.QPushButton
+        self.pbRemoveObject: QtWidgets.QPushButton
+        
+        # Run analysis
+        self.LEModelName: QtWidgets.QLineEdit
+        self.pbRunModel: QtWidgets.QPushButton
+        self.TWPreviousRuns: QtWidgets.QTableWidget
+        self.pbViewDriftingAllision: QtWidgets.QPushButton
+        self.LEPDriftAllision: QtWidgets.QLineEdit
+        self.pbViewPoweredAllision: QtWidgets.QPushButton
+        self.LEPPoweredAllision: QtWidgets.QLineEdit
+        self.pbViewDriftingGrounding: QtWidgets.QPushButton
+        self.LEPDriftingGrounding: QtWidgets.QLineEdit
+        self.pbViewPoweredGrounding: QtWidgets.QPushButton
+        self.LEPPoweredGrounding: QtWidgets.QLineEdit
+        self.pbViewOvertakingCollision: QtWidgets.QPushButton
+        self.LEPOvertakingCollision: QtWidgets.QLineEdit
+        self.pbViewHeadOnCollision: QtWidgets.QPushButton
+        self.LEPHeadOnCollision: QtWidgets.QLineEdit
+        self.pbViewCrossingCollision: QtWidgets.QPushButton
+        self.LEPCrossingCollision: QtWidgets.QLineEdit
+        self.pbViewMergingCollision: QtWidgets.QPushButton
+        self.LEPMergingCollision: QtWidgets.QLineEdit
         
 
 
     def closeEvent(self, event):
         self.closingPlugin.emit()
+        self.plugin.onClosePlugin()
         event.accept()
