@@ -131,8 +131,12 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.LEPCrossingCollision: QtWidgets.QLineEdit
         self.pbViewMergingCollision: QtWidgets.QPushButton
         self.LEPMergingCollision: QtWidgets.QLineEdit
-        
 
+        # Analyse drift tab
+        self.leDepthThreshold: QtWidgets.QLineEdit
+        self.leHeightThreshold: QtWidgets.QLineEdit
+        self.pbRunDriftAnalysis: QtWidgets.QPushButton
+        self.label_drift_status: QtWidgets.QLabel
 
     def closeEvent(self, event):
         self.closingPlugin.emit()

@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING
 from qgis.PyQt.QtCore import QSettings, QVariant
 from qgis.PyQt.QtWidgets import QFileDialog, QTableWidgetItem, QTableWidget
 from qgis._core import QgsVectorDataProvider
-from qgis.core import QgsProject, QgsVectorLayer,  QgsFeature, QgsGeometry, QgsFeatureRequest, QgsField
+from qgis.core import (QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsFeatureRequest, QgsField,
+                       QgsFillSymbol, QgsSingleSymbolRenderer)
+from qgis.PyQt.QtGui import QColor
 import requests
 import processing
 import tempfile
@@ -47,6 +49,53 @@ def expand_bbox(min_lat: float, max_lat: float, min_lon: float, max_lon: float, 
     lon_ext = lon_range * extension_percent / 100.0
     return min_lat - lat_ext, max_lat + lat_ext, min_lon - lon_ext, max_lon + lon_ext
 
+def get_depth_color(depth: float, max_depth: float = 50.0) -> QColor:
+    """Get a blue color for depth: 0m = dark blue (danger), max_depth = light/white (safe).
+
+    Args:
+        depth: The depth value in meters (shallower = darker blue = more danger)
+        max_depth: The depth at which color is lightest (default 50m)
+
+    Returns:
+        QColor ranging from dark blue (shallow/danger) to light blue/white (deep/safe)
+    """
+    # Clamp depth to 0-max_depth range
+    depth = max(0, min(depth, max_depth))
+    # Calculate ratio (0 = shallow/dark, 1 = deep/light)
+    ratio = depth / max_depth
+
+    # Interpolate from dark blue (0, 0, 139) to light blue/white (200, 220, 255)
+    # Shallow (0m) = dark blue (danger), Deep (max_depth) = light blue (safe)
+    r = int(0 + 200 * ratio)      # 0 -> 200
+    g = int(0 + 220 * ratio)      # 0 -> 220
+    b = int(139 + (255 - 139) * ratio)  # 139 -> 255
+
+    return QColor(r, g, b)
+
+
+def style_depth_layer(layer: QgsVectorLayer, depth: float, max_depth: float = 50.0) -> None:
+    """Apply blue gradient styling to a depth layer.
+
+    Args:
+        layer: The vector layer to style
+        depth: The depth value for this layer
+        max_depth: Maximum depth for color scaling (default 50m)
+    """
+    color = get_depth_color(depth, max_depth)
+
+    # Create fill symbol with the calculated color
+    symbol = QgsFillSymbol.createSimple({
+        'color': color.name(),
+        'outline_color': '#000080',  # Dark blue outline
+        'outline_width': '0.26'
+    })
+
+    # Apply renderer to layer
+    renderer = QgsSingleSymbolRenderer(symbol)
+    layer.setRenderer(renderer)
+    layer.triggerRepaint()
+
+
 def build_gebco_url(min_lat: float, max_lat: float, min_lon: float, max_lon: float, api_key: str) -> str:
     return (
         f"https://portal.opentopography.org/API/globaldem?"
@@ -82,13 +131,21 @@ class OObject:
         self.depth_buffer_edits = []
         self.object_buffer_edits = []
         
-    def add_area(self, name='area') -> QgsVectorLayer:
+    def add_area(self, name: str = 'area', value_field: str | None = None) -> None:
         if self.area is not None:
             try:
                 self.area.featureAdded.disconnect(self.on_feature_added)
             except Exception:
                 pass
         self.area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
+
+        # Add value field (Depth or Height) if specified
+        if value_field:
+            pr = self.area.dataProvider()
+            if pr is not None:
+                pr.addAttributes([QgsField(value_field, QVariant.Double)])  # type: ignore[arg-type]
+                self.area.updateFields()
+
         self.area.startEditing()
         self.area.featureAdded.connect(self.on_feature_added)
         self.p.iface.actionAddFeature().trigger()
@@ -106,11 +163,25 @@ class OObject:
         if self.area_type == 'object':
             self.add_simple_object()
     
-    def load_area(self, name:str, wkt:str, row: int | None = None):
+    def load_area(self, name:str, wkt:str, row: int | None = None, value: str | None = None, value_field: str | None = None):
         area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
         pr: QgsVectorDataProvider | None = area.dataProvider()
-        fet = QgsFeature()
+
+        # Add value field (Depth or Height) if specified
+        if pr is not None and value_field:
+            pr.addAttributes([QgsField(value_field, QVariant.Double)])  # type: ignore[arg-type]
+            area.updateFields()
+
+        fet = QgsFeature(area.fields())
         fet.setGeometry(QgsGeometry.fromWkt(wkt))
+
+        # Set the value attribute if both field and value are provided
+        if value_field and value is not None:
+            try:
+                fet.setAttribute(value_field, float(value.split('-')[-1]) if '-' in value else float(value))
+            except (ValueError, AttributeError):
+                pass
+
         if pr is not None:
             pr.addFeature(fet)
         QgsProject.instance().addMapLayer(area)
@@ -136,6 +207,14 @@ class OObject:
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         if self.area_type == 'depth':
             self.loaded_depth_areas.append(area)
+            # Apply blue gradient styling for depth layers
+            if value is not None:
+                try:
+                    # Parse depth value (handle interval format like "0-10")
+                    depth_val = float(value.split('-')[-1]) if '-' in str(value) else float(value)
+                    style_depth_layer(area, depth_val)
+                except (ValueError, AttributeError):
+                    pass
         elif self.area_type == 'object':
             self.loaded_object_areas.append(area)
 
@@ -192,8 +271,9 @@ class OObject:
         api_key = self.p.main_widget.LEOpenTopoAPIKey.text()
         url = build_gebco_url(min_lat, max_lat, min_lon, max_lon, api_key)
 
-        # Download geotiff (implement your download logic here)
-        geotiff_path = download_geotiff(url, save_path='E:/temp/geo_test.tif')
+        # Download geotiff to local temp folder
+        temp_dir = tempfile.gettempdir()
+        geotiff_path = download_geotiff(url, save_path=os.path.join(temp_dir, 'gebco_download.tif'))
         intervals = [float(self.p.main_widget.TWDepthIntervals.item(i, 0).text()) for i in range(self.p.main_widget.TWDepthIntervals.rowCount())]
         self.vectorize_and_add_geotiff(geotiff_path, intervals)
         
@@ -242,7 +322,8 @@ class OObject:
                 merged_geom = merged_geom.combine(feat.geometry())
 
             # Create a new memory layer for the merged polygon
-            mem_layer = QgsVectorLayer("Polygon?crs=epsg:4326", f"Depth_{interval}_{intervals[idx+1]}", "memory")
+            # Name shows the depth range (e.g., "Depth - 0 to 10m")
+            mem_layer = QgsVectorLayer("Polygon?crs=epsg:4326", f"Depth - {interval} to {intervals[idx+1]}m", "memory")
             pr = mem_layer.dataProvider()
             pr.addAttributes([QgsField("interval", QVariant.Double)])
             mem_layer.updateFields()
@@ -256,6 +337,10 @@ class OObject:
 
             QgsProject.instance().addMapLayer(mem_layer)
             self.loaded_depth_areas.append(mem_layer)
+
+            # Apply blue gradient styling based on the upper depth bound
+            max_interval = max(intervals) if intervals else 50.0
+            style_depth_layer(mem_layer, intervals[idx + 1], max_depth=max_interval)
 
             # Update the table with WKT
             row = self.p.main_widget.twDepthList.rowCount()
@@ -274,19 +359,29 @@ class OObject:
             self.loaded_depth_areas.append(self.area)
         else:
             self.deph_id += 1
-            self.add_area(f'Depth_{self.deph_id}')
+            # Create layer with Depth field - will be renamed after user enters depth value
+            self.add_area(f'Depth - {self.deph_id} (enter depth)', value_field='Depth')
             self.p.main_widget.pbAddSimpleDepth.setText('Save')
-            
+
     def store_depth(self):
+        # Default depth value - user can edit in table
+        default_depth = 10.0
+
         self.p.main_widget.twDepthList.setRowCount(self.deph_id)
         item1 = QTableWidgetItem(f'{self.deph_id}')
-        item2 = QTableWidgetItem(f'10')
+        item2 = QTableWidgetItem(f'{default_depth}')
         polies = self.area.getFeatures()
         for poly in polies:
             item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
             self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 0, item1)
             self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 1, item2)
             self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 2, item3)
+
+        # Rename the layer to show the depth value and apply styling
+        if self.area is not None:
+            self.area.setName(f'Depth - {default_depth}m')
+            style_depth_layer(self.area, default_depth)
+
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
         
@@ -298,19 +393,28 @@ class OObject:
             self.loaded_object_areas.append(self.area)
         else:
             self.object_id += 1
-            self.add_area(f'Object_{self.object_id}')
+            # Create layer with Height field
+            self.add_area(f'Structure - {self.object_id} (enter height)', value_field='Height')
             self.p.main_widget.pbAddSimpleObject.setText('Save')
-            
+
     def store_object(self):
+        # Default height value - user can edit in table
+        default_height = 10.0
+
         self.p.main_widget.twObjectList.setRowCount(self.object_id)
         item1 = QTableWidgetItem(f'{self.object_id}')
-        item2 = QTableWidgetItem(f'10')
+        item2 = QTableWidgetItem(f'{default_height}')
         polies = self.area.getFeatures()
         for poly in polies:
             item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
             self.p.main_widget.twObjectList.setItem(self.object_id - 1, 0, item1)
             self.p.main_widget.twObjectList.setItem(self.object_id - 1, 1, item2)
             self.p.main_widget.twObjectList.setItem(self.object_id - 1, 2, item3)
+
+        # Rename the layer to show the height value
+        if self.area is not None:
+            self.area.setName(f'Structure - {default_height}m')
+
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
 

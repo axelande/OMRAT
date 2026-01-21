@@ -227,10 +227,14 @@ class GatherData:
         # Ensure layers get tracked for later unload
         self.p.object.area_type = 'depth'
         for i, dep in enumerate(depth_rows):
-            self.p.object.load_area('Depth - ' + dep[0], dep[2], row=i)
+            # dep = [id, depth_value, polygon] - use depth_value (dep[1]) for layer name
+            depth_value = dep[1] if len(dep) > 1 else dep[0]
+            self.p.object.load_area(f'Depth - {depth_value}m', dep[2], row=i, value=depth_value, value_field='Depth')
         self.p.object.area_type = 'object'
         for j, obj in enumerate(object_rows):
-            self.p.object.load_area('Structure - ' + obj[0], obj[2], row=j)
+            # obj = [id, height_value, polygon] - use height_value (obj[1]) for layer name
+            height_value = obj[1] if len(obj) > 1 else obj[0]
+            self.p.object.load_area(f'Structure - {height_value}m', obj[2], row=j, value=height_value, value_field='Height')
             
     def populate_cbTrafficSelectSeg(self):
         """Sets the segment names in cbTrafficSelectSeg"""

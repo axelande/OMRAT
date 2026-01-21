@@ -56,6 +56,8 @@ from omrat_utils.handle_object import OObject
 from omrat_utils.handle_ship_cat import ShipCategories
 from omrat_utils.gather_data import GatherData
 from omrat_widget import OMRATMainWidget
+from geometries.drift_corridor_v2 import DriftCorridorGenerator
+from geometries.drift_corridor_task_v2 import DriftCorridorTask
 
 
 class OMRAT:
@@ -111,6 +113,7 @@ class OMRAT:
         self.object = OObject(self)
         self.drift_values = self.drift_settings.drift_values
         self.causation_values = self.causation_f.data
+        self.drift_corridor_layers: list[QgsVectorLayer] = []  # Track corridor layers for cleanup
 
     def tr(self, message:str):
         """Get the translation for a string using Qt translation API.
@@ -207,8 +210,22 @@ class OMRAT:
             callback=self.run,
             parent=self.iface.mainWindow())
 
+        # Connect to project cleared signal to clean up drift corridors
+        QgsProject.instance().cleared.connect(self._on_project_cleared)
+
     #--------------------------------------------------------------------------
-    
+
+    def _on_project_cleared(self):
+        """Called when the QGIS project is cleared/reloaded.
+
+        Clears drift corridor layers and any cached data.
+        """
+        QgsMessageLog.logMessage("Project cleared - cleaning up drift corridors", "OMRAT", Qgis.Info)
+        self.drift_corridor_layers.clear()
+        # Reset any task reference
+        if hasattr(self, '_drift_task'):
+            self._drift_task = None
+
     def show_error_popup(self, message: str, function_name:str) -> None:
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Critical)
@@ -240,15 +257,31 @@ class OMRAT:
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
+        # Disconnect project cleared signal
+        try:
+            QgsProject.instance().cleared.disconnect(self._on_project_cleared)
+        except Exception:
+            pass
+
         # Call the unload method of Traffic
         self.traffic.unload()
 
         # Call the unload method of AIS
         self.ais.unload()
-        
+
         # Unload geometries
         self.object.unload()
         self.qgis_geoms.unload()
+
+        # Remove drift corridor layers
+        for layer in self.drift_corridor_layers:
+            try:
+                project = QgsProject.instance()
+                if project is not None and layer is not None:
+                    project.removeMapLayer(layer.id())
+            except Exception:
+                pass
+        self.drift_corridor_layers.clear()
 
         # Remove actions from menu and toolbar
         for action in self.actions:
@@ -273,8 +306,8 @@ class OMRAT:
         except TypeError:
             pass
         gc.collect()
-        for folder in ['omrat_utils', 'compute', 'geometries.get_drifting_overlap', 'geometries.route', 
-                       'geometries.handle_qgis_iface']:
+        # Remove all plugin modules from sys.modules to ensure fresh code on reload
+        for folder in ['omrat_utils', 'compute', 'geometries']:
             to_remove = [m for m in sys.modules if m.startswith(folder)]
             for m in to_remove:
                 QgsMessageLog.logMessage(f"{m} unloaded", "OMRAT", Qgis.Info)
@@ -558,7 +591,189 @@ class OMRAT:
     def load_route(self)-> None:
         # To implement
         pass
-    
+
+    def run_drift_analysis(self) -> None:
+        """Run drift corridor analysis as a background task."""
+        try:
+            # Remove old corridor layers first to avoid confusion
+            for layer in self.drift_corridor_layers:
+                try:
+                    project = QgsProject.instance()
+                    if project is not None and layer is not None:
+                        project.removeMapLayer(layer.id())
+                except Exception:
+                    pass
+            self.drift_corridor_layers.clear()
+
+            # Get thresholds from UI
+            depth_threshold = float(self.main_widget.leDepthThreshold.text() or 10)
+            height_threshold = float(self.main_widget.leHeightThreshold.text() or 10)
+
+            self.main_widget.label_drift_status.setText("Collecting data...")
+            self.main_widget.pbRunDriftAnalysis.setEnabled(False)
+
+            # Create generator and pre-collect data in main thread
+            # (Qt widgets can only be accessed from the main thread)
+            generator = DriftCorridorGenerator(self)
+            generator.precollect_data(depth_threshold, height_threshold)
+
+            self.main_widget.label_drift_status.setText("Starting corridor generation...")
+
+            # Create task
+            task = DriftCorridorTask(
+                "Generating Drift Corridors",
+                generator,
+                depth_threshold,
+                height_threshold
+            )
+
+            # Connect signals for progress and completion
+            task.progress_updated.connect(self._on_drift_progress)
+            task.corridors_generated.connect(self._on_drift_complete)
+            task.generation_failed.connect(self._on_drift_failed)
+
+            # Store task reference to prevent garbage collection
+            self._drift_task = task
+
+            # Add task to QGIS task manager (runs in background)
+            task_manager = QgsApplication.taskManager()
+            if task_manager is not None:
+                task_manager.addTask(task)
+            else:
+                # Fallback: run synchronously if task manager unavailable
+                self.main_widget.label_drift_status.setText("Running (no task manager)...")
+                corridors = generator.generate_corridors(depth_threshold, height_threshold)
+                self._on_drift_complete(corridors)
+
+        except Exception as e:
+            self.main_widget.label_drift_status.setText(f"Error: {str(e)}")
+            self.main_widget.pbRunDriftAnalysis.setEnabled(True)
+            QgsMessageLog.logMessage(f"Drift analysis failed: {e}", "OMRAT", Qgis.Critical)
+
+    def _on_drift_progress(self, completed: int, total: int, message: str) -> None:
+        """Handle progress updates from drift corridor task."""
+        if total > 0:
+            pct = int((completed / total) * 100)
+            self.main_widget.label_drift_status.setText(f"{message} ({pct}%)")
+        else:
+            self.main_widget.label_drift_status.setText(message)
+
+    def _on_drift_complete(self, corridors: list) -> None:
+        """Handle successful completion of drift corridor generation."""
+        self.main_widget.pbRunDriftAnalysis.setEnabled(True)
+
+        if not corridors:
+            self.main_widget.label_drift_status.setText("No corridors generated. Add routes first.")
+            return
+
+        # Create QGIS layers for corridors (runs in main thread)
+        self._create_corridor_layers(corridors)
+
+        num_legs = len(set(c['leg_index'] for c in corridors))
+        self.main_widget.label_drift_status.setText(
+            f"Generated {len(corridors)} corridors for {num_legs} legs"
+        )
+
+    def _on_drift_failed(self, error_msg: str) -> None:
+        """Handle drift corridor generation failure."""
+        self.main_widget.pbRunDriftAnalysis.setEnabled(True)
+        self.main_widget.label_drift_status.setText(f"Error: {error_msg}")
+        QgsMessageLog.logMessage(f"Drift analysis failed: {error_msg}", "OMRAT", Qgis.Critical)
+
+    def _create_corridor_layers(self, corridors: list) -> None:
+        """Create QGIS vector layers from corridor polygons - one layer per leg."""
+        # Group corridors by leg_index
+        legs = {}
+        for corridor in corridors:
+            leg_idx = corridor['leg_index']
+            if leg_idx not in legs:
+                legs[leg_idx] = []
+            legs[leg_idx].append(corridor)
+
+        # Create a layer for each leg
+        for leg_idx, leg_corridors in legs.items():
+            layer_name = f"Drift Corridors - Leg {leg_idx + 1}"
+
+            # Create memory layer
+            vl = QgsVectorLayer("Polygon?crs=EPSG:4326", layer_name, "memory")
+
+            # Add fields
+            fields = QgsFields()
+            fields.append(QgsField("direction", QMetaType.QString))
+            fields.append(QgsField("angle", QMetaType.Int))
+            fields.append(QgsField("leg_index", QMetaType.Int))
+
+            provider = vl.dataProvider()
+            if provider is None:
+                continue
+            provider.addAttributes(fields.toList())
+            vl.updateFields()
+
+            # Add features for all 8 directions
+            for corridor in leg_corridors:
+                poly = corridor['polygon']
+                dir_name = corridor['direction']
+                if poly.is_empty:
+                    continue
+
+                # Handle MultiPolygon
+                if poly.geom_type == 'MultiPolygon':
+                    for geom in poly.geoms:
+                        feat = QgsFeature(fields)
+                        feat.setGeometry(QgsGeometry.fromWkt(geom.wkt))
+                        feat.setAttributes([dir_name, corridor['angle'], corridor['leg_index']])
+                        provider.addFeature(feat)
+                else:
+                    feat = QgsFeature(fields)
+                    feat.setGeometry(QgsGeometry.fromWkt(poly.wkt))
+                    feat.setAttributes([dir_name, corridor['angle'], corridor['leg_index']])
+                    provider.addFeature(feat)
+
+            vl.updateExtents()
+
+            # Style the layer with categorized renderer by direction
+            self._style_corridor_layer_categorized(vl)
+
+            # Track layer for cleanup
+            self.drift_corridor_layers.append(vl)
+
+            # Add to project
+            project = QgsProject.instance()
+            if project is not None:
+                project.addMapLayer(vl)
+
+    def _style_corridor_layer_categorized(self, layer: QgsVectorLayer) -> None:
+        """Apply categorized styling to corridor layer based on direction field."""
+        from qgis.core import QgsFillSymbol, QgsRendererCategory, QgsCategorizedSymbolRenderer
+
+        # Color mapping for directions
+        colors = {
+            'N': '#e41a1c',   # Red
+            'NE': '#377eb8',  # Blue
+            'E': '#4daf4a',   # Green
+            'SE': '#984ea3',  # Purple
+            'S': '#ff7f00',   # Orange
+            'SW': '#ffff33',  # Yellow
+            'W': '#a65628',   # Brown
+            'NW': '#f781bf',  # Pink
+        }
+
+        categories = []
+        for direction, color in colors.items():
+            symbol = QgsFillSymbol.createSimple({
+                'color': color,
+                'outline_color': color,
+                'outline_width': '0.5',
+            })
+            if symbol:
+                symbol.setOpacity(0.3)
+            category = QgsRendererCategory(direction, symbol, direction)
+            categories.append(category)
+
+        renderer = QgsCategorizedSymbolRenderer('direction', categories)
+        layer.setRenderer(renderer)
+        layer.triggerRepaint()
+
     #--------------------------------------------------------------------------
 
     def run(self):
@@ -602,6 +817,12 @@ class OMRAT:
             try:
                 if hasattr(self.main_widget, 'pbReportPath'):
                     self.main_widget.pbReportPath.clicked.connect(self.choose_report_path)
+            except Exception:
+                pass
+            # Connect drift analysis button
+            try:
+                if hasattr(self.main_widget, 'pbRunDriftAnalysis'):
+                    self.main_widget.pbRunDriftAnalysis.clicked.connect(self.run_drift_analysis)
             except Exception:
                 pass
             self.reset_route_table()
