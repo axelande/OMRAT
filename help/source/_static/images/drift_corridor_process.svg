@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 950" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
+    </marker>
+  </defs>
+
+  <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#1a1a2e">Drift Corridor Generation Process</text>
+
+  <!-- Step 1: Base Surface -->
+  <rect x="50" y="55" width="380" height="160" rx="8" fill="#e3f2fd" stroke="#1976D2" stroke-width="2"/>
+  <text x="240" y="78" text-anchor="middle" font-size="14" font-weight="bold" fill="#0D47A1">Step 1: Create Base Surface</text>
+
+  <!-- Base surface diagram -->
+  <line x1="100" y1="130" x2="300" y2="130" stroke="#1976D2" stroke-width="3"/>
+  <text x="200" y="125" text-anchor="middle" font-size="10" fill="#333">Shipping Leg</text>
+  <!-- Perpendicular arrows -->
+  <line x1="100" y1="100" x2="100" y2="160" stroke="#90CAF9" stroke-width="1" stroke-dasharray="4"/>
+  <line x1="200" y1="100" x2="200" y2="160" stroke="#90CAF9" stroke-width="1" stroke-dasharray="4"/>
+  <line x1="300" y1="100" x2="300" y2="160" stroke="#90CAF9" stroke-width="1" stroke-dasharray="4"/>
+  <rect x="90" y="100" width="220" height="60" rx="0" fill="#BBDEFB" fill-opacity="0.4" stroke="#64B5F6" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="200" y="180" text-anchor="middle" font-size="10" fill="#333">Width = 2 x Z_0.995 x sigma</text>
+  <text x="200" y="200" text-anchor="middle" font-size="10" fill="#333">(99% lateral distribution coverage)</text>
+
+  <!-- Step 2: Project in drift direction -->
+  <rect x="470" y="55" width="400" height="160" rx="8" fill="#e8f5e9" stroke="#4CAF50" stroke-width="2"/>
+  <text x="670" y="78" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E7D32">Step 2: Project Along Drift</text>
+
+  <!-- Projected corridor diagram -->
+  <rect x="510" y="100" width="120" height="50" rx="0" fill="#BBDEFB" fill-opacity="0.4" stroke="#64B5F6" stroke-width="1.5"/>
+  <text x="570" y="130" text-anchor="middle" font-size="9" fill="#333">Base</text>
+  <!-- Arrow showing drift direction -->
+  <line x1="630" y1="125" x2="710" y2="105" stroke="#4CAF50" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="680" y="95" text-anchor="middle" font-size="9" fill="#2E7D32">Drift dir</text>
+  <rect x="700" y="80" width="120" height="50" rx="0" fill="#C8E6C9" fill-opacity="0.4" stroke="#81C784" stroke-width="1.5"/>
+  <text x="760" y="110" text-anchor="middle" font-size="9" fill="#333">Projected</text>
+  <!-- Combined corridor outline -->
+  <polygon points="510,100 510,150 630,150 820,130 820,80 700,80" fill="#E8F5E9" fill-opacity="0.3" stroke="#4CAF50" stroke-width="1.5" stroke-dasharray="4"/>
+  <text x="670" y="175" text-anchor="middle" font-size="10" fill="#333">Distance = drift_speed x repair_time</text>
+  <text x="670" y="195" text-anchor="middle" font-size="10" fill="#333">(from lognormal repair time CDF)</text>
+
+  <!-- Step 3: Obstacle Shadow -->
+  <rect x="50" y="250" width="380" height="180" rx="8" fill="#fff3e0" stroke="#FF9800" stroke-width="2"/>
+  <text x="240" y="273" text-anchor="middle" font-size="14" font-weight="bold" fill="#E65100">Step 3: Obstacle Shadow (Blocking)</text>
+
+  <!-- Shadow diagram -->
+  <rect x="150" y="300" width="60" height="40" fill="#F44336" fill-opacity="0.6" stroke="#D32F2F" stroke-width="2"/>
+  <text x="180" y="325" text-anchor="middle" font-size="9" fill="white" font-weight="bold">Obstacle</text>
+  <!-- Shadow behind obstacle -->
+  <polygon points="150,340 210,340 280,410 80,410" fill="#FFCDD2" fill-opacity="0.5" stroke="#E57373" stroke-width="1" stroke-dasharray="4"/>
+  <text x="180" y="385" text-anchor="middle" font-size="9" fill="#C62828">Shadow zone</text>
+  <text x="180" y="400" text-anchor="middle" font-size="9" fill="#C62828">(unreachable)</text>
+  <!-- Drift direction arrow -->
+  <line x1="300" y1="290" x2="300" y2="340" stroke="#FF9800" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="340" y="320" text-anchor="middle" font-size="9" fill="#E65100">Drift</text>
+  <text x="240" y="420" text-anchor="middle" font-size="10" fill="#333">Quad-based sweep preserves</text>
+  <text x="240" y="420" text-anchor="middle" font-size="10" fill="#333">exact obstacle contour</text>
+
+  <!-- Step 4: Clip Corridor -->
+  <rect x="470" y="250" width="400" height="180" rx="8" fill="#fce4ec" stroke="#E91E63" stroke-width="2"/>
+  <text x="670" y="273" text-anchor="middle" font-size="14" font-weight="bold" fill="#AD1457">Step 4: Clip at Obstacles</text>
+
+  <!-- Clip diagram -->
+  <polygon points="520,300 520,380 620,380 750,360 750,290 640,290" fill="#E8F5E9" fill-opacity="0.4" stroke="#4CAF50" stroke-width="1.5"/>
+  <text x="630" y="340" text-anchor="middle" font-size="9" fill="#2E7D32">Original corridor</text>
+  <rect x="600" y="310" width="50" height="30" fill="#F44336" fill-opacity="0.6" stroke="#D32F2F" stroke-width="2"/>
+  <text x="625" y="330" text-anchor="middle" font-size="7" fill="white">Obs</text>
+  <!-- Clipped result -->
+  <polygon points="760,300 760,380 860,380 860,290" fill="#C8E6C9" fill-opacity="0.5" stroke="#388E3C" stroke-width="1.5"/>
+  <text x="810" y="335" text-anchor="middle" font-size="9" fill="#2E7D32">Clipped</text>
+  <text x="810" y="350" text-anchor="middle" font-size="9" fill="#2E7D32">result</text>
+  <text x="670" y="400" text-anchor="middle" font-size="10" fill="#333">Corridor = Original - Shadow zones</text>
+  <text x="670" y="418" text-anchor="middle" font-size="10" fill="#333">Only reachable areas remain</text>
+
+  <!-- Step 5: Anchor Zone Split -->
+  <rect x="50" y="465" width="380" height="180" rx="8" fill="#e0f2f1" stroke="#009688" stroke-width="2"/>
+  <text x="240" y="488" text-anchor="middle" font-size="14" font-weight="bold" fill="#00695C">Step 5: Anchor Zone Split</text>
+
+  <!-- Split diagram -->
+  <rect x="90" y="510" width="120" height="80" fill="#42A5F5" fill-opacity="0.4" stroke="#1E88E5" stroke-width="1.5"/>
+  <text x="150" y="545" text-anchor="middle" font-size="10" fill="#0D47A1">Anchorable</text>
+  <text x="150" y="560" text-anchor="middle" font-size="10" fill="#0D47A1">(shallow)</text>
+  <text x="150" y="578" text-anchor="middle" font-size="9" fill="#1565C0">depth &lt; anchor_d</text>
+
+  <rect x="230" y="510" width="160" height="80" fill="#66BB6A" fill-opacity="0.4" stroke="#43A047" stroke-width="1.5"/>
+  <text x="310" y="545" text-anchor="middle" font-size="10" fill="#1B5E20">Deep water</text>
+  <text x="310" y="560" text-anchor="middle" font-size="10" fill="#1B5E20">(no anchoring)</text>
+  <text x="310" y="578" text-anchor="middle" font-size="9" fill="#2E7D32">depth &gt;= anchor_d</text>
+
+  <text x="240" y="620" text-anchor="middle" font-size="10" fill="#333">Ships in blue zones can attempt</text>
+  <text x="240" y="635" text-anchor="middle" font-size="10" fill="#333">anchoring with probability P_anchor</text>
+
+  <!-- Step 6: Probability Integration -->
+  <rect x="470" y="465" width="400" height="180" rx="8" fill="#f3e5f5" stroke="#9C27B0" stroke-width="2"/>
+  <text x="670" y="488" text-anchor="middle" font-size="14" font-weight="bold" fill="#6A1B9A">Step 6: Probability Integration</text>
+
+  <!-- Monte Carlo diagram -->
+  <rect x="510" y="510" width="150" height="70" fill="#E1BEE7" fill-opacity="0.4" stroke="#AB47BC" stroke-width="1"/>
+  <!-- Random dots -->
+  <circle cx="525" cy="525" r="2" fill="#7B1FA2"/>
+  <circle cx="545" cy="540" r="2" fill="#7B1FA2"/>
+  <circle cx="560" cy="520" r="2" fill="#F44336"/>
+  <circle cx="580" cy="555" r="2" fill="#7B1FA2"/>
+  <circle cx="600" cy="530" r="2" fill="#F44336"/>
+  <circle cx="620" cy="545" r="2" fill="#7B1FA2"/>
+  <circle cx="540" cy="560" r="2" fill="#7B1FA2"/>
+  <circle cx="640" cy="535" r="2" fill="#F44336"/>
+  <circle cx="615" cy="560" r="2" fill="#7B1FA2"/>
+
+  <text x="585" y="600" text-anchor="middle" font-size="9" fill="#6A1B9A">Monte Carlo samples</text>
+  <text x="585" y="615" text-anchor="middle" font-size="9" fill="#6A1B9A">(red = hits obstacle)</text>
+
+  <text x="770" y="525" text-anchor="middle" font-size="10" fill="#4A148C">P = integral of</text>
+  <text x="770" y="542" text-anchor="middle" font-size="10" fill="#4A148C">f(y) x I(hit)</text>
+  <text x="770" y="559" text-anchor="middle" font-size="10" fill="#4A148C">over corridor</text>
+  <text x="670" y="635" text-anchor="middle" font-size="10" fill="#333">Monte Carlo integration with</text>
+
+  <!-- Step 7: Wind Rose Weighting -->
+  <rect x="50" y="680" width="380" height="120" rx="8" fill="#fff8e1" stroke="#FFC107" stroke-width="2"/>
+  <text x="240" y="703" text-anchor="middle" font-size="14" font-weight="bold" fill="#F57F17">Step 7: Wind Rose Weighting</text>
+  <text x="240" y="730" text-anchor="middle" font-size="11" fill="#333">P_total = sum over 8 directions:</text>
+  <text x="240" y="752" text-anchor="middle" font-size="11" fill="#F57F17" font-weight="bold">P_dir x W_dir x (1 - P_repair) x (1 - P_anchor)</text>
+  <text x="240" y="775" text-anchor="middle" font-size="10" fill="#333">W_dir = wind rose probability for direction</text>
+  <text x="240" y="790" text-anchor="middle" font-size="10" fill="#333">P_repair = repair time lognormal CDF</text>
+
+  <!-- Step 8: Final Risk -->
+  <rect x="470" y="680" width="400" height="120" rx="8" fill="#efebe9" stroke="#795548" stroke-width="2"/>
+  <text x="670" y="703" text-anchor="middle" font-size="14" font-weight="bold" fill="#4E342E">Step 8: Final Risk</text>
+  <text x="670" y="730" text-anchor="middle" font-size="11" fill="#333">For each obstacle:</text>
+  <text x="670" y="752" text-anchor="middle" font-size="11" fill="#795548" font-weight="bold">Risk = P_total x Freq x P_causation</text>
+  <text x="670" y="775" text-anchor="middle" font-size="10" fill="#333">Freq = ships/year on leg</text>
+  <text x="670" y="790" text-anchor="middle" font-size="10" fill="#333">P_causation = 1.0 (drifting) or 1.6E-4 (powered)</text>
+
+  <!-- Step connections -->
+  <line x1="430" y1="135" x2="470" y2="135" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="240" y1="215" x2="240" y2="250" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="670" y1="215" x2="670" y2="250" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="240" y1="430" x2="240" y2="465" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="670" y1="430" x2="670" y2="465" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="240" y1="645" x2="240" y2="680" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="670" y1="645" x2="670" y2="680" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Legend -->
+  <rect x="50" y="830" width="820" height="100" rx="8" fill="#fafafa" stroke="#ddd" stroke-width="1"/>
+  <text x="460" y="855" text-anchor="middle" font-size="12" font-weight="bold" fill="#333">Key Equations</text>
+  <text x="460" y="880" text-anchor="middle" font-size="10" fill="#333">P_drift = 1 - exp(-F_b / (24 x 365) x transit_hours)  |  P_not_repaired = 1 - lognorm.cdf(drift_time)</text>
+  <text x="460" y="900" text-anchor="middle" font-size="10" fill="#333">P_ground = P_drift x P_wind x P_not_repaired x (1 - P_anchor) x P_causation</text>
+  <text x="460" y="920" text-anchor="middle" font-size="10" fill="#333">corridor_width = 2 x Z_0.995 x std_lateral  |  projection_dist = drift_speed x lognorm.ppf(0.999)</text>
+</svg>

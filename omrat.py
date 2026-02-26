@@ -23,7 +23,6 @@
 """
 from typing import Any, Callable
 from functools import partial
-from pytest_qgis import QgsMapCanvas
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaType
 from qgis.PyQt.QtGui import QIcon, QAction, QCloseEvent
 from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
@@ -44,7 +43,7 @@ from resources import *
 # Import the code for the DockWidget
 from compute.run_calculations import Calculation
 from compute.calculation_task import CalculationTask
-from compute.iwrap_convertion import write_iwrap_xml
+from compute.iwrap_convertion import write_iwrap_xml, parse_iwrap_xml
 from geometries.handle_qgis_iface import HandleQGISIface
 from omrat_utils.causation_factors import CausationFactors
 from omrat_utils.handle_ais import AIS
@@ -203,7 +202,7 @@ class OMRAT:
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
 
-        icon_path = self.plugin_dir + '/icon.png'
+        icon_path = self.plugin_dir + '/img/icon.png'
         self.add_action(
             icon_path,
             text=self.tr(u'Omrat'),
@@ -233,7 +232,172 @@ class OMRAT:
         msg_box.setText(self.tr("A failure occurred:"))
         msg_box.setInformativeText(message)
         msg_box.exec()
-    
+
+    def _confirm_before_load(self, action_label: str) -> str:
+        """Show a confirmation dialog before loading/importing data.
+
+        Returns 'clear', 'merge', or 'cancel'.
+        If the current model is empty the dialog is skipped and 'clear' is returned.
+        """
+        has_data = (
+            len(self.segment_data) > 0
+            or len(self.traffic_data) > 0
+            or self.main_widget.twRouteList.rowCount() > 0
+            or self.main_widget.twDepthList.rowCount() > 0
+            or self.main_widget.twObjectList.rowCount() > 0
+        )
+        if not has_data:
+            return 'clear'
+
+        msg_box = QMessageBox(self.main_widget)
+        msg_box.setIcon(QMessageBox.Question)
+        msg_box.setWindowTitle(self.tr(f'{action_label} Project'))
+        msg_box.setText(self.tr(
+            'The current model contains data.\n\n'
+            'Do you want to clear all current data before loading,\n'
+            'or merge the new data into the existing model?'
+        ))
+        btn_clear = msg_box.addButton(self.tr('Clear && Load'), QMessageBox.AcceptRole)
+        btn_merge = msg_box.addButton(self.tr('Merge'), QMessageBox.ActionRole)
+        msg_box.addButton(QMessageBox.Cancel)
+        msg_box.setDefaultButton(btn_clear)
+        msg_box.exec()
+
+        clicked = msg_box.clickedButton()
+        if clicked == btn_clear:
+            return 'clear'
+        elif clicked == btn_merge:
+            return 'merge'
+        return 'cancel'
+
+    def clear_model(self) -> None:
+        """Reset all model state and UI to defaults."""
+        QgsMessageLog.logMessage("Clearing current model", "OMRAT", Qgis.Info)
+
+        # --- 1. Clear QGIS layers ---
+        self.qgis_geoms.clear()
+        self.object.clear()
+
+        # Remove drift corridor layers
+        for layer in self.drift_corridor_layers:
+            try:
+                project = QgsProject.instance()
+                if project is not None and layer is not None:
+                    project.removeMapLayer(layer.id())
+            except Exception:
+                pass
+        self.drift_corridor_layers.clear()
+
+        # Remove calculation result layers
+        if self.calc is not None:
+            for layer in [self.calc.allision_result_layer, self.calc.grounding_result_layer]:
+                try:
+                    project = QgsProject.instance()
+                    if project is not None and layer is not None:
+                        project.removeMapLayer(layer.id())
+                except Exception:
+                    pass
+            self.calc.allision_result_layer = None
+            self.calc.grounding_result_layer = None
+
+        # --- 2. Clear internal data structures ---
+        self.traffic_data = {}
+        self.segment_data = {}
+        self.segment_id = 0
+        self.cur_route_id = 1
+
+        # Reset drift settings to defaults
+        rose = {'0': .125, '45': .125, '90': .125, '135': .125,
+                '180': .125, '225': .125, '270': .125, '315': .125}
+        repair: dict[str, str | float | bool] = {
+            'func': '', 'std': .95, 'loc': .2, 'scale': .85, 'use_lognormal': True
+        }
+        default_drift: dict[str, Any] = {
+            'drift_p': 1, 'anchor_p': .95, 'anchor_d': 7,
+            'speed': 1 * 3600 / 1852, 'rose': rose, 'repair': repair
+        }
+        self.drift_values = default_drift
+        self.drift_settings.drift_values = default_drift
+
+        # Reset causation factors to defaults
+        self.causation_f.data = {'p_pc': 1.6E-4, 'd_pc': 1}
+        self.causation_values = self.causation_f.data
+
+        # Reset distributions tracking
+        self.distributions.last_id = '1'
+        self.distributions.new_id = '1'
+
+        # Prevent traffic table updates during clearing
+        self.traffic.run_update = False
+        self.traffic.traffic_data = self.traffic_data
+        self.traffic.c_seg = ''
+
+        # --- 3. Clear UI widgets ---
+        self.reset_route_table()
+
+        self.main_widget.twDepthList.setRowCount(0)
+        self.main_widget.twObjectList.setRowCount(0)
+
+        self.main_widget.cbTrafficSelectSeg.clear()
+        self.main_widget.cbTrafficDirectionSelect.clear()
+        self.traffic.set_table_headings()
+
+        # Distribution fields
+        dist_widgets = [
+            self.main_widget.leNormMean1_1, self.main_widget.leNormMean1_2,
+            self.main_widget.leNormMean1_3, self.main_widget.leNormMean2_1,
+            self.main_widget.leNormMean2_2, self.main_widget.leNormMean2_3,
+            self.main_widget.leNormStd1_1, self.main_widget.leNormStd1_2,
+            self.main_widget.leNormStd1_3, self.main_widget.leNormStd2_1,
+            self.main_widget.leNormStd2_2, self.main_widget.leNormStd2_3,
+            self.main_widget.leNormWeight1_1, self.main_widget.leNormWeight1_2,
+            self.main_widget.leNormWeight1_3, self.main_widget.leNormWeight2_1,
+            self.main_widget.leNormWeight2_2, self.main_widget.leNormWeight2_3,
+            self.main_widget.leUniformMin1, self.main_widget.leUniformMax1,
+            self.main_widget.leUniformMin2, self.main_widget.leUniformMax2,
+        ]
+        for w in dist_widgets:
+            w.setText('0')
+        self.main_widget.sbUniformP1.setValue(0)
+        self.main_widget.sbUniformP2.setValue(0)
+
+        # Result fields
+        result_fields = [
+            self.main_widget.LEPDriftAllision,
+            self.main_widget.LEPPoweredAllision,
+            self.main_widget.LEPDriftingGrounding,
+            self.main_widget.LEPPoweredGrounding,
+            self.main_widget.LEPOvertakingCollision,
+            self.main_widget.LEPHeadOnCollision,
+            self.main_widget.LEPCrossingCollision,
+            self.main_widget.LEPMergingCollision,
+        ]
+        for field in result_fields:
+            field.setText('')
+
+        self.main_widget.LEModelName.setText('')
+        self.main_widget.TWPreviousRuns.setRowCount(0)
+        self.main_widget.laDir1.setText('')
+        self.main_widget.laDir2.setText('')
+
+        if hasattr(self.main_widget, 'label_drift_status'):
+            self.main_widget.label_drift_status.setText('')
+
+        # Remove distribution plot canvas if present
+        if self.distributions.canvas is not None:
+            try:
+                self.main_widget.DistributionWidget.removeWidget(self.distributions.canvas)
+                self.distributions.canvas.deleteLater()
+                self.distributions.canvas = None
+            except Exception:
+                pass
+
+        # Re-enable traffic updates
+        self.traffic.run_update = True
+
+        self.iface.mapCanvas().refresh()
+        QgsMessageLog.logMessage("Model cleared successfully", "OMRAT", Qgis.Info)
+
     def onClosePlugin(self):
         """Cleanup necessary items here when plugin main_widget is closed"""
 
@@ -282,6 +446,18 @@ class OMRAT:
             except Exception:
                 pass
         self.drift_corridor_layers.clear()
+
+        # Remove result layers (allision/grounding visualization)
+        if self.calc is not None:
+            for layer in [self.calc.allision_result_layer, self.calc.grounding_result_layer]:
+                try:
+                    project = QgsProject.instance()
+                    if project is not None and layer is not None:
+                        project.removeMapLayer(layer.id())
+                except Exception:
+                    pass
+            self.calc.allision_result_layer = None
+            self.calc.grounding_result_layer = None
 
         # Remove actions from menu and toolbar
         for action in self.actions:
@@ -410,7 +586,15 @@ class OMRAT:
 
     def load_work(self):
         store = Storage(self)
-        store.load_all()
+        file_path = store.select_file()
+        if not file_path:
+            return
+        choice = self._confirm_before_load('Load')
+        if choice == 'cancel':
+            return
+        if choice == 'clear':
+            self.clear_model()
+        store.load_from_path(file_path)
                
     def run_calculation(self):
         """Run calculation in a background QgsTask for better UI responsiveness."""
@@ -419,7 +603,7 @@ class OMRAT:
         if self.calc is not None:
             # Create and configure the background task
             task = CalculationTask(
-                description='OMRAT: Computing probability holes',
+                description='OMRAT: Starting calculations...',
                 calc_object=self.calc,
                 data=data
             )
@@ -546,16 +730,121 @@ class OMRAT:
                 'export_to_iwrap'
             )
 
+    def import_from_iwrap(self) -> None:
+        """Import project data from IWRAP XML format."""
+        try:
+            # Get file path from user
+            filename, _ = QFileDialog.getOpenFileName(
+                self.main_widget,
+                self.tr('Import from IWRAP XML'),
+                '',
+                'IWRAP XML Files (*.xml);;All Files (*.*)'
+            )
+
+            if not filename:
+                return  # User cancelled
+
+            # Check if file exists
+            if not os.path.exists(filename):
+                QMessageBox.warning(
+                    self.main_widget,
+                    self.tr('File Not Found'),
+                    self.tr(f'The file does not exist:\n{filename}')
+                )
+                return
+
+            # Ask whether to clear current data before importing
+            choice = self._confirm_before_load('Import')
+            if choice == 'cancel':
+                return
+            if choice == 'clear':
+                self.clear_model()
+
+            # Parse IWRAP XML to .omrat dictionary format
+            import json
+            # Enable debug output to help diagnose issues
+            print("\n" + "="*70)
+            print("IMPORTING IWRAP XML FILE")
+            print("="*70)
+            data = parse_iwrap_xml(filename, debug=True)
+            print("\n" + "="*70)
+            print("IMPORT PARSING COMPLETE")
+            print("="*70 + "\n")
+
+            # Validate and normalize the imported data
+            from omrat_utils.storage import Storage
+            storage = Storage(self)
+            data = storage._normalize_legacy_to_schema(data)
+
+            # Validate schema
+            try:
+                from omrat_utils.validate_data import RootModelSchema
+                RootModelSchema.model_validate(data)
+            except Exception as validation_error:
+                QMessageBox.warning(
+                    self.main_widget,
+                    self.tr('Import Validation Error'),
+                    self.tr(f'The imported data failed validation:\n{str(validation_error)}\n\nThe data will still be loaded, but there may be missing or incorrect values.')
+                )
+
+            # Load the imported data into the plugin
+            # This will:
+            # 1. Populate ship categories (rebuilds traffic table dimensions)
+            # 2. Load traffic_data, segment_data, drift settings
+            # 3. Populate depths, objects, routes
+            gd = GatherData(self)
+            gd.populate(data)
+
+            # Update Traffic class reference to the new traffic_data
+            # (populate() assigns a new dict, so we need to update the reference)
+            self.traffic.traffic_data = self.traffic_data
+
+            # Refresh the traffic table display with imported data
+            self.traffic.update_direction_select()
+            self.traffic.update_traffic_tbl('segment')
+
+            # Show success message
+            QMessageBox.information(
+                self.main_widget,
+                self.tr('Import Successful'),
+                self.tr(f'Project successfully imported from:\n{filename}\n\nProject: {data.get("project_name", "Unknown")}\nSegments: {len(data.get("segment_data", {}))}')
+            )
+
+        except Exception as e:
+            self.show_error_popup(
+                str(e),
+                'import_from_iwrap'
+            )
+
     def show_drift_allision(self):
         gd = GatherData(self)
         data = gd.get_all_for_save()
         if self.calc is not None:
             self.calc.run_drift_visualization(data)
-        
-        
+
+    def show_powered_allision(self):
+        """Show interactive Cat II powered allision (missed turn -> hits object) visualisation."""
+        gd = GatherData(self)
+        data = gd.get_all_for_save()
+        if self.calc is not None:
+            self.calc.run_powered_allision_visualization(data)
+
+    def show_powered_grounding(self):
+        """Show interactive Cat II powered grounding (missed turn -> hits depth area) visualisation."""
+        gd = GatherData(self)
+        data = gd.get_all_for_save()
+        if self.calc is not None:
+            self.calc.run_powered_grounding_visualization(data)
+
     def open_drift(self):
         self.drift_settings.run()
-    
+
+    def open_ship_categories(self):
+        self.ship_cat.run()
+
+    def open_causation_factors(self):
+        self.causation_f.run()
+
     def stop_route(self):
         """Stop the current route, commit changes, and set the active tool to 'Pan Map'."""
         # Disable the "Stop Route" button
@@ -801,7 +1090,10 @@ class OMRAT:
             fileMenu.addAction("Load", self.load_work)
             fileMenu.addSeparator()
             fileMenu.addAction("Export to IWRAP XML", self.export_to_iwrap)
+            fileMenu.addAction("Import from IWRAP XML", self.import_from_iwrap)
             SettingMenu.addAction("Drift settings", self.open_drift)
+            SettingMenu.addAction("Ship Categories", self.open_ship_categories)
+            SettingMenu.addAction("Causation Factors", self.open_causation_factors)
             SettingMenu.addAction("AIS connection settings", self.ais_settings)
             #self.main_widget.actionSave_project.clicked.connect(self.save_work)
             #self.main_widget.actionOpen_project.clicked.connect(self.load_work)
@@ -812,6 +1104,8 @@ class OMRAT:
             self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
             self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)
             self.main_widget.pbViewDriftingAllision.clicked.connect(self.show_drift_allision)
+            self.main_widget.pbViewPoweredAllision.clicked.connect(self.show_powered_allision)
+            self.main_widget.pbViewPoweredGrounding.clicked.connect(self.show_powered_grounding)
             self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
             # Optional: report path chooser if present in UI
             try:

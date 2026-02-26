@@ -229,6 +229,64 @@ class HandleQGISIface:
         self.current_start_point = None
         self.leg_dirs = {}
 
+    def clear(self) -> None:
+        """Remove all route/segment layers and reset state.
+
+        Unlike unload(), this keeps the plugin operational by preserving
+        permanent signal connections (cellClicked, canvasClicked, etc.).
+        """
+        # Remove the point layer
+        try:
+            if hasattr(self, 'point_layer') and self.point_layer is not None:
+                QgsProject.instance().removeMapLayer(self.point_layer)
+        except RuntimeError:
+            pass
+        self.point_layer = None
+
+        # Disconnect geometry-changed signals from edit buffers
+        for obj in self.buffer_edits:
+            try:
+                obj.geometryChanged.disconnect()
+            except Exception:
+                pass
+        self.buffer_edits = []
+
+        # Remove vector layers from QGIS project
+        for layer in self.vector_layers:
+            try:
+                edit_buffer = layer.editBuffer()
+                if edit_buffer is not None:
+                    try:
+                        edit_buffer.geometryChanged.disconnect()
+                    except TypeError:
+                        pass
+                QgsProject.instance().removeMapLayer(layer.id())
+            except Exception:
+                pass
+        self.vector_layers = []
+
+        # Remove tangent layer
+        if self.tangent_layer is not None:
+            try:
+                QgsProject.instance().removeMapLayer(self.tangent_layer.id())
+            except Exception:
+                pass
+            self.tangent_layer = None
+
+        # Disconnect itemChanged if connected (will be reconnected on next load)
+        if self.item_changed_connected:
+            try:
+                self.omrat.main_widget.twRouteList.itemChanged.disconnect(self.on_width_changed)
+            except TypeError:
+                pass
+            self.item_changed_connected = False
+
+        # Reset state
+        self.current_start_point = None
+        self.segment_id = 0
+        self.cur_route_id = 1
+        self.leg_dirs = {}
+
     def on_geometry_changed(self, fid:int, geom:QgsGeometry):
         """Handle geometry changes for a feature."""
         # Get the segment ID from the feature's attributes

@@ -14,6 +14,17 @@ class CausationFactorsWidget(QtWidgets.QDialog, FORM_CLASS):
         """Constructor."""
         super(CausationFactorsWidget, self).__init__(parent)
         self.setupUi(self)
+        # Grounding/Allision causation factors
         self.lePoweredPc: QtWidgets.QLineEdit
         self.leDriftingPc: QtWidgets.QLineEdit
+
+        # Ship-Ship collision causation factors
+        self.leHeadOnCf: QtWidgets.QLineEdit
+        self.leOvertakingCf: QtWidgets.QLineEdit
+        self.leCrossingCf: QtWidgets.QLineEdit
+        self.leBendCf: QtWidgets.QLineEdit
+        self.leGroundingCf: QtWidgets.QLineEdit
+        self.leAllisionCf: QtWidgets.QLineEdit
+
+        # Dialog buttons
         self.buttonBox: QtWidgets.QDialogButtonBox

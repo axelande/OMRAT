@@ -32,27 +32,40 @@ class Storage:
         with open(file_path, 'w') as f:
             f.write(json.dumps(data, indent=2))
         
-    def load_all(self):
+    def select_file(self) -> str:
+        """Open a file dialog to select a .omrat file (or use test path).
+
+        Returns the selected file path, or empty string if cancelled.
+        """
         if self.p.testing:
             dp = os.path.dirname(__file__)
-            file_path = os.path.join(dp, '..', 'tests', 'test_res.omrat')
+            return os.path.join(dp, '..', 'tests', 'test_res.omrat')
         else:
             file_path = self.new_file_path(False, "Load Project", self.last_used_dir(),
                                            "proj.omrat", "shapefiles (*.omrat *.OMRAT)")[0]
-        if file_path == "":
-            return
+            return file_path
+
+    def load_from_path(self, file_path: str) -> None:
+        """Load and populate data from the given .omrat file path."""
         with open(file_path, 'r') as f:
             data = json.load(f)
             # Normalize legacy project files to match RootModelSchema
             data = self._normalize_legacy_to_schema(data)
             try:
-                RootModelSchema.model_validate(data) 
+                RootModelSchema.model_validate(data)
             except ValidationError as e:
                 # Show error to user, log, etc.
                 print("Validation error:", e)
                 return
             gather = GatherData(self.p)
             gather.populate(data)
+
+    def load_all(self):
+        """Select a file and load it. Legacy convenience method."""
+        file_path = self.select_file()
+        if not file_path:
+            return
+        self.load_from_path(file_path)
 
     def _normalize_legacy_to_schema(self, data: dict) -> dict:
         """Convert older saved formats/keys to match RootModelSchema.

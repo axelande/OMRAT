@@ -30,6 +30,13 @@ from .clipping import (
     keep_reachable_part,
 )
 from .generator import DriftCorridorGenerator
+from .probability_integration import (
+    compute_shadow_adjusted_holes,
+    separate_obstacles_by_type,
+    blend_with_pdf_holes,
+    get_direction_index,
+    direction_index_to_angle,
+)
 
 __all__ = [
     # Constants
@@ -52,4 +59,10 @@ __all__ = [
     'keep_reachable_part',
     # Generator
     'DriftCorridorGenerator',
+    # Probability Integration
+    'compute_shadow_adjusted_holes',
+    'separate_obstacles_by_type',
+    'blend_with_pdf_holes',
+    'get_direction_index',
+    'direction_index_to_angle',
 ]

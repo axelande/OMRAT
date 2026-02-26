@@ -1,15 +1,52 @@
-.. OMRAT documentation master file, created by
-   sphinx-quickstart on Sun Feb 12 17:11:03 2012.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. OMRAT documentation master file
 
-Welcome to OMRAT's documentation!
-============================================
+=============================================
+OMRAT -- Open Maritime Risk Analysis Tool
+=============================================
 
-Contents:
+**Version:** 0.3.x |
+**Author:** Axel Horteborn |
+**Organization:** RISE / Naturvardsverket |
+**License:** GNU General Public License v2+
+
+OMRAT is a QGIS plugin for calculating the probability of maritime
+accidents -- collisions, groundings, and allisions -- based on the
+equations by Pedersen (1995) and Friis-Hansen (2008). It implements the
+IWRAP (International Association of Marine Aids to Navigation and
+Lighthouse Authorities Waterway Risk Assessment Programme) methodology
+as an open-source tool.
+
+.. image:: _static/images/system_architecture.svg
+   :width: 100%
+   :alt: OMRAT system architecture overview
+
+Contents
+========
 
 .. toctree::
    :maxdepth: 2
+   :caption: Getting Started
+
+   overview
+   installation
+   user_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Theory & Calculations
+
+   theory
+   drifting
+   collisions
+   powered
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer Guide
+
+   architecture
+   api
+
 
 Indices and tables
 ==================
@@ -17,4 +54,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

@@ -5,17 +5,13 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING, Callable
 
 from qgis.PyQt.QtWidgets import QLabel
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib as mpl
 mpl.use('Qt5Agg')
 import geopandas as gpd
-from matplotlib.figure import Figure
-from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 from numpy import exp, log
 import numpy as np
-from pyproj import CRS, Transformer
+from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject
 from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem, QTreeWidgetItem, QTreeWidget, QWidget
 from scipy import stats
 from scipy.stats import norm, uniform
@@ -26,13 +22,293 @@ try:
     from shapely import make_valid as shp_make_valid
 except Exception:
     shp_make_valid = None
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.geometry.base import BaseGeometry
 
 sys.path.append('.')
-from basic_equations import get_drifting_prob, get_Fcoll, powered_na, get_not_repaired
+
+from compute.basic_equations import (
+    get_head_on_collision_candidates,
+    get_overtaking_collision_candidates,
+    get_crossing_collision_candidates,
+    get_bend_collision_candidates,
+)
+
+
+def _compass_idx_to_math_idx(compass_d_idx: int) -> int:
+    """
+    Convert compass direction index to math convention index.
+
+    The wind rose uses compass convention (d_idx * 45):
+    - d_idx=0 → compass 0° = North
+    - d_idx=1 → compass 45° = NE
+    - d_idx=2 → compass 90° = East
+    - etc.
+
+    The probability_holes arrays use math convention indices (index * 45):
+    - index=0 → math 0° = East
+    - index=1 → math 45° = NE
+    - index=2 → math 90° = North
+    - etc.
+
+    Conversion: math_angle = (90 - compass_angle) % 360
+                math_index = math_angle // 45
+    """
+    compass_angle = compass_d_idx * 45
+    math_angle = (90 - compass_angle) % 360
+    return math_angle // 45
+
+
+def _extract_obstacle_segments(geom: BaseGeometry) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """
+    Extract individual line segments from a polygon boundary.
+
+    IMPORTANT: This function normalizes polygon orientation to CCW (counter-clockwise)
+    before extracting segments. This ensures consistent outward normal calculation
+    in _segment_intersects_corridor().
+
+    For CCW polygons:
+    - Exterior ring goes counter-clockwise
+    - Interior (hole) rings go clockwise
+    - Outward normal = rotate segment vector 90° clockwise (right-hand rule)
+
+    Args:
+        geom: A shapely geometry (Polygon, MultiPolygon, etc.)
+
+    Returns:
+        List of ((x1, y1), (x2, y2)) tuples representing line segments
+    """
+    from shapely.geometry import polygon as shapely_polygon
+
+    segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+
+    def extract_from_ring(ring_coords):
+        coords = list(ring_coords)
+        for i in range(len(coords) - 1):
+            p1 = (float(coords[i][0]), float(coords[i][1]))
+            p2 = (float(coords[i + 1][0]), float(coords[i + 1][1]))
+            if p1 != p2:  # Skip zero-length segments
+                segments.append((p1, p2))
+
+    if isinstance(geom, Polygon):
+        # Normalize polygon to CCW exterior, CW holes using shapely's orient()
+        # This ensures consistent outward normal calculation
+        oriented_geom = shapely_polygon.orient(geom, sign=1.0)  # 1.0 = CCW exterior
+        extract_from_ring(oriented_geom.exterior.coords)
+        for interior in oriented_geom.interiors:
+            extract_from_ring(interior.coords)
+    elif isinstance(geom, MultiPolygon):
+        for poly in geom.geoms:
+            segments.extend(_extract_obstacle_segments(poly))
+    elif hasattr(geom, 'boundary'):
+        boundary = geom.boundary
+        if hasattr(boundary, 'coords'):
+            extract_from_ring(boundary.coords)
+        elif hasattr(boundary, 'geoms'):
+            for line in boundary.geoms:
+                extract_from_ring(line.coords)
+
+    return segments
+
+
+def _create_drift_corridor(
+    leg: LineString,
+    drift_angle: float,
+    distance: float,
+    lateral_spread: float,
+) -> Polygon | None:
+    """
+    Create the drift corridor polygon for a given leg and drift direction.
+
+    Creates a polygon representing the area a ship could drift through,
+    from the leg starting position to the maximum drift distance.
+
+    This matches the approach in pdf_corrected_fast_probability_holes.py
+    but uses convex hull to handle self-intersection cases.
+
+    Args:
+        leg: The traffic leg LineString
+        drift_angle: Drift direction in degrees (math convention: 0=East, 90=North)
+                     This matches pdf_corrected_fast_probability_holes.py
+        distance: Maximum drift distance in meters
+        lateral_spread: Half-width of corridor (in meters)
+
+    Returns:
+        Polygon representing the drift corridor, or None if invalid
+    """
+    import numpy as np
+    from shapely.ops import unary_union
+
+    leg_coords = np.array(leg.coords)
+    if len(leg_coords) < 2:
+        return None
+
+    leg_start = leg_coords[0]
+    leg_end = leg_coords[-1]
+    leg_vec = leg_end - leg_start
+    leg_length = np.linalg.norm(leg_vec)
+
+    if leg_length == 0:
+        return None
+
+    leg_dir = leg_vec / leg_length
+    perp_dir = np.array([-leg_dir[1], leg_dir[0]])
+
+    # Drift direction vector (math convention: 0=East, 90=North)
+    drift_angle_rad = np.radians(drift_angle)
+    drift_vec = np.array([np.cos(drift_angle_rad), np.sin(drift_angle_rad)]) * distance
+
+    # Create leg rectangle corners (CCW order)
+    p1 = leg_start - lateral_spread * perp_dir
+    p2 = leg_start + lateral_spread * perp_dir
+    p3 = leg_end + lateral_spread * perp_dir
+    p4 = leg_end - lateral_spread * perp_dir
+
+    # Create drifted rectangle corners (CCW order)
+    p1_drift = p1 + drift_vec
+    p2_drift = p2 + drift_vec
+    p3_drift = p3 + drift_vec
+    p4_drift = p4 + drift_vec
+
+    # Create the two rectangles as separate polygons and union them
+    # This avoids self-intersection issues when drift is along the leg direction
+    leg_rect = Polygon([tuple(p1), tuple(p2), tuple(p3), tuple(p4)])
+    drift_rect = Polygon([tuple(p1_drift), tuple(p2_drift), tuple(p3_drift), tuple(p4_drift)])
+
+    corridor = unary_union([leg_rect, drift_rect])
+
+    # If union creates MultiPolygon (shouldn't happen but handle it), take convex hull
+    if isinstance(corridor, MultiPolygon):
+        corridor = corridor.convex_hull
+
+    if corridor.is_empty or corridor.area == 0:
+        return None
+
+    return corridor
+
+
+def _segment_intersects_corridor(
+    segment: tuple[tuple[float, float], tuple[float, float]],
+    corridor: Polygon,
+    drift_angle: float | None = None,
+    leg_centroid: tuple[float, float] | None = None,
+    leg_line: LineString | None = None,
+) -> bool:
+    """
+    Check if a line segment would be hit by ships drifting from the leg.
+
+    A segment is hit if:
+    1. The corridor geometrically intersects the segment (substantially, not just a point touch)
+    2. The segment is ahead of the leg in the drift direction
+    3. The drift direction "faces into" the segment's outward normal
+       (ships must be moving toward the segment's blocking face)
+
+    The key insight for obstacle polygons (assumed CCW): each edge has an outward normal
+    pointing to the right of the edge vector. For a ship to hit an edge, it must be
+    drifting INTO that outward normal (positive dot product).
+
+    Args:
+        segment: ((x1, y1), (x2, y2)) tuple
+        corridor: Drift corridor polygon
+        drift_angle: Drift direction in degrees (math convention: 0=East, 90=North)
+        leg_centroid: (x, y) centroid of the leg
+        leg_line: Optional LineString of the leg
+
+    Returns:
+        True if segment would be hit by drift
+    """
+    import numpy as np
+    from shapely.geometry import Point
+
+    p1, p2 = segment
+    seg_line = LineString([p1, p2])
+
+    # Basic intersection check
+    if not corridor.intersects(seg_line):
+        return False
+
+    # Check if the intersection is substantial (not just a point touch)
+    intersection = corridor.intersection(seg_line)
+
+    if intersection.is_empty:
+        return False
+    if intersection.geom_type == 'Point':
+        t = 0.01
+        interior_p1 = (p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]))
+        interior_p2 = (p1[0] + (1-t) * (p2[0] - p1[0]), p1[1] + (1-t) * (p2[1] - p1[1]))
+        mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+
+        if not (corridor.contains(Point(interior_p1)) or
+                corridor.contains(Point(interior_p2)) or
+                corridor.contains(Point(mid))):
+            return False
+
+    if drift_angle is None or leg_centroid is None:
+        return True
+
+    # Drift direction vector (unit vector)
+    drift_angle_rad = np.radians(drift_angle)
+    drift_dir = np.array([np.cos(drift_angle_rad), np.sin(drift_angle_rad)])
+
+    # Calculate segment vector and normal
+    seg_vec = np.array([p2[0] - p1[0], p2[1] - p1[1]])
+    seg_len = np.linalg.norm(seg_vec)
+    if seg_len == 0:
+        return False
+
+    # Outward normal for CCW polygon: rotate segment vector 90° clockwise
+    # For segment (p1 → p2), outward normal points to the RIGHT of the direction
+    # Rotate (dx, dy) by -90°: (dy, -dx)
+    seg_outward_normal = np.array([seg_vec[1], -seg_vec[0]]) / seg_len
+
+    # Check if drift is parallel to segment (can't hit a parallel segment)
+    drift_into_segment = np.dot(drift_dir, seg_outward_normal)
+    if abs(drift_into_segment) < 0.17:  # Nearly parallel (< ~10° from parallel)
+        return False
+
+    # KEY CHECK: For a ship to hit this segment (enter the polygon through this face),
+    # the drift direction must oppose the outward normal (negative dot product).
+    # If drift_into_segment > 0, ships are moving in the same direction as the
+    # outward normal, meaning they would EXIT through this face, not enter.
+    if drift_into_segment > 0:
+        return False
+
+    # Check that the segment is not significantly behind the leg in the drift direction.
+    # This prevents false positives where a wide corridor intersects a segment that is
+    # BEHIND the leg in the drift direction (e.g., Leg 2 south of structure cannot hit
+    # the top edge via S/SW/SE drift because those drift directions go away from structure).
+    #
+    # We check if the segment midpoint is ahead of the leg centroid in drift direction.
+    # "Ahead" means the dot product of (segment_mid - leg_centroid) with drift_dir is positive.
+    seg_mid = np.array([(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2])
+    leg_center = np.array(leg_centroid)
+    vec_to_segment = seg_mid - leg_center
+    dist_to_segment = np.linalg.norm(vec_to_segment)
+
+    # Dot product: positive means segment is in front of leg in drift direction
+    distance_ahead = np.dot(vec_to_segment, drift_dir)
+
+    # Allow significant tolerance because the corridor has lateral spread.
+    # A segment that is slightly behind in the drift direction can still be
+    # reachable by ships that start from the lateral edges of the leg.
+    # Only reject if the segment is more than 50% of the way "behind" the leg.
+    # This catches cases like Leg 2 (south) trying to hit Segment 2 (north top edge)
+    # via S/SE/SW drift where the segment is very far behind.
+    if distance_ahead < -0.5 * dist_to_segment:
+        # Segment is substantially behind the leg in the drift direction
+        return False
+
+    return True
+from basic_equations import (
+    get_drifting_prob,
+    get_Fcoll,
+    powered_na,
+    get_not_repaired,
+    get_powered_grounding_cat1,
+    get_powered_grounding_cat2,
+)
 from geometries.route import get_multiple_ed
-from geometries.route import get_multi_drift_distance, get_best_utm 
+from geometries.route import get_multi_drift_distance
 from geometries.get_drifting_overlap import (
     DriftingOverlapVisualizer,
     compute_min_distance_by_object,
@@ -40,8 +316,16 @@ from geometries.get_drifting_overlap import (
     compute_dir_overlap_fraction_by_object,
     compute_dir_leg_overlap_fraction_by_object,
 )
-# Smart hybrid: fast for depths, accurate for structures
-from geometries.smart_hybrid_probability_holes import compute_probability_holes_smart_hybrid
+from geometries.get_powered_overlap import (
+    PoweredOverlapVisualizer,
+    SimpleProjector as _PoweredProjector,
+    _build_legs_and_obstacles,
+    _parse_point,
+    _run_all_computations,
+)
+# Use accurate dblquad method with parallel processing for all calculations
+from geometries.calculate_probability_holes import compute_probability_holes
+from geometries.result_layers import create_result_layers
 from ui.show_geom_res import ShowGeomRes
 
 if TYPE_CHECKING:
@@ -287,6 +571,8 @@ def transform_to_utm(lines, objects):
     """
     Transform lines and objects from WGS84 (EPSG:4326) to the appropriate UTM zone.
 
+    Uses QGIS native coordinate transformation to avoid pyproj conflicts in QGIS.
+
     Parameters:
     - lines: List of LineString geometries in EPSG:4326.
     - objects: List of Polygon geometries in EPSG:4326.
@@ -294,25 +580,46 @@ def transform_to_utm(lines, objects):
     Returns:
     - transformed_lines: List of LineString geometries in UTM.
     - transformed_objects: List of Polygon geometries in UTM.
+    - utm_epsg: The EPSG code of the UTM zone used.
     """
     # Combine all geometries to find the centroid
     all_geometries = lines + objects
-    combined_centroid = sum([geom.centroid.x for geom in all_geometries]) / len(all_geometries), \
-                        sum([geom.centroid.y for geom in all_geometries]) / len(all_geometries)
+    combined_centroid_x = sum([geom.centroid.x for geom in all_geometries]) / len(all_geometries)
+    combined_centroid_y = sum([geom.centroid.y for geom in all_geometries]) / len(all_geometries)
 
-    # Determine the UTM zone based on the centroid
-    utm_crs = CRS.from_epsg(32600 + int((combined_centroid[0] + 180) // 6) + 1)
+    # Determine the UTM zone based on the centroid longitude
+    # Northern hemisphere: EPSG 326XX, Southern hemisphere: EPSG 327XX
+    utm_zone = int((combined_centroid_x + 180) // 6) + 1
+    if combined_centroid_y >= 0:
+        utm_epsg = 32600 + utm_zone  # Northern hemisphere
+    else:
+        utm_epsg = 32700 + utm_zone  # Southern hemisphere
 
-    # Create a transformer from WGS84 to the determined UTM CRS
-    transformer = Transformer.from_crs(CRS('EPSG:4326'), utm_crs, always_xy=True)
+    # Create QGIS CRS objects
+    wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+    utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+
+    # Create coordinate transform
+    transform_context = QgsProject.instance().transformContext()
+    coord_transform = QgsCoordinateTransform(wgs84_crs, utm_crs, transform_context)
+
+    def transform_coords(x, y):
+        """Transform a single coordinate pair from WGS84 to UTM."""
+        from qgis.core import QgsPointXY
+        point = coord_transform.transform(QgsPointXY(x, y))
+        return point.x(), point.y()
+
+    def transform_geometry(geom):
+        """Transform a shapely geometry from WGS84 to UTM."""
+        return transform(transform_coords, geom)
 
     # Transform lines
-    transformed_lines = [transform(transformer.transform, line) for line in lines]
+    transformed_lines = [transform_geometry(line) for line in lines]
 
     # Transform objects
-    transformed_objects = [transform(transformer.transform, obj) for obj in objects]
+    transformed_objects = [transform_geometry(obj) for obj in objects]
 
-    return transformed_lines, transformed_objects, utm_crs
+    return transformed_lines, transformed_objects, utm_epsg
 
 def prepare_traffic_lists(data: dict[str, Any]) -> tuple[
     list[LineString], list[list[Any]], list[list[float]], list[str]
@@ -337,6 +644,14 @@ class Calculation:
         self.canvas: QWidget | None = None
         self.drifting_report: dict[str, Any] | None = None
         self._progress_callback: Callable[[int, int, str], bool] | None = None
+        # Store metadata for result layer generation
+        self._last_structures: list[dict[str, Any]] = []
+        self._last_depths: list[dict[str, Any]] = []
+        self.allision_result_layer = None
+        self.grounding_result_layer = None
+        # Ship-ship collision attributes
+        self.ship_collision_prob: float = 0.0
+        self.collision_report: dict[str, Any] | None = None
 
     def set_progress_callback(self, callback: Callable[[int, int, str], bool]) -> None:
         """
@@ -347,6 +662,43 @@ class Calculation:
                      Should return False to cancel the operation, True to continue.
         """
         self._progress_callback = callback
+
+    def _report_progress(self, phase: str, phase_progress: float, message: str) -> bool:
+        """
+        Report progress across multiple calculation phases.
+
+        Phases and their weight in overall progress:
+        - 'spatial': 0-60% (probability hole calculations - expensive)
+        - 'cascade': 60-90% (traffic cascade - moderate)
+        - 'layers': 90-100% (result layer creation - fast)
+
+        Args:
+            phase: One of 'spatial', 'cascade', 'layers'
+            phase_progress: Progress within the phase (0.0 to 1.0)
+            message: Status message to display
+
+        Returns:
+            True to continue, False to cancel
+        """
+        if not self._progress_callback:
+            return True
+
+        # Phase weights (must sum to 1.0)
+        phase_weights = {
+            'spatial': (0.0, 0.60),   # 0% to 60%
+            'cascade': (0.60, 0.90),  # 60% to 90%
+            'layers': (0.90, 1.0),    # 90% to 100%
+        }
+
+        start, end = phase_weights.get(phase, (0.0, 1.0))
+        overall_progress = start + (end - start) * min(1.0, max(0.0, phase_progress))
+
+        # Report as percentage (0-100)
+        return self._progress_callback(
+            int(overall_progress * 100),
+            100,
+            message
+        )
         
     def get_no_ship_h(self, data:dict[str, Any]) -> list[float]:
         no_ships:list[float] = []
@@ -390,10 +742,25 @@ class Calculation:
             structures, depths = split_structures_and_depths(data)
             structure_geoms = [s['wkt'] for s in structures]
             depth_geoms = [d['wkt'] for d in depths]
-            transformed_lines, transformed_objs_all, _ = transform_to_utm(lines, structure_geoms + depth_geoms)
+            transformed_lines, transformed_objs_all, utm_epsg = transform_to_utm(lines, structure_geoms + depth_geoms)
             n_struct = len(structure_geoms)
             transformed_structs = transformed_objs_all[:n_struct]
             transformed_depths = transformed_objs_all[n_struct:]
+
+            # Create reverse transform (UTM -> WGS84) for converting fixed geometries back
+            # This ensures wkt_wgs84 has the same vertex order as wkt (UTM)
+            wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+            utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+            transform_context = QgsProject.instance().transformContext()
+            reverse_transform = QgsCoordinateTransform(utm_crs, wgs84_crs, transform_context)
+
+            def transform_utm_to_wgs84(geom):
+                """Transform a shapely geometry from UTM back to WGS84."""
+                from qgis.core import QgsPointXY
+                def reverse_coords(x, y):
+                    point = reverse_transform.transform(QgsPointXY(x, y))
+                    return point.x(), point.y()
+                return transform(reverse_coords, geom)
 
             # Fix invalid geometries and split any MultiPolygons that may arise from make_valid
             # Note: split_structures_and_depths already splits MultiPolygons, but make_valid
@@ -407,23 +774,27 @@ class Calculation:
                     fixed = g
 
                 # Split MultiPolygons into individual Polygons (safety for make_valid results)
+                orig = structures[i] if i < len(structures) else {'id': f'struct_{i}', 'height': 0.0}
                 if fixed.geom_type == 'MultiPolygon':
                     for j, poly in enumerate(fixed.geoms):
                         fixed_structs.append(poly)
-                        # Create new metadata entry with unique id
-                        orig = structures[i] if i < len(structures) else {'id': f'struct_{i}', 'height': 0.0}
+                        # Transform the UTM polygon back to WGS84 so segment indices match
+                        poly_wgs84 = transform_utm_to_wgs84(poly)
                         fixed_structs_meta.append({
                             'id': f"{orig['id']}_{j}" if len(fixed.geoms) > 1 else orig['id'],
                             'height': orig['height'],
-                            'wkt': poly
+                            'wkt': poly,
+                            'wkt_wgs84': poly_wgs84,  # Transformed back from UTM for consistent segment indices
                         })
                 else:
                     fixed_structs.append(fixed)
-                    orig = structures[i] if i < len(structures) else {'id': f'struct_{i}', 'height': 0.0}
+                    # Transform the UTM geometry back to WGS84 so segment indices match
+                    fixed_wgs84 = transform_utm_to_wgs84(fixed)
                     fixed_structs_meta.append({
                         'id': orig['id'],
                         'height': orig['height'],
-                        'wkt': fixed
+                        'wkt': fixed,
+                        'wkt_wgs84': fixed_wgs84,  # Transformed back from UTM for consistent segment indices
                     })
 
             fixed_depths = []
@@ -442,17 +813,23 @@ class Calculation:
                 if fixed.geom_type == 'MultiPolygon':
                     for j, poly in enumerate(fixed.geoms):
                         fixed_depths.append(poly)
+                        # Transform the UTM polygon back to WGS84 so segment indices match
+                        poly_wgs84 = transform_utm_to_wgs84(poly)
                         fixed_depths_meta.append({
                             'id': f"{depth_id}_{j}" if len(fixed.geoms) > 1 else depth_id,
                             'depth': depth_val,
-                            'wkt': poly
+                            'wkt': poly,
+                            'wkt_wgs84': poly_wgs84,  # Transformed back from UTM for consistent segment indices
                         })
                 else:
                     fixed_depths.append(fixed)
+                    # Transform the UTM geometry back to WGS84 so segment indices match
+                    fixed_wgs84 = transform_utm_to_wgs84(fixed)
                     fixed_depths_meta.append({
                         'id': depth_id,
                         'depth': depth_val,
-                        'wkt': fixed
+                        'wkt': fixed,
+                        'wkt_wgs84': fixed_wgs84,  # Transformed back from UTM for consistent segment indices
                     })
 
             structs_gdfs = [gpd.GeoDataFrame(geometry=[g]) for g in fixed_structs]
@@ -510,50 +887,47 @@ class Calculation:
             # Weight: 1 structure ≈ 100 depth objects in terms of computation time
             weighted_struct = struct_obj_count * 100
             weighted_depth = depth_obj_count * 1
-            total_weighted_work = weighted_struct + weighted_depth
+            total_weighted_work = max(1, weighted_struct + weighted_depth)
 
-            # Track progress across BOTH calculations
+            # Track progress across BOTH calculations within the 'spatial' phase
             struct_done = False
 
-            def unified_progress_callback(completed: int, total: int, msg: str) -> bool:
-                """Combine progress from structures (phase 1) and depths (phase 2)"""
-                if not self._progress_callback:
-                    return True
-
-                # Calculate weighted progress
+            def spatial_progress_callback(completed: int, total: int, msg: str) -> bool:
+                """Report progress within the spatial phase (0-60% of overall)"""
+                # Calculate weighted progress within spatial phase
                 if not struct_done:
-                    # Currently calculating structures (first phase)
+                    # Currently calculating structures (first half of spatial)
                     weighted_progress = (completed / max(total, 1)) * weighted_struct
+                    label = f"Drifting - structure probabilities ({completed}/{total})"
                 else:
-                    # Currently calculating depths (second phase)
+                    # Currently calculating depths (second half of spatial)
                     weighted_progress = weighted_struct + (completed / max(total, 1)) * weighted_depth
+                    label = f"Drifting - depth probabilities ({completed}/{total})"
 
-                # Convert to percentage of total work
-                overall_progress = int(weighted_progress)
-                overall_total = int(total_weighted_work)
+                # Convert to fraction of spatial phase (0.0 to 1.0)
+                phase_progress = weighted_progress / total_weighted_work
+                return self._report_progress('spatial', phase_progress, label)
 
-                return self._progress_callback(overall_progress, overall_total, msg)
-
-            # Calculate structures using FAST geometric method (allision)
-            struct_probability_holes = compute_probability_holes_smart_hybrid(
+            # Calculate structures using accurate dblquad integration (allision)
+            # This computes the true geometric probability that a drifting ship
+            # hits the obstacle, integrating the lateral PDF along the leg.
+            # Distance-dependent repair probability is handled separately in the
+            # cascade via get_not_repaired().
+            struct_probability_holes = compute_probability_holes(
                 transformed_lines, distributions, weights, structs_gdfs,
                 distance=reach_distance,
-                progress_callback=unified_progress_callback,
-                use_fast=True,
-                is_structure=True
+                progress_callback=spatial_progress_callback
             ) if len(structs_gdfs) > 0 else []
 
-            struct_done = True  # Switch to phase 2
+            struct_done = True  # Switch to depths
 
-            # Calculate depths using FAST geometric method (grounding)
+            # Calculate depths using accurate dblquad integration (grounding)
             # NOTE: No draught filtering here - the cascade calculation
             # filters by draught per vessel category
-            depth_probability_holes = compute_probability_holes_smart_hybrid(
+            depth_probability_holes = compute_probability_holes(
                 transformed_lines, distributions, weights, depths_gdfs,
                 distance=reach_distance,
-                progress_callback=unified_progress_callback,
-                use_fast=True,
-                is_structure=False
+                progress_callback=spatial_progress_callback
             ) if len(depths_gdfs) > 0 else []
             return (
                 struct_min_dists, depth_min_dists,
@@ -581,12 +955,16 @@ class Calculation:
         Returns:
             (allision_dist, allision_idx, grounding_dist, grounding_idx, anchor_dist)
         """
+        # Convert compass d_idx to math index for array lookups
+        # The min_dists arrays use math convention (index 0 = East, index 2 = North)
+        math_dir_idx = _compass_idx_to_math_idx(d_idx)
+
         # Find nearest allision candidate (structure lower than ship height)
         allision_dist, allision_idx = None, None
         if struct_min_dists:
             for s_idx, s in enumerate(structures):
                 if s['height'] < height:
-                    md = struct_min_dists[leg_idx][d_idx][s_idx]
+                    md = struct_min_dists[leg_idx][math_dir_idx][s_idx]
                     if md is not None and (allision_dist is None or md < allision_dist):
                         allision_dist, allision_idx = md, s_idx
 
@@ -595,7 +973,7 @@ class Calculation:
         if depth_min_dists:
             for dep_idx, dep in enumerate(depths):
                 if dep['depth'] < draught:
-                    md = depth_min_dists[leg_idx][d_idx][dep_idx]
+                    md = depth_min_dists[leg_idx][math_dir_idx][dep_idx]
                     if md is not None and (grounding_dist is None or md < grounding_dist):
                         grounding_dist, grounding_idx = md, dep_idx
 
@@ -605,7 +983,7 @@ class Calculation:
             thr = anchor_d * draught
             for dep_idx, dep in enumerate(depths):
                 if dep['depth'] < thr:
-                    md = depth_min_dists[leg_idx][d_idx][dep_idx]
+                    md = depth_min_dists[leg_idx][math_dir_idx][dep_idx]
                     if md is not None and (anchor_dist is None or md < anchor_dist):
                         anchor_dist = md
 
@@ -630,13 +1008,16 @@ class Calculation:
         Returns:
             (ov_all, ov_gro, gro_has_true_overlap)
         """
+        # Convert compass d_idx to math index for array lookups
+        math_dir_idx = _compass_idx_to_math_idx(d_idx)
+
         # Allision overlap - use probability hole as primary metric
         ov_all = 0.0
         if allision_idx is not None and allision_dist is not None:
             # Primary: use probability hole (integrated probability mass)
             try:
                 if struct_probability_holes:
-                    ov_all = struct_probability_holes[leg_idx][d_idx][allision_idx]
+                    ov_all = struct_probability_holes[leg_idx][math_dir_idx][allision_idx]
             except Exception:
                 pass
 
@@ -734,8 +1115,13 @@ class Calculation:
             freq: float,
             ship_type: int,
             ship_size: int,
+            drift_corridor: Polygon | None = None,
+            leg: LineString | None = None,
         ) -> None:
-        """Update report dictionaries with contribution."""
+        """Update report dictionaries with contribution.
+
+        Now also tracks per-segment contributions when drift_corridor is provided.
+        """
         # Per-object accumulation
         try:
             if event == 'allision' and idx is not None:
@@ -796,6 +1182,166 @@ class Calculation:
                 skey = f"Structure - {s.get('id', str(idx))}"
                 s_map = report['by_structure_legdir'].setdefault(skey, {})
                 s_map[leg_dir_key] = s_map.get(leg_dir_key, 0.0) + contrib
+
+                # Per-segment tracking: determine which segments of this structure
+                # actually intersect with the drift corridor
+                if drift_corridor is not None:
+                    obs_geom = s.get('wkt')
+                    if obs_geom is not None:
+                        # Convert compass angle (d_idx*45) to math convention
+                        compass_angle = d_idx * 45
+                        math_drift_angle = (90 - compass_angle) % 360
+                        self._update_segment_contributions(
+                            report, 'by_structure_segment_legdir',
+                            skey, leg_dir_key, contrib, obs_geom, drift_corridor,
+                            math_drift_angle, leg
+                        )
+        except Exception:
+            pass
+
+        # Per-depth per leg-direction accumulation (grounding only)
+        try:
+            if event == 'grounding' and idx is not None:
+                d = depths[idx]
+                dkey = f"Depth - {d.get('id', str(idx))}"
+                d_map = report['by_depth_legdir'].setdefault(dkey, {})
+                d_map[leg_dir_key] = d_map.get(leg_dir_key, 0.0) + contrib
+
+                # Per-segment tracking for depths
+                if drift_corridor is not None:
+                    obs_geom = d.get('wkt')
+                    if obs_geom is not None:
+                        # Convert compass angle (d_idx*45) to math convention
+                        compass_angle = d_idx * 45
+                        math_drift_angle = (90 - compass_angle) % 360
+                        self._update_segment_contributions(
+                            report, 'by_depth_segment_legdir',
+                            dkey, leg_dir_key, contrib, obs_geom, drift_corridor,
+                            math_drift_angle, leg
+                        )
+        except Exception:
+            pass
+
+    def _update_segment_contributions(
+        self,
+        report: dict[str, Any],
+        report_key: str,
+        obstacle_key: str,
+        leg_dir_key: str,
+        contrib: float,
+        obs_geom: BaseGeometry,
+        drift_corridor: Polygon,
+        drift_angle: float | None = None,
+        leg: LineString | None = None,
+    ) -> None:
+        """
+        Track which segments of an obstacle are hit by a drift corridor.
+
+        Distributes the contribution among segments that actually intersect
+        with the drift corridor AND are in the drift direction from the leg.
+
+        Args:
+            report: The report dictionary to update
+            report_key: 'by_structure_segment_legdir' or 'by_depth_segment_legdir'
+            obstacle_key: Key for the obstacle (e.g., "Structure - id")
+            leg_dir_key: Key for leg-direction (e.g., "1:North:0")
+            contrib: Total contribution for this obstacle from this leg-direction
+            obs_geom: Obstacle geometry (UTM)
+            drift_corridor: Drift corridor polygon (UTM)
+            drift_angle: Drift direction in degrees (math convention: 0=East, 90=North)
+            leg: The traffic leg LineString for direction checking
+        """
+        try:
+            # Extract obstacle segments
+            segments = _extract_obstacle_segments(obs_geom)
+            if not segments:
+                return
+
+            # Get leg centroid for direction checking
+            leg_centroid = None
+            if leg is not None:
+                centroid = leg.centroid
+                leg_centroid = (centroid.x, centroid.y)
+
+            # Find which segments intersect with the corridor in the drift direction
+            intersecting_indices: list[int] = []
+            for seg_idx, segment in enumerate(segments):
+                if _segment_intersects_corridor(segment, drift_corridor, drift_angle, leg_centroid):
+                    intersecting_indices.append(seg_idx)
+
+            if not intersecting_indices:
+                return
+
+            # Distribute contribution equally among intersecting segments
+            contrib_per_segment = contrib / len(intersecting_indices)
+
+            # Initialize data structure if needed
+            obs_seg_map = report.setdefault(report_key, {}).setdefault(obstacle_key, {})
+
+            # Store contribution for each intersecting segment
+            for seg_idx in intersecting_indices:
+                seg_key = f"seg_{seg_idx}"
+                seg_data = obs_seg_map.setdefault(seg_key, {})
+                seg_data[leg_dir_key] = seg_data.get(leg_dir_key, 0.0) + contrib_per_segment
+
+        except Exception:
+            pass
+
+    def _update_anchoring_report(
+        self,
+        report: dict[str, Any],
+        anchor_contrib: float,
+        obs_idx: int,
+        depths: list[dict[str, Any]],
+        seg_id: str,
+        d_idx: int,
+        dist: float,
+        hole_pct: float,
+        drift_corridor: Polygon | None,
+        leg: LineString,
+    ) -> None:
+        """
+        Track anchoring contributions per depth and per segment.
+
+        Anchoring is now tracked like grounding and allision - we record which
+        segments of a depth obstacle would receive the anchoring shadow.
+
+        Args:
+            report: The report dictionary to update
+            anchor_contrib: Anchoring contribution value
+            obs_idx: Index of the depth obstacle
+            depths: List of depth dictionaries
+            seg_id: Segment (leg) ID
+            d_idx: Direction index (compass convention: 0=N, 1=NE, ...)
+            dist: Distance to obstacle
+            hole_pct: Probability hole percentage
+            drift_corridor: Drift corridor polygon (UTM)
+            leg: The traffic leg LineString
+        """
+        try:
+            # Direction names for reporting
+            dir_names = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+            dir_name = dir_names[d_idx % 8]
+            compass_angle = d_idx * 45
+            leg_dir_key = f"{seg_id}:{dir_name}:{compass_angle}"
+
+            # Per-depth per leg-direction accumulation
+            d = depths[obs_idx]
+            dkey = f"Anchoring - {d.get('id', str(obs_idx))}"
+            d_map = report['by_anchoring_legdir'].setdefault(dkey, {})
+            d_map[leg_dir_key] = d_map.get(leg_dir_key, 0.0) + anchor_contrib
+
+            # Per-segment tracking for anchoring
+            if drift_corridor is not None:
+                obs_geom = d.get('wkt')
+                if obs_geom is not None:
+                    # Convert compass angle to math convention
+                    math_drift_angle = (90 - compass_angle) % 360
+                    self._update_segment_contributions(
+                        report, 'by_anchoring_segment_legdir',
+                        dkey, leg_dir_key, anchor_contrib, obs_geom, drift_corridor,
+                        math_drift_angle, leg
+                    )
         except Exception:
             pass
 
@@ -814,6 +1360,9 @@ class Calculation:
             struct_overlap_fracs_dir_leg: list,
             struct_probability_holes: list,
             depth_probability_holes: list,
+            distributions: list[list[Any]] | None = None,
+            weights: list[list[float]] | None = None,
+            reach_distance: float = 0.0,
         ) -> tuple[float, float, dict[str, Any]]:
         drift = data['drift']
         blackout_per_hour = float(drift.get('drift_p', 0.0)) / (365.0 * 24.0)
@@ -837,14 +1386,28 @@ class Calculation:
 
         # Prepare report structure
         report: dict[str, Any] = {
-            'totals': {'allision': 0.0, 'grounding': 0.0},
+            'totals': {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0},
             'by_leg_direction': {},
             'by_object': {},
-            'by_structure_legdir': {}
+            'by_structure_legdir': {},
+            'by_depth_legdir': {},  # Per-depth per leg-direction contributions for grounding
+            'by_anchoring_legdir': {},  # Per-depth per leg-direction contributions for anchoring
+            'by_structure_segment_legdir': {},  # Per-segment per leg-direction for structures
+            'by_depth_segment_legdir': {},  # Per-segment per leg-direction for depths
+            'by_anchoring_segment_legdir': {},  # Per-segment per leg-direction for anchoring
         }
 
         total_allision = 0.0
         total_grounding = 0.0
+        total_anchoring = 0.0
+
+        # Count total cascade iterations for progress tracking
+        # Each leg × each ship cell × 8 directions
+        total_cascade_work = sum(
+            len(traffic_by_leg[i]) * 8 if i < len(traffic_by_leg) else 0
+            for i in range(len(transformed_lines))
+        )
+        cascade_progress = 0
 
         for leg_idx, line in enumerate(transformed_lines):
             # Segment id and length
@@ -873,16 +1436,45 @@ class Calculation:
                     if rp <= 0.0:
                         continue
 
+                    # Create drift corridor for per-segment intersection checking
+                    drift_corridor: Polygon | None = None
+                    if distributions is not None and weights is not None and reach_distance > 0:
+                        try:
+                            # Calculate lateral spread from distributions
+                            dists = distributions[leg_idx] if leg_idx < len(distributions) else []
+                            wgts = weights[leg_idx] if leg_idx < len(weights) else []
+                            if dists and wgts:
+                                w = np.array(wgts)
+                                if w.sum() > 0:
+                                    w = w / w.sum()
+                                    weighted_std = float(np.sqrt(sum(
+                                        wt * (dist.std() ** 2) for dist, wt in zip(dists, w) if wt > 0
+                                    )))
+                                    lateral_spread = 5.0 * weighted_std  # 5 sigma range
+                                    compass_angle = d_idx * 45  # Compass angle (0=N, 45=NE, 90=E, etc.)
+                                    # Convert compass to math convention for _create_drift_corridor
+                                    # Compass: 0=North (CW), Math: 0=East (CCW)
+                                    math_angle = (90 - compass_angle) % 360
+                                    drift_corridor = _create_drift_corridor(
+                                        line, math_angle, reach_distance, lateral_spread
+                                    )
+                        except Exception:
+                            drift_corridor = None
+
                     # Build list of all obstacles with their distances and holes
                     obstacles: list[tuple[str, int, float, float]] = []
+
+                    # Convert compass d_idx to math index for array lookups
+                    # The min_dists and probability_holes arrays use math convention
+                    math_dir_idx = _compass_idx_to_math_idx(d_idx)
 
                     # Add all structures (allision targets)
                     if struct_min_dists and struct_probability_holes:
                         for s_idx, s in enumerate(structures):
                             if s['height'] < height:
                                 try:
-                                    dist = struct_min_dists[leg_idx][d_idx][s_idx]
-                                    hole_pct = struct_probability_holes[leg_idx][d_idx][s_idx]
+                                    dist = struct_min_dists[leg_idx][math_dir_idx][s_idx]
+                                    hole_pct = struct_probability_holes[leg_idx][math_dir_idx][s_idx]
                                     if dist is not None and hole_pct > 0.0:
                                         obstacles.append(('allision', s_idx, dist, hole_pct))
                                 except (IndexError, TypeError):
@@ -893,8 +1485,8 @@ class Calculation:
                         anchor_threshold = anchor_d * draught if anchor_d > 0.0 else 0.0
                         for dep_idx, dep in enumerate(depths):
                             try:
-                                dist = depth_min_dists[leg_idx][d_idx][dep_idx]
-                                hole_pct = depth_probability_holes[leg_idx][d_idx][dep_idx]
+                                dist = depth_min_dists[leg_idx][math_dir_idx][dep_idx]
+                                hole_pct = depth_probability_holes[leg_idx][math_dir_idx][dep_idx]
                                 if dist is None or hole_pct <= 0.0:
                                     continue
 
@@ -920,7 +1512,19 @@ class Calculation:
                             break
 
                         if obs_type == 'anchoring':
-                            # Anchoring reduces remaining by (P_anchor × hole%)
+                            # Anchoring: calculate the probability reduction and track per-segment
+                            # The "anchor contribution" is the probability of successfully anchoring
+                            # at this depth, which shadows obstacles behind it.
+                            anchor_contrib = base * rp * remaining_prob * anchor_p * hole_pct
+                            total_anchoring += anchor_contrib
+
+                            # Update report with per-segment anchoring tracking
+                            self._update_anchoring_report(
+                                report, anchor_contrib, obs_idx, depths, seg_id,
+                                d_idx, dist, hole_pct, drift_corridor, line
+                            )
+
+                            # Anchoring reduces remaining probability
                             remaining_prob *= (1.0 - anchor_p * hole_pct)
 
                         elif obs_type == 'allision':
@@ -930,12 +1534,12 @@ class Calculation:
 
                             total_allision += contrib
 
-                            # Update report
+                            # Update report with drift corridor for per-segment tracking
                             self._update_report(
                                 report, 'allision', contrib, obs_idx,
                                 structures, depths, seg_id, cell, d_idx, dist,
                                 base, rp, 1.0 - remaining_prob, p_nr, hole_pct, freq,
-                                ship_type, ship_size
+                                ship_type, ship_size, drift_corridor, line
                             )
 
                             # Reduce remaining probability
@@ -948,19 +1552,34 @@ class Calculation:
 
                             total_grounding += contrib
 
-                            # Update report
+                            # Update report with drift corridor for per-segment tracking
                             self._update_report(
                                 report, 'grounding', contrib, obs_idx,
                                 structures, depths, seg_id, cell, d_idx, dist,
                                 base, rp, 1.0 - remaining_prob, p_nr, hole_pct, freq,
-                                ship_type, ship_size
+                                ship_type, ship_size, drift_corridor, line
                             )
 
                             # Reduce remaining probability
                             remaining_prob *= (1.0 - hole_pct)
 
+                    # Update cascade progress after each direction
+                    cascade_progress += 1
+                    if total_cascade_work > 0 and cascade_progress % max(1, total_cascade_work // 20) == 0:
+                        phase_progress = cascade_progress / total_cascade_work
+                        if not self._report_progress(
+                            'cascade', phase_progress,
+                            f"Drifting - traffic cascade (leg {leg_idx + 1}/{len(transformed_lines)})"
+                        ):
+                            # Cancelled - return early with partial results
+                            report['totals']['allision'] = total_allision
+                            report['totals']['grounding'] = total_grounding
+                            report['totals']['anchoring'] = total_anchoring
+                            return total_allision, total_grounding, report
+
         report['totals']['allision'] = total_allision
         report['totals']['grounding'] = total_grounding
+        report['totals']['anchoring'] = total_anchoring
         return total_allision, total_grounding, report
 
     def _auto_generate_drifting_report(self, data: dict[str, Any]) -> str | None:
@@ -994,7 +1613,6 @@ class Calculation:
         """Compute drifting allision and grounding, and store a breakdown report."""
         if not data.get('traffic_data') or not data.get('segment_data'):
             self.p.main_widget.LEPDriftAllision.setText(f"{float(0):.3e}")
-            # Grounding line edit name in UI is LEPDriftingGrounding
             try:
                 self.p.main_widget.LEPDriftingGrounding.setText(f"{float(0):.3e}")
             except Exception:
@@ -1023,6 +1641,7 @@ class Calculation:
 
         longest_length = max(line.length for line in transformed_lines) if transformed_lines else 0.0
         reach_distance = self._compute_reach_distance(data, longest_length)
+        drift = data.get('drift', {})
         (
             struct_min_dists, depth_min_dists,
             struct_overlap_fracs_dir, depth_overlap_fracs_dir,
@@ -1041,7 +1660,8 @@ class Calculation:
             struct_min_dists, depth_min_dists,
             struct_overlap_fracs_dir, depth_overlap_fracs_dir, depth_overlap_fracs_leg,
             depth_overlap_fracs_dir_leg, struct_overlap_fracs_dir_leg,
-            struct_probability_holes, depth_probability_holes
+            struct_probability_holes, depth_probability_holes,
+            distributions, weights, reach_distance
         )
 
         pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
@@ -1052,14 +1672,796 @@ class Calculation:
         self.drifting_grounding_prob = float(total_grounding * grounding_rf)
         self.drifting_report = report
 
+        # Store structures and depths for result layer generation
+        self._last_structures = structures
+        self._last_depths = depths
+
         self.p.main_widget.LEPDriftAllision.setText(f"{self.drifting_allision_prob:.3e}")
         try:
             self.p.main_widget.LEPDriftingGrounding.setText(f"{self.drifting_grounding_prob:.3e}")
         except Exception:
             pass
         # Auto-generate Markdown report to disk (best-effort, non-blocking)
+        self._report_progress('layers', 0.0, "Drifting - generating report...")
         self._auto_generate_drifting_report(data)
+
+        # Create result layers showing where allisions/groundings occurred
+        self._report_progress('layers', 0.3, "Drifting - creating result layers...")
+        try:
+            self.allision_result_layer, self.grounding_result_layer = create_result_layers(
+                report, structures, depths, add_to_project=True
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to create result layers: {e}")
+
+        self._report_progress('layers', 1.0, "Drifting model complete")
         return self.drifting_allision_prob, self.drifting_grounding_prob
+
+    def run_ship_collision_model(self, data: dict[str, Any]) -> dict[str, float]:
+        """
+        Run ship-ship collision calculations.
+
+        Calculates head-on, overtaking, crossing, and bend collision frequencies
+        based on the traffic data and leg geometries.
+
+        Args:
+            data: Dictionary containing traffic_data, segment_data, pc (causation factors),
+                  and ship_categories
+
+        Returns:
+            dict with keys: 'head_on', 'overtaking', 'crossing', 'bend', 'total'
+        """
+        result: dict[str, float] = {
+            'head_on': 0.0,
+            'overtaking': 0.0,
+            'crossing': 0.0,
+            'bend': 0.0,
+            'total': 0.0,
+        }
+
+        traffic_data = data.get('traffic_data', {})
+        segment_data = data.get('segment_data', {})
+        pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
+
+        if not traffic_data or not segment_data:
+            self.ship_collision_prob = 0.0
+            self.collision_report = {'totals': result, 'by_leg': {}}
+            return result
+
+        # Get causation factors
+        pc_headon = float(pc_vals.get('headon', 4.9e-5))
+        pc_overtaking = float(pc_vals.get('overtaking', 1.1e-4))
+        pc_crossing = float(pc_vals.get('crossing', 1.3e-4))
+        pc_bend = float(pc_vals.get('bend', 1.3e-4))
+
+        # Get ship categories for LOA estimates
+        ship_categories = data.get('ship_categories', {})
+        length_intervals = ship_categories.get('length_intervals', [])
+
+        # Helper to estimate ship dimensions from LOA category index
+        def get_loa_midpoint(loa_idx: int) -> float:
+            """Get midpoint of LOA category for length estimates."""
+            if loa_idx < len(length_intervals):
+                interval = length_intervals[loa_idx]
+                try:
+                    min_val = float(interval.get('min', 50))
+                    max_val = float(interval.get('max', 100))
+                    return (min_val + max_val) / 2.0
+                except (ValueError, TypeError):
+                    pass
+            # Default midpoints for typical LOA categories
+            default_midpoints = [25.0, 75.0, 150.0, 250.0, 350.0]
+            return default_midpoints[loa_idx] if loa_idx < len(default_midpoints) else 150.0
+
+        def estimate_beam(loa: float) -> float:
+            """Estimate beam from LOA using typical ship ratios (L/B ~ 6-7)."""
+            return loa / 6.5
+
+        # Helper: extract weighted mu and sigma from the lateral traffic distributions
+        def _get_weighted_mu_sigma(seg_info: dict[str, Any], direction: int) -> tuple[float, float]:
+            """Extract weighted mean and std from segment lateral distributions.
+
+            Returns (mu, sigma) in meters.  Raises ValueError when
+            segment_data has no distribution information.
+            """
+            dists, wgts = get_distribution(seg_info, direction)
+
+            w = np.array(wgts, dtype=float)
+            w_sum = w.sum()
+            if w_sum <= 0:
+                raise ValueError(
+                    f"No lateral distribution weights found for direction {direction} "
+                    f"in segment data (keys: {list(seg_info.keys())})"
+                )
+            w = w / w_sum
+
+            # Weighted mean: E[X] = Σ w_i * mu_i
+            weighted_mu = float(sum(
+                wi * dist.mean() for dist, wi in zip(dists, w) if wi > 0
+            ))
+            # Total variance: Var[X] = Σ w_i*(sigma_i² + mu_i²) - E[X]²
+            weighted_var = float(sum(
+                wi * (dist.var() + dist.mean() ** 2)
+                for dist, wi in zip(dists, w) if wi > 0
+            )) - weighted_mu ** 2
+            weighted_sigma = float(np.sqrt(max(weighted_var, 0.0)))
+
+            if weighted_sigma < 1.0:
+                raise ValueError(
+                    f"Lateral distribution sigma too small ({weighted_sigma:.4f} m) "
+                    f"for direction {direction} – check distribution data"
+                )
+
+            return weighted_mu, weighted_sigma
+
+        # Report structures
+        by_leg: dict[str, dict[str, float]] = {}
+        total_head_on = 0.0
+        total_overtaking = 0.0
+        total_crossing = 0.0
+        total_bend = 0.0
+
+        leg_keys = list(traffic_data.keys())
+        total_legs = len(leg_keys)
+        processed = 0
+
+        self._report_progress('spatial', 0.0, "Starting ship collision calculations...")
+
+        # Iterate through legs for head-on and overtaking (same-leg collisions)
+        for leg_key in leg_keys:
+            leg_dirs = traffic_data.get(leg_key, {})
+            seg_info = segment_data.get(leg_key, {})
+            leg_length_m = float(seg_info.get('line_length', 1000.0))
+
+            leg_head_on = 0.0
+            leg_overtaking = 0.0
+            leg_bend = 0.0
+
+            # Get directions for this leg
+            dir_keys = list(leg_dirs.keys())
+
+            # Process each direction pair for head-on collisions
+            # Head-on: ships in opposite directions
+            if len(dir_keys) >= 2:
+                dir1, dir2 = dir_keys[0], dir_keys[1]
+                data1 = leg_dirs.get(dir1, {})
+                data2 = leg_dirs.get(dir2, {})
+
+                freq1 = np.array(data1.get('Frequency (ships/year)', []))
+                freq2 = np.array(data2.get('Frequency (ships/year)', []))
+                speed1 = np.array(data1.get('Speed (knots)', []))
+                speed2 = np.array(data2.get('Speed (knots)', []))
+                beam1 = np.array(data1.get('Ship Beam (meters)', []))
+                beam2 = np.array(data2.get('Ship Beam (meters)', []))
+
+                # Get lateral distribution parameters from loaded data
+                mu1_lat, sigma1_lat = _get_weighted_mu_sigma(seg_info, 0)
+                mu2_lat, sigma2_lat = _get_weighted_mu_sigma(seg_info, 1)
+
+                # Iterate ship categories (LOA x Type)
+                for loa_i in range(len(freq1) if hasattr(freq1, '__len__') else 0):
+                    for type_j in range(len(freq1[loa_i]) if loa_i < len(freq1) and hasattr(freq1[loa_i], '__len__') else 0):
+                        q1 = float(freq1[loa_i][type_j]) if loa_i < len(freq1) and type_j < len(freq1[loa_i]) else 0.0
+                        if q1 <= 0 or not np.isfinite(q1):
+                            continue
+
+                        # Get speed for dir1 ships
+                        v1_kts = 10.0  # Default
+                        if loa_i < len(speed1) and type_j < len(speed1[loa_i]):
+                            s_list = speed1[loa_i][type_j]
+                            if isinstance(s_list, (list, np.ndarray)) and len(s_list) > 0:
+                                v1_kts = float(np.mean(s_list))
+                            elif isinstance(s_list, (int, float)):
+                                v1_kts = float(s_list)
+                        v1_ms = v1_kts * 1852.0 / 3600.0  # Convert knots to m/s
+
+                        # Get beam for dir1 ships
+                        b1 = estimate_beam(get_loa_midpoint(loa_i))
+                        if loa_i < len(beam1) and type_j < len(beam1[loa_i]):
+                            b_list = beam1[loa_i][type_j]
+                            if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
+                                b1 = float(np.mean(b_list))
+                            elif isinstance(b_list, (int, float)):
+                                b1 = float(b_list)
+
+                        # Iterate over dir2 ship categories
+                        for loa_k in range(len(freq2) if hasattr(freq2, '__len__') else 0):
+                            for type_l in range(len(freq2[loa_k]) if loa_k < len(freq2) and hasattr(freq2[loa_k], '__len__') else 0):
+                                q2 = float(freq2[loa_k][type_l]) if loa_k < len(freq2) and type_l < len(freq2[loa_k]) else 0.0
+                                if q2 <= 0 or not np.isfinite(q2):
+                                    continue
+
+                                # Get speed for dir2 ships
+                                v2_kts = 10.0
+                                if loa_k < len(speed2) and type_l < len(speed2[loa_k]):
+                                    s_list = speed2[loa_k][type_l]
+                                    if isinstance(s_list, (list, np.ndarray)) and len(s_list) > 0:
+                                        v2_kts = float(np.mean(s_list))
+                                    elif isinstance(s_list, (int, float)):
+                                        v2_kts = float(s_list)
+                                v2_ms = v2_kts * 1852.0 / 3600.0
+
+                                # Get beam for dir2 ships
+                                b2 = estimate_beam(get_loa_midpoint(loa_k))
+                                if loa_k < len(beam2) and type_l < len(beam2[loa_k]):
+                                    b_list = beam2[loa_k][type_l]
+                                    if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
+                                        b2 = float(np.mean(b_list))
+                                    elif isinstance(b_list, (int, float)):
+                                        b2 = float(b_list)
+
+                                # Calculate head-on collision candidates using loaded lateral distributions
+                                n_g_headon = get_head_on_collision_candidates(
+                                    Q1=q1, Q2=q2,
+                                    V1=v1_ms, V2=v2_ms,
+                                    mu1=mu1_lat, mu2=mu2_lat,
+                                    sigma1=sigma1_lat, sigma2=sigma2_lat,
+                                    B1=b1, B2=b2,
+                                    L_w=leg_length_m
+                                )
+                                leg_head_on += n_g_headon * pc_headon
+
+            # Process overtaking collisions (same direction, different speeds)
+            for dir_idx, dir_key in enumerate(dir_keys):
+                dir_data = leg_dirs.get(dir_key, {})
+                freq = np.array(dir_data.get('Frequency (ships/year)', []))
+                speed = np.array(dir_data.get('Speed (knots)', []))
+                beam = np.array(dir_data.get('Ship Beam (meters)', []))
+
+                # Get lateral distribution for this direction from loaded data
+                mu_ot, sigma_ot = _get_weighted_mu_sigma(seg_info, dir_idx)
+
+                # Collect all ship cells in this direction
+                ship_cells: list[tuple[int, int, float, float, float]] = []  # (loa_i, type_j, freq, speed_ms, beam)
+                for loa_i in range(len(freq) if hasattr(freq, '__len__') else 0):
+                    for type_j in range(len(freq[loa_i]) if loa_i < len(freq) and hasattr(freq[loa_i], '__len__') else 0):
+                        q = float(freq[loa_i][type_j]) if loa_i < len(freq) and type_j < len(freq[loa_i]) else 0.0
+                        if q <= 0 or not np.isfinite(q):
+                            continue
+
+                        v_kts = 10.0
+                        if loa_i < len(speed) and type_j < len(speed[loa_i]):
+                            s_list = speed[loa_i][type_j]
+                            if isinstance(s_list, (list, np.ndarray)) and len(s_list) > 0:
+                                v_kts = float(np.mean(s_list))
+                            elif isinstance(s_list, (int, float)):
+                                v_kts = float(s_list)
+                        v_ms = v_kts * 1852.0 / 3600.0
+
+                        b = estimate_beam(get_loa_midpoint(loa_i))
+                        if loa_i < len(beam) and type_j < len(beam[loa_i]):
+                            b_list = beam[loa_i][type_j]
+                            if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
+                                b = float(np.mean(b_list))
+                            elif isinstance(b_list, (int, float)):
+                                b = float(b_list)
+
+                        ship_cells.append((loa_i, type_j, q, v_ms, b))
+
+                # Pairwise overtaking between all ship cells in same direction
+                for i, (loa_i, type_i, q_fast, v_fast, b_fast) in enumerate(ship_cells):
+                    for j, (loa_j, type_j, q_slow, v_slow, b_slow) in enumerate(ship_cells):
+                        if i == j:
+                            continue
+                        if v_fast <= v_slow:
+                            continue  # No overtaking if not faster
+
+                        n_g_overtaking = get_overtaking_collision_candidates(
+                            Q_fast=q_fast, Q_slow=q_slow,
+                            V_fast=v_fast, V_slow=v_slow,
+                            mu_fast=mu_ot, mu_slow=mu_ot,
+                            sigma_fast=sigma_ot, sigma_slow=sigma_ot,
+                            B_fast=b_fast, B_slow=b_slow,
+                            L_w=leg_length_m
+                        )
+                        leg_overtaking += n_g_overtaking * pc_overtaking
+
+            # Bend collisions (at waypoints between consecutive legs)
+            # Simplified: use average ship dimensions and traffic for this leg
+            avg_freq = 0.0
+            avg_length = 150.0
+            avg_beam = 25.0
+            count = 0
+            for dir_key in dir_keys:
+                dir_data = leg_dirs.get(dir_key, {})
+                freq = np.array(dir_data.get('Frequency (ships/year)', []))
+                for loa_i in range(len(freq) if hasattr(freq, '__len__') else 0):
+                    for type_j in range(len(freq[loa_i]) if loa_i < len(freq) and hasattr(freq[loa_i], '__len__') else 0):
+                        q = float(freq[loa_i][type_j]) if loa_i < len(freq) and type_j < len(freq[loa_i]) else 0.0
+                        if q > 0:
+                            avg_freq += q
+                            avg_length = (avg_length * count + get_loa_midpoint(loa_i)) / (count + 1)
+                            avg_beam = (avg_beam * count + estimate_beam(get_loa_midpoint(loa_i))) / (count + 1)
+                            count += 1
+
+            # Bend collisions should only be calculated when there's an actual bend
+            # at a waypoint between consecutive legs. Default to 0 (no bend).
+            # Only calculate if segment_data explicitly specifies a bend_angle > 5 degrees.
+            bend_angle_deg = float(seg_info.get('bend_angle', 0.0))
+            bend_angle_rad = bend_angle_deg * np.pi / 180.0
+
+            # Only calculate bend collision if there's a meaningful angle change (>5 degrees)
+            if avg_freq > 0 and bend_angle_deg > 5.0:
+                p_no_turn = 0.01  # Probability of failing to turn at bend
+                n_g_bend = get_bend_collision_candidates(
+                    Q=avg_freq,
+                    P_no_turn=p_no_turn,
+                    L=avg_length,
+                    B=avg_beam,
+                    theta=bend_angle_rad
+                )
+                leg_bend += n_g_bend * pc_bend
+
+            # Store leg results
+            by_leg[leg_key] = {
+                'head_on': leg_head_on,
+                'overtaking': leg_overtaking,
+                'bend': leg_bend,
+            }
+
+            total_head_on += leg_head_on
+            total_overtaking += leg_overtaking
+            total_bend += leg_bend
+
+            processed += 1
+            self._report_progress(
+                'spatial',
+                processed / total_legs * 0.8,
+                f"Processing leg {leg_key} ({processed}/{total_legs})..."
+            )
+
+        # Crossing collisions between different legs
+        self._report_progress('cascade', 0.0, "Calculating crossing collisions...")
+        crossing_pairs_processed = 0
+        total_pairs = total_legs * (total_legs - 1) // 2
+
+        def _parse_point(pt_str: str) -> tuple[float, float] | None:
+            """Parse 'x y' coordinate string to (x, y) tuple."""
+            if not pt_str:
+                return None
+            parts = str(pt_str).strip().split()
+            if len(parts) >= 2:
+                try:
+                    return (float(parts[0]), float(parts[1]))
+                except (ValueError, TypeError):
+                    pass
+            return None
+
+        def _calc_bearing(start: tuple[float, float], end: tuple[float, float]) -> float:
+            """Calculate bearing in degrees (0=N, CW) from start to end (lon/lat)."""
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            bearing = np.degrees(np.arctan2(dx, dy)) % 360.0
+            return bearing
+
+        def _points_match(p1: tuple[float, float] | None, p2: tuple[float, float] | None,
+                          tol: float = 1e-6) -> bool:
+            """Check if two coordinate points are the same within tolerance."""
+            if p1 is None or p2 is None:
+                return False
+            return abs(p1[0] - p2[0]) < tol and abs(p1[1] - p2[1]) < tol
+
+        for i, leg1_key in enumerate(leg_keys):
+            for j, leg2_key in enumerate(leg_keys):
+                if j <= i:
+                    continue  # Avoid double counting
+
+                seg1 = segment_data.get(leg1_key, {})
+                seg2 = segment_data.get(leg2_key, {})
+
+                # Parse endpoints
+                s1_start = _parse_point(seg1.get('Start_Point', ''))
+                s1_end = _parse_point(seg1.get('End_Point', ''))
+                s2_start = _parse_point(seg2.get('Start_Point', ''))
+                s2_end = _parse_point(seg2.get('End_Point', ''))
+
+                # Only compute crossing if the legs share a waypoint
+                shares_waypoint = (
+                    _points_match(s1_start, s2_start) or _points_match(s1_start, s2_end) or
+                    _points_match(s1_end, s2_start) or _points_match(s1_end, s2_end)
+                )
+                if not shares_waypoint:
+                    crossing_pairs_processed += 1
+                    continue
+
+                # Calculate bearing from Start_Point/End_Point if not in segment_data
+                if 'bearing' in seg1 and seg1['bearing']:
+                    bearing1 = float(seg1['bearing'])
+                elif s1_start and s1_end:
+                    bearing1 = _calc_bearing(s1_start, s1_end)
+                else:
+                    crossing_pairs_processed += 1
+                    continue
+
+                if 'bearing' in seg2 and seg2['bearing']:
+                    bearing2 = float(seg2['bearing'])
+                elif s2_start and s2_end:
+                    bearing2 = _calc_bearing(s2_start, s2_end)
+                else:
+                    crossing_pairs_processed += 1
+                    continue
+
+                crossing_angle = abs(bearing1 - bearing2) % 180.0
+                if crossing_angle > 90:
+                    crossing_angle = 180 - crossing_angle
+                crossing_angle_rad = crossing_angle * np.pi / 180.0
+
+                if crossing_angle_rad < 0.1:  # Nearly parallel, not a crossing
+                    crossing_pairs_processed += 1
+                    continue
+
+                # Get traffic from both legs
+                leg1_dirs = traffic_data.get(leg1_key, {})
+                leg2_dirs = traffic_data.get(leg2_key, {})
+
+                for dir1_key in leg1_dirs:
+                    dir1_data = leg1_dirs.get(dir1_key, {})
+                    freq1 = np.array(dir1_data.get('Frequency (ships/year)', []))
+                    speed1 = np.array(dir1_data.get('Speed (knots)', []))
+                    beam1 = np.array(dir1_data.get('Ship Beam (meters)', []))
+
+                    for dir2_key in leg2_dirs:
+                        dir2_data = leg2_dirs.get(dir2_key, {})
+                        freq2 = np.array(dir2_data.get('Frequency (ships/year)', []))
+                        speed2 = np.array(dir2_data.get('Speed (knots)', []))
+                        beam2 = np.array(dir2_data.get('Ship Beam (meters)', []))
+
+                        # Iterate ship categories
+                        for loa_i in range(len(freq1) if hasattr(freq1, '__len__') else 0):
+                            for type_j in range(len(freq1[loa_i]) if loa_i < len(freq1) and hasattr(freq1[loa_i], '__len__') else 0):
+                                q1 = float(freq1[loa_i][type_j]) if loa_i < len(freq1) and type_j < len(freq1[loa_i]) else 0.0
+                                if q1 <= 0 or not np.isfinite(q1):
+                                    continue
+
+                                v1_kts = 10.0
+                                if loa_i < len(speed1) and type_j < len(speed1[loa_i]):
+                                    s_list = speed1[loa_i][type_j]
+                                    if isinstance(s_list, (list, np.ndarray)) and len(s_list) > 0:
+                                        v1_kts = float(np.mean(s_list))
+                                    elif isinstance(s_list, (int, float)):
+                                        v1_kts = float(s_list)
+                                v1_ms = v1_kts * 1852.0 / 3600.0
+
+                                l1 = get_loa_midpoint(loa_i)
+                                b1 = estimate_beam(l1)
+                                if loa_i < len(beam1) and type_j < len(beam1[loa_i]):
+                                    b_list = beam1[loa_i][type_j]
+                                    if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
+                                        b1 = float(np.mean(b_list))
+                                    elif isinstance(b_list, (int, float)):
+                                        b1 = float(b_list)
+
+                                for loa_k in range(len(freq2) if hasattr(freq2, '__len__') else 0):
+                                    for type_l in range(len(freq2[loa_k]) if loa_k < len(freq2) and hasattr(freq2[loa_k], '__len__') else 0):
+                                        q2 = float(freq2[loa_k][type_l]) if loa_k < len(freq2) and type_l < len(freq2[loa_k]) else 0.0
+                                        if q2 <= 0 or not np.isfinite(q2):
+                                            continue
+
+                                        v2_kts = 10.0
+                                        if loa_k < len(speed2) and type_l < len(speed2[loa_k]):
+                                            s_list = speed2[loa_k][type_l]
+                                            if isinstance(s_list, (list, np.ndarray)) and len(s_list) > 0:
+                                                v2_kts = float(np.mean(s_list))
+                                            elif isinstance(s_list, (int, float)):
+                                                v2_kts = float(s_list)
+                                        v2_ms = v2_kts * 1852.0 / 3600.0
+
+                                        l2 = get_loa_midpoint(loa_k)
+                                        b2 = estimate_beam(l2)
+                                        if loa_k < len(beam2) and type_l < len(beam2[loa_k]):
+                                            b_list = beam2[loa_k][type_l]
+                                            if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
+                                                b2 = float(np.mean(b_list))
+                                            elif isinstance(b_list, (int, float)):
+                                                b2 = float(b_list)
+
+                                        n_g_crossing = get_crossing_collision_candidates(
+                                            Q1=q1, Q2=q2,
+                                            V1=v1_ms, V2=v2_ms,
+                                            L1=l1, L2=l2,
+                                            B1=b1, B2=b2,
+                                            theta=crossing_angle_rad
+                                        )
+                                        total_crossing += n_g_crossing * pc_crossing
+
+                crossing_pairs_processed += 1
+                if total_pairs > 0:
+                    self._report_progress(
+                        'cascade',
+                        crossing_pairs_processed / total_pairs,
+                        f"Processing crossing pair {leg1_key}-{leg2_key}..."
+                    )
+
+        # Compile results
+        result['head_on'] = total_head_on
+        result['overtaking'] = total_overtaking
+        result['crossing'] = total_crossing
+        result['bend'] = total_bend
+        result['total'] = total_head_on + total_overtaking + total_crossing + total_bend
+
+        self.ship_collision_prob = result['total']
+        self.collision_report = {
+            'totals': result,
+            'by_leg': by_leg,
+            'causation_factors': {
+                'headon': pc_headon,
+                'overtaking': pc_overtaking,
+                'crossing': pc_crossing,
+                'bend': pc_bend,
+            },
+        }
+
+        self._report_progress('layers', 1.0, "Ship collision calculation complete")
+
+        # Update UI with collision results
+        try:
+            self.p.main_widget.LEPHeadOnCollision.setText(f"{result['head_on']:.3e}")
+            self.p.main_widget.LEPOvertakingCollision.setText(f"{result['overtaking']:.3e}")
+            self.p.main_widget.LEPCrossingCollision.setText(f"{result['crossing']:.3e}")
+            self.p.main_widget.LEPMergingCollision.setText(f"{result['bend']:.3e}")
+        except Exception as e:
+            pass  # UI update failed, but calculation succeeded
+
+        return result
+
+    def run_powered_grounding_model(self, data: dict[str, Any]) -> float:
+        """Calculate powered grounding probability using shadow-aware ray casting.
+
+        Category II: ships fail to turn at a bend and continue straight,
+        potentially running aground on shallow depth areas.
+
+        N_II = Pc * Q * mass * exp(-d_mean / (ai * V))
+
+        Shadow effect: closer depth areas block the distribution for areas
+        behind them.  Only depths shallower than ship draught count.
+        """
+        total = 0.0
+        traffic_data = data.get('traffic_data', {})
+        segment_data = data.get('segment_data', {})
+        depths_list = data.get('depths', [])
+        pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
+
+        if not traffic_data or not segment_data or not depths_list:
+            try:
+                self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
+            except Exception:
+                pass
+            return total
+
+        pc_grounding = float(pc_vals.get('grounding', pc_vals.get('p_pc', 1.6e-4)))
+
+        # Build projector
+        try:
+            first_seg = segment_data[list(segment_data.keys())[0]]
+            lon0, lat0 = _parse_point(first_seg["Start_Point"])
+            proj = _PoweredProjector(lon0, lat0)
+        except Exception:
+            try:
+                self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
+            except Exception:
+                pass
+            return total
+
+        # Collect all unique draughts from traffic data so we can compute
+        # shadow-aware results once per draught bracket.
+        draught_set: set[float] = set()
+        for leg_key, leg_dirs in traffic_data.items():
+            for dir_key, dir_data in leg_dirs.items():
+                draught_array = dir_data.get('Draught (meters)', [])
+                for row in draught_array:
+                    if not hasattr(row, '__iter__'):
+                        continue
+                    for d_val in row:
+                        try:
+                            v = float(d_val) if d_val != '' else 0.0
+                            if v > 0:
+                                draught_set.add(v)
+                        except (ValueError, TypeError):
+                            pass
+        if not draught_set:
+            draught_set = {5.0}  # Default draught
+
+        # For each unique draught, build obstacle list and run shadow computation
+        # Cache: draught -> {(seg_id, dir_idx, obs_key) -> {mass, mean_dist}}
+        draught_results: dict[float, list[dict]] = {}
+        for max_draft in sorted(draught_set):
+            try:
+                legs, all_obstacles, _, _, _ = _build_legs_and_obstacles(
+                    data, proj, mode="grounding", max_draft=max_draft)
+                if all_obstacles:
+                    comps = _run_all_computations(legs, all_obstacles)
+                    draught_results[max_draft] = comps
+                else:
+                    draught_results[max_draft] = []
+            except Exception:
+                draught_results[max_draft] = []
+
+        # Sum per-ship-type contributions using pre-computed shadow results
+        for leg_key, leg_dirs in traffic_data.items():
+            seg_info = segment_data.get(leg_key, {})
+            ai_per_dir = [
+                float(seg_info.get('ai1', 180.0)),
+                float(seg_info.get('ai2', 180.0)),
+            ]
+
+            for dir_idx, (dir_key, dir_data) in enumerate(leg_dirs.items()):
+                ai_seconds = ai_per_dir[min(dir_idx, 1)]
+                freq_array = dir_data.get('Frequency (ships/year)', [])
+                draught_array = dir_data.get('Draught (meters)', [])
+                speed_array = dir_data.get('Speed (knots)', [])
+
+                for loa_i, freq_row in enumerate(freq_array):
+                    if not hasattr(freq_row, '__iter__'):
+                        continue
+                    for type_j, freq_val in enumerate(freq_row):
+                        try:
+                            q = float(freq_val) if freq_val != '' else 0.0
+                        except (ValueError, TypeError):
+                            q = 0.0
+                        if q <= 0:
+                            continue
+
+                        # Get ship draught
+                        draught = 5.0
+                        try:
+                            if loa_i < len(draught_array) and type_j < len(draught_array[loa_i]):
+                                d_val = draught_array[loa_i][type_j]
+                                if isinstance(d_val, (int, float)) and d_val > 0:
+                                    draught = float(d_val)
+                                elif isinstance(d_val, str) and d_val != '':
+                                    draught = float(d_val)
+                        except Exception:
+                            pass
+
+                        # Get ship speed
+                        speed_kts = 10.0
+                        try:
+                            if loa_i < len(speed_array) and type_j < len(speed_array[loa_i]):
+                                s_val = speed_array[loa_i][type_j]
+                                if isinstance(s_val, (int, float)) and s_val > 0:
+                                    speed_kts = float(s_val)
+                                elif isinstance(s_val, str) and s_val != '':
+                                    speed_kts = float(s_val)
+                        except Exception:
+                            pass
+                        speed_ms = speed_kts * 1852.0 / 3600.0
+
+                        # Find the closest matching draught bracket
+                        best_draft = min(draught_set,
+                                         key=lambda d: abs(d - draught))
+                        comps = draught_results.get(best_draft, [])
+
+                        # Sum over matching leg/direction computations
+                        for comp in comps:
+                            if comp["seg_id"] != leg_key:
+                                continue
+                            if comp["dir_idx"] != dir_idx:
+                                continue
+                            for key, s in comp["summaries"].items():
+                                mass = s["mass"]
+                                d_mean = s["mean_dist"]
+                                if mass <= 0 or d_mean <= 0:
+                                    continue
+                                recovery = ai_seconds * speed_ms
+                                if recovery <= 0:
+                                    continue
+                                prob_not_rec = exp(-d_mean / recovery)
+                                total += pc_grounding * q * mass * prob_not_rec
+
+        try:
+            self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
+        except Exception:
+            pass
+        return total
+
+    def run_powered_allision_model(self, data: dict[str, Any]) -> float:
+        """Calculate powered allision probability using shadow-aware ray casting.
+
+        Category II: ships fail to turn at a bend and continue straight,
+        potentially hitting structures (objects).
+
+        N_II = Pc * Q * mass * exp(-d_mean / (ai * V))
+
+        Shadow effect: closer obstacles block the distribution for obstacles
+        behind them.  Mass = fraction of lateral distribution intercepted.
+        """
+        total = 0.0
+        traffic_data = data.get('traffic_data', {})
+        segment_data = data.get('segment_data', {})
+        objects_list = data.get('objects', [])
+        pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
+
+        if not traffic_data or not segment_data or not objects_list:
+            try:
+                self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
+            except Exception:
+                pass
+            return total
+
+        pc_allision = float(pc_vals.get('allision', 1.9e-4))
+
+        # Build projector and geometry once
+        try:
+            first_seg = segment_data[list(segment_data.keys())[0]]
+            lon0, lat0 = _parse_point(first_seg["Start_Point"])
+            proj = _PoweredProjector(lon0, lat0)
+            legs, all_obstacles, _, _, _ = _build_legs_and_obstacles(
+                data, proj, mode="allision", max_draft=0)
+        except Exception:
+            try:
+                self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
+            except Exception:
+                pass
+            return total
+
+        if not all_obstacles:
+            try:
+                self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
+            except Exception:
+                pass
+            return total
+
+        # Shadow-aware ray casting: compute mass & d_mean per obstacle
+        # per leg/direction (geometry only, independent of ship type)
+        computations = _run_all_computations(legs, all_obstacles)
+
+        # For each computation (leg/dir with hits), sum per-ship-type
+        for comp in computations:
+            seg_id = comp["seg_id"]
+            dir_idx = comp["dir_idx"]
+            d_info = comp["dir_info"]
+            ai_seconds = d_info["ai"]
+
+            leg_dirs = traffic_data.get(seg_id, {})
+            dir_keys = list(leg_dirs.keys())
+            if dir_idx >= len(dir_keys):
+                continue
+            dir_data = leg_dirs[dir_keys[dir_idx]]
+
+            freq_array = dir_data.get('Frequency (ships/year)', [])
+            speed_array = dir_data.get('Speed (knots)', [])
+
+            for loa_i, freq_row in enumerate(freq_array):
+                if not hasattr(freq_row, '__iter__'):
+                    continue
+                for type_j, freq_val in enumerate(freq_row):
+                    try:
+                        q = float(freq_val) if freq_val != '' else 0.0
+                    except (ValueError, TypeError):
+                        q = 0.0
+                    if q <= 0:
+                        continue
+
+                    speed_kts = 10.0
+                    try:
+                        if loa_i < len(speed_array) and type_j < len(speed_array[loa_i]):
+                            s_val = speed_array[loa_i][type_j]
+                            if isinstance(s_val, (int, float)) and s_val > 0:
+                                speed_kts = float(s_val)
+                            elif isinstance(s_val, str) and s_val != '':
+                                speed_kts = float(s_val)
+                    except Exception:
+                        pass
+                    speed_ms = speed_kts * 1852.0 / 3600.0
+
+                    # Sum over obstacles hit by this leg/direction
+                    for key, s in comp["summaries"].items():
+                        mass = s["mass"]
+                        d_mean = s["mean_dist"]
+                        if mass <= 0 or d_mean <= 0:
+                            continue
+                        recovery = ai_seconds * speed_ms
+                        if recovery <= 0:
+                            continue
+                        prob_not_rec = exp(-d_mean / recovery)
+                        total += pc_allision * q * mass * prob_not_rec
+
+        try:
+            self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
+        except Exception:
+            pass
+        return total
 
     def get_drifting_report(self) -> dict[str, Any] | None:
         return self.drifting_report
@@ -1383,6 +2785,46 @@ class Calculation:
             weights,
             data = data,
             distance=longest_length * 3.0
+        )
+        dialog.exec_()
+
+    def run_powered_allision_visualization(self, data: dict[str, Any]) -> None:
+        """Show an interactive Cat II powered allision visualisation dialog.
+
+        Uses the same ``ShowGeomRes`` dialog as the drifting visualisation but
+        populates it with shadow-aware Cat II ray-casting plots showing how
+        ships that miss a turn may hit objects (structures).
+        """
+        if not data.get('traffic_data') or not data.get('segment_data'):
+            return
+        try:
+            max_draft = float(data.get('max_draft', 15.0))
+        except (TypeError, ValueError):
+            max_draft = 15.0
+
+        dialog = ShowGeomRes(self.p.main_widget)
+        PoweredOverlapVisualizer.show_in_dialog(
+            dialog, data, mode="allision", max_draft=max_draft,
+        )
+        dialog.exec_()
+
+    def run_powered_grounding_visualization(self, data: dict[str, Any]) -> None:
+        """Show an interactive Cat II powered grounding visualisation dialog.
+
+        Uses the same ``ShowGeomRes`` dialog as the drifting visualisation but
+        populates it with shadow-aware Cat II ray-casting plots showing how
+        ships that miss a turn may run aground on shallow depth areas.
+        """
+        if not data.get('traffic_data') or not data.get('segment_data'):
+            return
+        try:
+            max_draft = float(data.get('max_draft', 15.0))
+        except (TypeError, ValueError):
+            max_draft = 15.0
+
+        dialog = ShowGeomRes(self.p.main_widget)
+        PoweredOverlapVisualizer.show_in_dialog(
+            dialog, data, mode="grounding", max_draft=max_draft,
         )
         dialog.exec_()
 

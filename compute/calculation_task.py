@@ -60,6 +60,10 @@ class CalculationTask(QgsTask):
         """
         self._progress_callback = callback
 
+    def _update_description(self, text: str) -> None:
+        """Update the task description shown in the QGIS task manager."""
+        self.setDescription(f"OMRAT: {text}")
+
     def run(self) -> bool:
         """
         Execute the calculation in a background thread.
@@ -71,7 +75,7 @@ class CalculationTask(QgsTask):
             True if successful, False if failed or cancelled
         """
         QgsMessageLog.logMessage(
-            'Starting drifting model calculation...',
+            'Starting calculation...',
             'OMRAT',
             Qgis.Info
         )
@@ -89,22 +93,43 @@ class CalculationTask(QgsTask):
                         progress_pct = int((completed / total) * 100)
                         self.setProgress(progress_pct)
 
+                    # Update task description with current status
+                    self._update_description(message)
+
                     # Emit custom signal for detailed progress
                     self.progress_updated.emit(completed, total, message)
-
-                    # Log to QGIS message log
-                    QgsMessageLog.logMessage(
-                        f"Progress: {completed}/{total} - {message}",
-                        'OMRAT',
-                        Qgis.Info
-                    )
 
                     return True  # Continue calculation
 
                 self.calc.set_progress_callback(progress_wrapper)
 
-            # Run the actual calculation
+            # Phase 1: Drifting model
+            self._update_description("Drifting model - preparing...")
             self.calc.run_drifting_model(self.data)
+
+            if self.isCanceled():
+                return False
+
+            # Phase 2: Ship-ship collisions
+            self._update_description("Ship-ship collisions...")
+            self.setProgress(0)
+            self.calc.run_ship_collision_model(self.data)
+
+            if self.isCanceled():
+                return False
+
+            # Phase 3: Powered grounding
+            self._update_description("Powered grounding...")
+            self.setProgress(0)
+            self.calc.run_powered_grounding_model(self.data)
+
+            if self.isCanceled():
+                return False
+
+            # Phase 4: Powered allision
+            self._update_description("Powered allision...")
+            self.setProgress(0)
+            self.calc.run_powered_allision_model(self.data)
 
             # Check if cancelled during execution
             if self.isCanceled():
@@ -115,8 +140,10 @@ class CalculationTask(QgsTask):
                 )
                 return False
 
+            self._update_description("Complete")
+            self.setProgress(100)
             QgsMessageLog.logMessage(
-                'Drifting model calculation completed successfully',
+                'All calculations completed successfully',
                 'OMRAT',
                 Qgis.Success
             )

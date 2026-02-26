@@ -29,6 +29,7 @@ class Traffic:
         self.omrat = omrat
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = self.omrat.traffic_data
         self.c_seg = "1"
+        self.c_di = ""
         self.current_table = []
         self.variables = ['Frequency (ships/year)', 'Speed (knots)', 'Draught (meters)', 'Ship heights (meters)', 'Ship Beam (meters)']
         self.last_var = 'Frequency (ships/year)'
@@ -138,6 +139,8 @@ class Traffic:
     
     def save(self):
         """Saves the previous "table" in traffic_data"""
+        if any([self.c_seg == "", self.c_di == "", self.last_var == ""]):
+            return
         rows = self.dw.twTrafficData.rowCount()
         cols = self.dw.twTrafficData.columnCount()
         typ = self.last_var

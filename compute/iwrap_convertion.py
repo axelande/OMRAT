@@ -1,10 +1,31 @@
 # Detailed mapping between .omrat and IWRAP XML schema
+"""IWRAP XML conversion module for .omrat format.
+
+This module provides bidirectional conversion between OMRAT's .omrat JSON format
+and IWRAP's XML format.
+
+Usage Examples:
+    # Export .omrat to IWRAP XML:
+    write_iwrap_xml('project.omrat', 'output.xml')
+
+    # Import IWRAP XML to .omrat:
+    read_iwrap_xml('input.xml', 'project.omrat')
+
+    # Parse XML to dictionary (without saving):
+    data = parse_iwrap_xml('input.xml')
+
+Note: The import function gracefully handles missing fields like 'dist1' and 'dist2'
+      which don't exist in IWRAP XML files, preventing crashes during import.
+"""
+import csv
 import json
+import math
+import os
 import re
 import xml.etree.ElementTree as ET
 import uuid
 from xml.dom import minidom
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Geometry fixing utilities
 try:
@@ -912,5 +933,790 @@ def write_iwrap_xml(json_path: str, output_path: str):
 #main('tests/example_data/proj.omrat', 'tests/example_data/iwrap.xml')
 #run_structure_checks('tests/example_data/proj.omrat')
 
+# ── IWRAP Ship Type Codes mapping ──────────────────────────────────────
+# Maps IWRAP XML ship type names to numeric Ship Code (1-14) used in the
+# Ship Type Codes lookup table.
+IWRAP_SHIP_TYPE_CODES: Dict[str, int] = {
+    'Crude oil tanker': 1,
+    'Oil products tanker': 2,
+    'Chemical tanker': 3,
+    'Gas tanker': 4,
+    'Container ship': 5,
+    'General cargo ship': 6,
+    'Bulk carrier': 7,
+    'Ro-Ro cargo ship': 8,
+    'Passenger ship': 9,
+    'Fast ferry': 10,
+    'Support ship': 11,
+    'Fishing ship': 12,
+    'Pleasure boat': 13,
+    'Other ship': 14,
+}
+
+
+def _load_ship_type_codes(csv_path: str) -> Dict[Tuple[int, int], dict]:
+    """Load the Ship Type Codes CSV into a lookup dictionary.
+
+    The CSV contains expected ship dimensions per (ship_code, lpp_min) pair.
+    Key columns used: E(L), E(L/B), E(B/D), E(D/T), E(V).
+
+    From these, we derive:
+        Beam     = E(L) / E(L/B)
+        Depth_m  = Beam / E(B/D)
+        Draught  = Depth_m / E(D/T)
+        Speed    = E(V)
+
+    Args:
+        csv_path: Path to Ship Type Codes.csv
+
+    Returns:
+        Dict mapping (ship_code, lpp_min) -> row dict with derived values.
+        Returns empty dict if file not found or parsing fails.
+    """
+    lookup: Dict[Tuple[int, int], dict] = {}
+    try:
+        with open(csv_path, 'r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f, delimiter=';')
+            for row in reader:
+                try:
+                    ship_code = int(row['Ship Code'])
+                    lpp_min = int(row['Lpp min'])
+                    ntotal = int(row.get('Ntotal', 0))
+
+                    # Skip aggregate rows (lpp_min=-1) and empty rows
+                    if lpp_min < 0 or ntotal == 0:
+                        continue
+
+                    # Parse the key ratio columns
+                    e_l = float(row.get('E(L)', 0) or 0)
+                    e_lb = float(row.get('E(L/B)', 0) or 0)
+                    e_bd = float(row.get('E(B/D)', 0) or 0)
+                    e_dt = float(row.get('E(D/T)', 0) or 0)
+                    e_v = float(row.get('E(V)', 0) or 0)
+
+                    # Derive dimensions (only if ratios are valid)
+                    beam = e_l / e_lb if e_lb > 0 else 0
+                    depth_m = beam / e_bd if e_bd > 0 else 0
+                    draught = depth_m / e_dt if e_dt > 0 else 0
+
+                    lookup[(ship_code, lpp_min)] = {
+                        'e_l': e_l,
+                        'beam': beam,
+                        'depth_moulded': depth_m,
+                        'draught': draught,
+                        'speed': e_v,
+                    }
+                except (ValueError, KeyError, ZeroDivisionError):
+                    continue
+    except (FileNotFoundError, OSError):
+        pass
+    return lookup
+
+
+def _find_ship_type_csv(xml_path: str) -> Optional[str]:
+    """Try to locate Ship Type Codes.csv near the XML file or in known paths."""
+    candidates = [
+        os.path.join(os.path.dirname(xml_path), 'Ship Type Codes.csv'),
+        os.path.join(os.path.dirname(__file__), 'Ship Type Codes.csv'),
+        os.path.join(os.path.dirname(__file__), '..', 'tests', 'example_data', 'Ship Type Codes.csv'),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
+    """Parse IWRAP XML file and convert to .omrat JSON format.
+
+    Handles missing fields gracefully, particularly 'dist1' and 'dist2' which
+    don't exist in IWRAP XML files.
+
+    Args:
+        xml_path: Path to the IWRAP XML file
+        debug: If True, print debug information during parsing
+
+    Returns:
+        Dictionary in .omrat JSON format
+    """
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Load Ship Type Codes lookup table for deriving dimensions when IWRAP
+    # provides zero values for draught, beam, etc.
+    stc_csv = _find_ship_type_csv(xml_path)
+    ship_type_codes = _load_ship_type_codes(stc_csv) if stc_csv else {}
+    if debug:
+        if ship_type_codes:
+            print(f"  Loaded Ship Type Codes from {stc_csv} ({len(ship_type_codes)} entries)")
+        else:
+            print("  Ship Type Codes.csv not found; will fall back to L/12 draught estimate")
+
+    result = {
+        'project_name': root.get('name', 'Imported Project'),
+        'traffic_data': {},
+        'segment_data': {},
+        'drift': {},
+        'depths': [],
+        'objects': [],
+        'ship_categories': None,
+        'pc': {
+            'p_pc': 0.00016,  # Default value
+            'd_pc': 1  # Default value
+        },
+    }
+
+    # Import basic metadata
+    for attr in ['fv', 'major', 'minor', 'seasons', 'current_season']:
+        if root.get(attr) is not None:
+            result[attr] = root.get(attr)
+
+    # Import drifting settings with required defaults
+    drifting_el = root.find('drifting')
+    drift_data = {
+        'drift_p': 1,  # Default (must be int)
+        'anchor_p': 0.95,  # Default
+        'anchor_d': 7,  # Default (must be int)
+        'speed': 1.0,  # Default
+        'rose': {str(angle): 0.125 for angle in [0, 45, 90, 135, 180, 225, 270, 315]},  # Equal distribution
+        'repair': {
+            'func': '',  # Required field
+            'std': 0.95,
+            'loc': 0.2,
+            'scale': 0.85,
+            'use_lognormal': True
+        }
+    }
+
+    if drifting_el is not None:
+        if drifting_el.get('anchor_probability') is not None:
+            drift_data['anchor_p'] = float(drifting_el.get('anchor_probability'))
+            # drift_p must be int (probability as 0 or 1)
+            drift_data['drift_p'] = int(round(float(drifting_el.get('anchor_probability'))))
+        if drifting_el.get('max_anchor_depth') is not None:
+            drift_data['anchor_d'] = int(round(float(drifting_el.get('max_anchor_depth'))))
+        if drifting_el.get('drift_speed') is not None:
+            drift_data['speed'] = float(drifting_el.get('drift_speed'))
+
+        # Parse repair time
+        repair_el = drifting_el.find('repair_time')
+        if repair_el is not None:
+            for attr in ['combi', 'param_0', 'param_1', 'param_2', 'type', 'weight']:
+                val = repair_el.get(attr)
+                if val is not None:
+                    try:
+                        drift_data['repair'][attr] = float(val)
+                    except ValueError:
+                        drift_data['repair'][attr] = val
+
+            # Map IWRAP repair time to scipy.stats.lognorm(s, loc, scale) format.
+            # IWRAP combi "/Mean/Std. Dev./Lower Bound" means:
+            #   param_0 = Mean of repair time (hours)
+            #   param_1 = Std deviation of repair time (hours)
+            #   param_2 = Lower bound (minimum repair time, hours)
+            # scipy.stats.lognorm uses: s=shape(sigma), loc=shift, scale=exp(mu)
+            combi = repair_el.get('combi', '')
+            p0 = float(repair_el.get('param_0', 0))
+            p1 = float(repair_el.get('param_1', 0))
+            p2 = float(repair_el.get('param_2', 0))
+            if 'Mean' in combi and 'Std' in combi and 'Lower' in combi:
+                iwrap_mean = p0
+                iwrap_std = p1
+                iwrap_lower = p2
+                adj_mean = iwrap_mean - iwrap_lower
+                if adj_mean > 0 and iwrap_std > 0:
+                    sigma2 = math.log(1 + (iwrap_std / adj_mean) ** 2)
+                    sigma = math.sqrt(sigma2)
+                    mu = math.log(adj_mean) - sigma2 / 2
+                    drift_data['repair']['std'] = sigma       # shape parameter s
+                    drift_data['repair']['loc'] = iwrap_lower  # location (shift)
+                    drift_data['repair']['scale'] = math.exp(mu)  # scale
+                elif adj_mean > 0:
+                    # Zero std dev: use a small sigma to avoid degenerate distribution
+                    drift_data['repair']['std'] = 0.01
+                    drift_data['repair']['loc'] = iwrap_lower
+                    drift_data['repair']['scale'] = adj_mean
+            else:
+                # Unknown combi format: use params directly as scipy params
+                if 'param_0' in repair_el.attrib:
+                    drift_data['repair']['loc'] = p0
+                if 'param_1' in repair_el.attrib:
+                    drift_data['repair']['scale'] = p1
+                if 'param_2' in repair_el.attrib:
+                    drift_data['repair']['std'] = p2
+
+        # Parse drift directions (rose)
+        dd_el = drifting_el.find('drift_directions')
+        if dd_el is not None:
+            for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+                val = dd_el.get(f'angle_{angle}')
+                if val is not None:
+                    drift_data['rose'][str(angle)] = float(val)
+
+    result['drift'] = drift_data
+
+    # Import traffic distributions and build ship categories
+    td_map = {}  # Map guid to distribution data
+    all_ship_types = set()
+    all_length_intervals = set()
+
+    # Define IWRAP to OMRAT ship type mapping
+    iwrap_to_omrat_type = {
+        'Fishing ship': 'Fishing',
+        'Support ship': 'Towing',
+        'Pleasure boat': 'Pleasure Craft',
+        'Fast ferry': 'High speed craft (HSC)',
+        'Passenger ship': 'Passenger, all ships of this type',
+        'General cargo ship': 'Cargo, all ships of this type',
+        'Container ship': 'Cargo, all ships of this type',
+        'Bulk carrier': 'Cargo, all ships of this type',
+        'Ro-Ro cargo ship': 'Cargo, all ships of this type',
+        'Crude oil tanker': 'Tanker, all ships of this type',
+        'Oil products tanker': 'Tanker, all ships of this type',
+        'Chemical tanker': 'Tanker, all ships of this type',
+        'Gas tanker': 'Tanker, all ships of this type',
+        'Other ship': 'Other Type, all ships of this type',
+    }
+
+    tds_el = root.find('traffic_distributions')
+    if tds_el is not None:
+        if debug:
+            print(f"\n📊 Found {len(list(tds_el.findall('traffic_distribution')))} traffic distributions")
+
+        for td_el in tds_el.findall('traffic_distribution'):
+            guid = td_el.get('guid', '')
+            td_name = td_el.get('name', '')
+
+            # Parse shiptypes and categories
+            shiptypes_el = td_el.find('shiptypes')
+            categories_by_type_and_length = {}  # {(type, length_interval): cat_data}
+
+            if shiptypes_el is not None:
+                for st_el in shiptypes_el.findall('shiptype'):
+                    st_name = st_el.get('name', '')
+                    omrat_type = iwrap_to_omrat_type.get(st_name, 'Other Type, all ships of this type')
+                    all_ship_types.add(omrat_type)
+                    ship_code = IWRAP_SHIP_TYPE_CODES.get(st_name, 0)
+
+                    cats_el = st_el.find('categories')
+                    if cats_el is not None:
+                        for cat_el in cats_el.findall('category'):
+                            length_interval = cat_el.get('name', '0-25')
+                            all_length_intervals.add(length_interval)
+
+                            draught_val = float(cat_el.get('draught', 0))
+                            height_val = float(cat_el.get('height_1', 0))
+                            beam_val = float(cat_el.get('width', 0))
+
+                            # Derive missing dimensions from Ship Type Codes table
+                            # when IWRAP provides 0 values
+                            if (draught_val == 0 or beam_val == 0) and '-' in length_interval:
+                                try:
+                                    lpp_min = int(length_interval.split('-')[0])
+                                except (ValueError, IndexError):
+                                    lpp_min = -1
+
+                                stc_entry = ship_type_codes.get((ship_code, lpp_min))
+                                if stc_entry:
+                                    if draught_val == 0:
+                                        draught_val = round(stc_entry['draught'], 2)
+                                    if beam_val == 0:
+                                        beam_val = round(stc_entry['beam'], 2)
+                                    if debug:
+                                        print(f"    STC lookup ({st_name}, {length_interval}): "
+                                              f"draught={draught_val}m, beam={beam_val}m")
+                                elif draught_val == 0:
+                                    # Fallback: estimate draught from mid-length / 12
+                                    try:
+                                        parts = length_interval.split('-')
+                                        mid_length = (float(parts[0]) + float(parts[1])) / 2
+                                        draught_val = round(mid_length / 12.0, 2)
+                                        if debug:
+                                            print(f"    L/12 fallback ({st_name}, {length_interval}): "
+                                                  f"draught={draught_val}m")
+                                    except (ValueError, IndexError):
+                                        pass
+
+                            cat_data = {
+                                'shiptype': omrat_type,
+                                'length_interval': length_interval,
+                                'freq': float(cat_el.get('freq', 0)),
+                                'speed': float(cat_el.get('speed', 0)),
+                                'draught': draught_val,
+                                'height': height_val,
+                                'beam': beam_val,
+                            }
+                            categories_by_type_and_length[(omrat_type, length_interval)] = cat_data
+
+                            if debug and cat_data['freq'] > 0:
+                                print(f"  TD {td_name}: {omrat_type} ({length_interval}) = "
+                                      f"{cat_data['freq']} ships/yr, T={draught_val}m, B={beam_val}m")
+
+            td_map[guid] = {
+                'name': td_name,
+                'categories': categories_by_type_and_length,
+            }
+
+            if debug:
+                print(f"  Stored TD {guid}: {td_name} with {len(categories_by_type_and_length)} categories")
+
+    # Import waypoints (for building segment endpoints)
+    waypoint_map = {}  # Map guid to waypoint data
+    wps_el = root.find('waypoints')
+    if wps_el is not None:
+        for wp_el in wps_el.findall('waypoint'):
+            guid = wp_el.get('guid', '')
+            waypoint_map[guid] = {
+                'name': wp_el.get('name', ''),
+                'lat': float(wp_el.get('latitude', 0)),
+                'lon': float(wp_el.get('longitude', 0)),
+            }
+
+    # Import manoeuvring aspects legs (distribution parameters)
+    mal_map = {}  # Map guid to manoeuvring aspect data
+    mals_el = root.find('manoeuvring_aspects_legs')
+    if mals_el is not None:
+        for mal_el in mals_el.findall('manoeuvring_aspects_leg'):
+            guid = mal_el.get('guid', '')
+            md_el = mal_el.find('mixed_dist')
+
+            dist_params = {
+                'means': [],
+                'stds': [],
+                'weights': [],
+                'u_min': None,
+                'u_max': None,
+                'u_p': 0,
+            }
+
+            if md_el is not None:
+                normal_items = []
+                uniform_items = []
+
+                for item_el in md_el.findall('mixed_dist_item'):
+                    item_type = item_el.get('type', '')
+                    if item_type == 'Normal':
+                        normal_items.append({
+                            'param_0': float(item_el.get('param_0', 0)),
+                            'param_1': float(item_el.get('param_1', 0)),
+                            'weight': float(item_el.get('weight', 0)),
+                        })
+                    elif item_type == 'Uniform':
+                        uniform_items.append({
+                            'param_0': float(item_el.get('param_0', 0)),
+                            'param_1': float(item_el.get('param_1', 0)),
+                            'weight': float(item_el.get('weight', 0)),
+                        })
+
+                # Store normal distribution parameters
+                for item in normal_items:
+                    dist_params['means'].append(item['param_0'])
+                    dist_params['stds'].append(item['param_1'])
+                    dist_params['weights'].append(item['weight'])
+
+                # Store uniform distribution parameters
+                if uniform_items:
+                    item = uniform_items[0]  # Take first uniform item
+                    dist_params['u_min'] = item['param_0']
+                    dist_params['u_max'] = item['param_1']
+                    dist_params['u_p'] = item['weight']
+
+            mal_map[guid] = dist_params
+
+    # Import legs (segments)
+    legs_el = root.find('legs')
+    if legs_el is not None:
+        for idx, leg_el in enumerate(legs_el.findall('leg'), start=1):
+            leg_guid = leg_el.get('guid', '')
+            leg_name = leg_el.get('name', f'Leg_{idx}')
+
+            # Get waypoint coordinates
+            first_wp_guid = leg_el.get('first_waypoint_guid', '')
+            last_wp_guid = leg_el.get('last_waypoint_guid', '')
+
+            start_wp = waypoint_map.get(first_wp_guid, {})
+            end_wp = waypoint_map.get(last_wp_guid, {})
+
+            start_point = f"{start_wp.get('lon', 0)} {start_wp.get('lat', 0)}"
+            end_point = f"{end_wp.get('lon', 0)} {end_wp.get('lat', 0)}"
+
+            # Initialize segment with all required fields and defaults
+            segment = {
+                'Leg_name': leg_name,
+                'Width': int(round(float(leg_el.get('max_width', 0)))),
+                'Start_Point': start_point,
+                'End_Point': end_point,
+                'Dirs': ['East going', 'West going'],  # Required field
+                'line_length': 0.0,  # Will be calculated by system
+                'Route_Id': 0,  # Default route
+                'Segment_Id': str(idx),
+                # Initialize all distribution parameters with defaults
+                'mean1_1': 0.0, 'std1_1': 0.0, 'weight1_1': 0.0,
+                'mean1_2': 0.0, 'std1_2': 0.0, 'weight1_2': 0.0,
+                'mean1_3': 0.0, 'std1_3': 0.0, 'weight1_3': 0.0,
+                'mean2_1': 0.0, 'std2_1': 0.0, 'weight2_1': 0.0,
+                'mean2_2': 0.0, 'std2_2': 0.0, 'weight2_2': 0.0,
+                'mean2_3': 0.0, 'std2_3': 0.0, 'weight2_3': 0.0,
+                'u_min1': 0.0, 'u_max1': 0.0, 'u_p1': 0,
+                'u_min2': 0.0, 'u_max2': 0.0, 'u_p2': 0,
+                'ai1': 0.0, 'ai2': 0.0,
+                'dist1': [], 'dist2': [],  # Empty by default
+            }
+
+            # Get bearing angle
+            if leg_el.get('max_bearing_angle') is not None:
+                segment['ai1'] = float(leg_el.get('max_bearing_angle'))
+                segment['ai2'] = float(leg_el.get('max_bearing_angle'))  # Same for both directions
+
+            # Get manoeuvring aspects for both directions
+            ftl_guid = leg_el.get('man_aspects_first_to_last_guid', '')
+            ltf_guid = leg_el.get('man_aspects_last_to_first_guid', '')
+
+            # Direction 1 (first to last)
+            if ftl_guid in mal_map:
+                mal_data = mal_map[ftl_guid]
+                for i, (mean, std, weight) in enumerate(zip(
+                    mal_data['means'], mal_data['stds'], mal_data['weights']
+                ), start=1):
+                    segment[f'mean1_{i}'] = mean
+                    segment[f'std1_{i}'] = std
+                    # Convert weight from 0-1 to 0-100 (percentage)
+                    segment[f'weight1_{i}'] = weight * 100.0
+
+                if mal_data['u_min'] is not None:
+                    segment['u_min1'] = mal_data['u_min']
+                    segment['u_max1'] = mal_data['u_max']
+                    # Convert weight from 0-1 to 0-100 (percentage)
+                    segment['u_p1'] = int(round(mal_data['u_p'] * 100.0))
+
+            # Direction 2 (last to first) - Note: IWRAP negates these values
+            if ltf_guid in mal_map:
+                mal_data = mal_map[ltf_guid]
+                for i, (mean, std, weight) in enumerate(zip(
+                    mal_data['means'], mal_data['stds'], mal_data['weights']
+                ), start=1):
+                    # Negate mean back to original sign
+                    segment[f'mean2_{i}'] = -mean
+                    segment[f'std2_{i}'] = std
+                    # Convert weight from 0-1 to 0-100 (percentage)
+                    segment[f'weight2_{i}'] = weight * 100.0
+
+                if mal_data['u_min'] is not None:
+                    # Negate bounds back and reorder
+                    umin = -mal_data['u_max']
+                    umax = -mal_data['u_min']
+                    segment['u_min2'] = umin
+                    segment['u_max2'] = umax
+                    # Convert weight from 0-1 to 0-100 (percentage)
+                    segment['u_p2'] = int(round(mal_data['u_p'] * 100.0))
+
+            # Calculate line_length from coordinates (lat/lon to meters)
+            try:
+                from math import radians, cos, sin, asin, sqrt
+
+                # Parse coordinates from "lon lat" format
+                start_parts = start_point.split()
+                end_parts = end_point.split()
+
+                if len(start_parts) == 2 and len(end_parts) == 2:
+                    lon1, lat1 = float(start_parts[0]), float(start_parts[1])
+                    lon2, lat2 = float(end_parts[0]), float(end_parts[1])
+
+                    # Haversine formula to calculate distance in meters
+                    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+                    dlon = lon2 - lon1
+                    dlat = lat2 - lat1
+                    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                    c = 2 * asin(sqrt(a))
+                    r = 6371000  # Earth radius in meters
+                    segment['line_length'] = c * r
+
+                    if debug:
+                        print(f"  ✓ Calculated line_length for {leg_name}: {segment['line_length']:.1f}m")
+            except Exception as e:
+                if debug:
+                    print(f"  ⚠️ Warning: Could not calculate line_length for segment {idx}: {e}")
+                segment['line_length'] = 0.0
+
+            result['segment_data'][str(idx)] = segment
+
+    # Build ship_categories and traffic_data matrices
+    # Use complete OMRAT ship type list (not just those in IWRAP XML)
+    # This ensures UI alignment
+    omrat_ship_types_full = [
+        'Fishing',
+        'Towing',
+        'Dredging or underwater ops',
+        'Diving ops',
+        'Military ops',
+        'Sailing',
+        'Pleasure Craft',
+        'High speed craft (HSC)',
+        'Pilot Vessel',
+        'Search and Rescue vessel',
+        'Tug',
+        'Port Tender',
+        'Anti-pollution equipment',
+        'Law Enforcement',
+        'Spare',
+        'Medical Transport',
+        'Noncombatant ship according to RR Resolution No. 18',
+        'Passenger, all ships of this type',
+        'Cargo, all ships of this type',
+        'Tanker, all ships of this type',
+        'Other Type, all ships of this type',
+    ]
+
+    if all_ship_types and all_length_intervals:
+        ship_types_list = omrat_ship_types_full  # Use full list, not just imported types
+        length_intervals_list = sorted(list(all_length_intervals))
+
+        # Parse length intervals and create proper structure
+        parsed_intervals = []
+        for interval_str in length_intervals_list:
+            parts = interval_str.split('-')
+            if len(parts) == 2:
+                try:
+                    min_val = float(parts[0])
+                    max_val = float(parts[1])
+                    parsed_intervals.append({
+                        'min': min_val,
+                        'max': max_val,
+                        'label': interval_str
+                    })
+                except ValueError:
+                    parsed_intervals.append({
+                        'min': 0,
+                        'max': 25,
+                        'label': interval_str
+                    })
+            else:
+                parsed_intervals.append({
+                    'min': 0,
+                    'max': 25,
+                    'label': interval_str
+                })
+
+        # Sort intervals by min value to ensure proper order (25-50, 50-75, etc.)
+        parsed_intervals.sort(key=lambda x: x['min'])
+        # Rebuild length_intervals_list to match numeric sort order of parsed_intervals
+        # (the original sorted() used lexicographic order which puts "100-125" before "25-50")
+        length_intervals_list = [pi['label'] for pi in parsed_intervals]
+
+        result['ship_categories'] = {
+            'types': omrat_ship_types_full,  # Always use full list
+            'length_intervals': parsed_intervals,
+            'selection_mode': 'ais'
+        }
+
+        # Build traffic data for ALL segments
+        # Use full OMRAT ship type list to ensure UI alignment
+        if debug:
+            print(f"\n🚢 Building traffic matrices...")
+            print(f"  Ship types: {len(omrat_ship_types_full)}")
+            print(f"  Length intervals: {len(parsed_intervals)}")
+            print(f"  Matrix dimensions: {len(omrat_ship_types_full)} × {len(parsed_intervals)}")
+
+        legs_el = root.find('legs')
+        if legs_el is not None:
+            for idx, leg_el in enumerate(legs_el.findall('leg'), start=1):
+                # Get traffic distribution GUIDs for this leg
+                ftl_guid = leg_el.get('traffic_distribution_first_to_last_guid', '')
+                ltf_guid = leg_el.get('traffic_distribution_last_to_first_guid', '')
+
+                if debug:
+                    print(f"\n  Leg {idx}:")
+                    print(f"    FTL GUID: {ftl_guid}")
+                    print(f"    LTF GUID: {ltf_guid}")
+                    print(f"    FTL in td_map: {ftl_guid in td_map}")
+                    print(f"    LTF in td_map: {ltf_guid in td_map}")
+
+                # Initialize empty matrices using full OMRAT ship type list
+                num_types = len(omrat_ship_types_full)
+                num_intervals = len(parsed_intervals)
+
+                def create_empty_matrix():
+                    return [[0.0 for _ in range(num_intervals)] for _ in range(num_types)]
+
+                east_data = {
+                    'Frequency (ships/year)': create_empty_matrix(),
+                    'Speed (knots)': create_empty_matrix(),
+                    'Draught (meters)': create_empty_matrix(),
+                    'Ship heights (meters)': create_empty_matrix(),
+                    'Ship Beam (meters)': create_empty_matrix(),
+                }
+
+                west_data = {
+                    'Frequency (ships/year)': create_empty_matrix(),
+                    'Speed (knots)': create_empty_matrix(),
+                    'Draught (meters)': create_empty_matrix(),
+                    'Ship heights (meters)': create_empty_matrix(),
+                    'Ship Beam (meters)': create_empty_matrix(),
+                }
+
+                # Fill in data from IWRAP traffic distributions
+                if ftl_guid in td_map:
+                    td_info = td_map[ftl_guid]
+                    filled_count = 0
+                    for (ship_type, length_interval), cat_data in td_info['categories'].items():
+                        try:
+                            type_idx = omrat_ship_types_full.index(ship_type)
+                            interval_idx = length_intervals_list.index(length_interval)
+                            east_data['Frequency (ships/year)'][type_idx][interval_idx] = cat_data['freq']
+                            east_data['Speed (knots)'][type_idx][interval_idx] = cat_data['speed']
+                            east_data['Draught (meters)'][type_idx][interval_idx] = cat_data['draught']
+                            east_data['Ship heights (meters)'][type_idx][interval_idx] = cat_data['height']
+                            east_data['Ship Beam (meters)'][type_idx][interval_idx] = cat_data['beam']
+                            filled_count += 1
+                            if debug and cat_data['freq'] > 0:
+                                print(f"      East [{type_idx},{interval_idx}] {ship_type} ({length_interval}): {cat_data['freq']} ships")
+                        except (ValueError, IndexError) as e:
+                            # Ship type not in full list or interval not found - skip
+                            if debug:
+                                print(f"      ERROR filling East data: {e}")
+                                print(f"        ship_type={ship_type}, interval={length_interval}")
+                    if debug:
+                        print(f"    Filled {filled_count} cells for East going")
+
+                if ltf_guid in td_map:
+                    td_info = td_map[ltf_guid]
+                    for (ship_type, length_interval), cat_data in td_info['categories'].items():
+                        try:
+                            type_idx = omrat_ship_types_full.index(ship_type)
+                            interval_idx = length_intervals_list.index(length_interval)
+                            west_data['Frequency (ships/year)'][type_idx][interval_idx] = cat_data['freq']
+                            west_data['Speed (knots)'][type_idx][interval_idx] = cat_data['speed']
+                            west_data['Draught (meters)'][type_idx][interval_idx] = cat_data['draught']
+                            west_data['Ship heights (meters)'][type_idx][interval_idx] = cat_data['height']
+                            west_data['Ship Beam (meters)'][type_idx][interval_idx] = cat_data['beam']
+                        except (ValueError, IndexError) as e:
+                            # Ship type not in full list or interval not found - skip
+                            pass
+
+                result['traffic_data'][str(idx)] = {
+                    'East going': east_data,
+                    'West going': west_data,
+                }
+
+                if debug:
+                    total_east = sum(sum(row) for row in east_data['Frequency (ships/year)'])
+                    total_west = sum(sum(row) for row in west_data['Frequency (ships/year)'])
+                    print(f"    ✓ Leg {idx} traffic: East={int(total_east)}, West={int(total_west)} ships/year")
+
+    # Import areas (depths and objects)
+    areas_el = root.find('areas')
+    if areas_el is not None:
+        for area_el in areas_el.findall('area_polygon'):
+            area_type = area_el.get('type', '0')
+            depth_val = area_el.get('depth', '0')
+            name = area_el.get('name', '')
+
+            # Parse polygon coordinates
+            poly_el = area_el.find('polygon')
+            coords = []
+            if poly_el is not None:
+                for item_el in poly_el.findall('item'):
+                    lat = float(item_el.get('lat', 0))
+                    lon = float(item_el.get('lon', 0))
+                    coords.append((lon, lat))
+
+            # Build WKT polygon string (must be a closed ring per OGC spec)
+            if coords:
+                # Close the ring if first != last
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                coord_str = ', '.join([f"{lon} {lat}" for lon, lat in coords])
+                wkt = f"POLYGON(({coord_str}))"
+            else:
+                wkt = ""
+
+            # Check if this is an object (negative depth) or depth area
+            # IWRAP uses negative depth values for objects:
+            #   -1 for general objects
+            #   -10, -12, etc. for bridges and other structures
+            try:
+                depth_num = float(depth_val)
+                is_object = depth_num < 0
+                height_val = str(abs(depth_num)) if is_object else depth_val
+            except ValueError:
+                is_object = depth_val.strip().startswith('-')
+                height_val = depth_val.strip().lstrip('-') if is_object else depth_val
+
+            if is_object:
+                # This is an object (negative depth) - store as list: [id, height, polygon]
+                obj_id = name.replace('object_', '').replace('BRIDGE_', 'BRIDGE_')
+                result['objects'].append([obj_id, height_val, wkt])
+            else:
+                # This is a depth area - store as list: [id, depth, polygon]
+                depth_id = name.replace('depth_', '').split('_')[0]
+                result['depths'].append([depth_id, depth_val, wkt])
+
+    # Import global settings (causation factors)
+    gs_el = root.find('global_settings')
+    if gs_el is not None:
+        cf_el = gs_el.find('causation_factors')
+        if cf_el is not None:
+            # Store causation factors if needed
+            pass
+
+    if debug:
+        print(f"\n{'='*70}")
+        print(f"SUMMARY:")
+        print(f"  Segments: {len(result['segment_data'])}")
+        print(f"  Depth areas: {len(result['depths'])}")
+        print(f"  Objects: {len(result['objects'])}")
+        print(f"\nDistribution parameters (IWRAP 0-1 weights → OMRAT 0-100%):")
+        for seg_id, seg in list(result['segment_data'].items())[:1]:  # Show first segment
+            print(f"  Segment {seg_id} ({seg['Leg_name']}):")
+            print(f"    Line length: {seg['line_length']:.1f}m")
+            print(f"    Dir1 weights: {seg['weight1_1']:.1f}%, {seg['weight1_2']:.1f}%, {seg['weight1_3']:.1f}%, uniform: {seg['u_p1']}%")
+            print(f"    Dir2 weights: {seg['weight2_1']:.1f}%, {seg['weight2_2']:.1f}%, {seg['weight2_3']:.1f}%, uniform: {seg['u_p2']}%")
+        print(f"  Traffic data legs: {len(result['traffic_data'])}")
+        if result['ship_categories']:
+            print(f"  Ship types: {len(result['ship_categories']['types'])}")
+            print(f"  Length intervals: {len(result['ship_categories']['length_intervals'])}")
+        for seg_id in sorted(result['traffic_data'].keys(), key=int)[:3]:
+            traffic = result['traffic_data'][seg_id]
+            total = sum(sum(row) for row in traffic['East going']['Frequency (ships/year)'])
+            print(f"  Segment {seg_id}: {int(total)} ships/year (East going)")
+        print(f"{'='*70}\n")
+
+    return result
+
+
+def read_iwrap_xml(xml_path: str, output_path: str):
+    """Read IWRAP XML file and save as .omrat JSON file.
+
+    Args:
+        xml_path: Path to input IWRAP XML file
+        output_path: Path to output .omrat JSON file
+    """
+    data = parse_iwrap_xml(xml_path)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+
+
 if __name__ == '__main__':
-    write_iwrap_xml('tests/example_data/proj.omrat', 'tests/example_data/generated.xml')
+    import sys
+
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+
+        if command == 'export' and len(sys.argv) >= 4:
+            # Export: python iwrap_convertion.py export input.omrat output.xml
+            write_iwrap_xml(sys.argv[2], sys.argv[3])
+            print(f"✓ Exported {sys.argv[2]} to {sys.argv[3]}")
+
+        elif command == 'import' and len(sys.argv) >= 4:
+            # Import: python iwrap_convertion.py import input.xml output.omrat
+            read_iwrap_xml(sys.argv[2], sys.argv[3])
+            print(f"✓ Imported {sys.argv[2]} to {sys.argv[3]}")
+
+        else:
+            print("Usage:")
+            print("  Export: python iwrap_convertion.py export <input.omrat> <output.xml>")
+            print("  Import: python iwrap_convertion.py import <input.xml> <output.omrat>")
+    else:
+        # Default behavior for backward compatibility
+        write_iwrap_xml('tests/example_data/proj.omrat', 'tests/example_data/generated.xml')
+        print("✓ Default export completed: proj.omrat -> generated.xml")

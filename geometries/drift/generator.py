@@ -16,7 +16,7 @@ from .constants import DIRECTIONS
 from .coordinates import get_utm_crs, transform_geometry
 from .distribution import get_projection_distance, get_distribution_width
 from .corridor import create_projected_corridor
-from .clipping import clip_corridor_at_obstacles
+from .clipping import clip_corridor_at_obstacles, split_corridor_by_anchor_zone
 
 if TYPE_CHECKING:
     from omrat import OMRAT
@@ -78,6 +78,11 @@ class DriftCorridorGenerator:
         depth_obstacles = self._get_depth_obstacles(depth_threshold)
         structure_obstacles = self._get_structure_obstacles(height_threshold)
 
+        # Build anchor zone geometry (all depths where anchoring is possible)
+        anchor_d = float(self.plugin.drift_values.get('anchor_d', 0))
+        anchor_threshold = anchor_d * depth_threshold
+        anchor_zone = self._get_anchor_zone(anchor_threshold)
+
         self._precollected_data = {
             'legs': self._get_legs_from_routes(),
             'depth_obstacles': depth_obstacles,
@@ -85,6 +90,7 @@ class DriftCorridorGenerator:
             'lateral_std': self._get_distribution_std(),
             'repair_params': self._get_repair_params(),
             'drift_speed': self._get_drift_speed_ms(),
+            'anchor_zone': anchor_zone,
         }
 
         # Log detailed info about obstacles
@@ -94,7 +100,8 @@ class DriftCorridorGenerator:
         QgsMessageLog.logMessage(
             f"Pre-collected data: {len(self._precollected_data['legs'])} legs, "
             f"{len(depth_obstacles)} depth obstacles (total area: {total_depth_area:.2f}), "
-            f"{len(structure_obstacles)} structure obstacles (total area: {total_struct_area:.2f})",
+            f"{len(structure_obstacles)} structure obstacles (total area: {total_struct_area:.2f}), "
+            f"anchor zone area: {anchor_zone.area:.2f} (threshold={anchor_threshold:.1f}m)",
             "OMRAT", Qgis.Info
         )
 
@@ -176,6 +183,58 @@ class DriftCorridorGenerator:
                 )
 
         return obstacles
+
+    def _get_anchor_zone(self, anchor_threshold: float) -> Polygon:
+        """
+        Build a union polygon of all depth cells where anchoring is possible.
+
+        Cells with depth < anchor_threshold are considered anchorable.
+
+        Args:
+            anchor_threshold: Maximum depth for anchoring (anchor_d * draught).
+
+        Returns:
+            Union polygon of all anchorable depth cells (WGS84).
+        """
+        from shapely.ops import unary_union as _unary_union
+
+        if anchor_threshold <= 0:
+            return Polygon()
+
+        table = self.plugin.main_widget.twDepthList
+        bin_width = self._detect_depth_bin_width(table)
+        anchor_geoms = []
+
+        for row in range(table.rowCount()):
+            try:
+                depth_item = table.item(row, 1)
+                if depth_item is None:
+                    continue
+                depth_text = depth_item.text().strip()
+
+                depth = self._parse_depth_value(depth_text, bin_width)
+                if depth is None or depth >= anchor_threshold:
+                    continue
+
+                wkt_item = table.item(row, 2)
+                if wkt_item is None:
+                    continue
+                wkt = wkt_item.text()
+                if not wkt or not wkt.strip():
+                    continue
+
+                from shapely import wkt as shapely_wkt
+                geom = shapely_wkt.loads(wkt)
+                geom = make_valid(geom)
+                if not geom.is_empty:
+                    anchor_geoms.append(geom)
+
+            except Exception:
+                pass
+
+        if anchor_geoms:
+            return make_valid(_unary_union(anchor_geoms))
+        return Polygon()
 
     def _detect_depth_bin_width(self, table) -> float:
         """Detect bin width from depth values in the table."""
@@ -324,6 +383,7 @@ class DriftCorridorGenerator:
             lateral_std = data['lateral_std']
             repair_params = data['repair_params']
             drift_speed = data['drift_speed']
+            anchor_zone = data.get('anchor_zone', Polygon())
         else:
             legs = self._get_legs_from_routes()
             depth_obstacles = self._get_depth_obstacles(depth_threshold)
@@ -331,6 +391,8 @@ class DriftCorridorGenerator:
             lateral_std = self._get_distribution_std()
             repair_params = self._get_repair_params()
             drift_speed = self._get_drift_speed_ms()
+            anchor_d = float(self.plugin.drift_values.get('anchor_d', 0))
+            anchor_zone = self._get_anchor_zone(anchor_d * depth_threshold)
 
         if not legs:
             QgsMessageLog.logMessage("No legs found from routes", "OMRAT", Qgis.Warning)
@@ -364,7 +426,8 @@ class DriftCorridorGenerator:
             leg_corridors, completed_work = self._generate_leg_corridors(
                 leg, leg_idx, len(legs),
                 all_obstacles, half_width, projection_dist,
-                wgs84, completed_work, total_work
+                wgs84, completed_work, total_work,
+                anchor_zone=anchor_zone,
             )
             corridors.extend(leg_corridors)
 
@@ -376,7 +439,8 @@ class DriftCorridorGenerator:
 
     def _generate_leg_corridors(self, leg: LineString, leg_idx: int, total_legs: int,
                                 all_obstacles: list, half_width: float, projection_dist: float,
-                                wgs84: CRS, completed_work: int, total_work: int) -> tuple[list[dict], int]:
+                                wgs84: CRS, completed_work: int, total_work: int,
+                                anchor_zone: Polygon | None = None) -> tuple[list[dict], int]:
         """Generate corridors for a single leg in all 8 directions."""
         corridors = []
 
@@ -397,6 +461,15 @@ class DriftCorridorGenerator:
 
         obstacles_utm = self._transform_obstacles_to_utm(all_obstacles, wgs84, utm_crs)
 
+        # Transform anchor zone to UTM
+        anchor_zone_utm = Polygon()
+        if anchor_zone is not None and not anchor_zone.is_empty:
+            try:
+                anchor_zone_utm = transform_geometry(anchor_zone, wgs84, utm_crs)
+                anchor_zone_utm = make_valid(anchor_zone_utm)
+            except Exception:
+                anchor_zone_utm = Polygon()
+
         for dir_name, angle in DIRECTIONS.items():
             if self._cancelled:
                 return corridors, completed_work
@@ -406,18 +479,21 @@ class DriftCorridorGenerator:
                 return corridors, completed_work
 
             # Create and clip corridor
-            corridor_wgs84 = self._create_single_corridor(
+            result = self._create_single_corridor(
                 leg_utm, half_width, angle, projection_dist,
                 obstacles_utm, utm_crs, wgs84,
-                f"Leg {leg_idx} {dir_name}: "
+                f"Leg {leg_idx} {dir_name}: ",
+                anchor_zone_utm=anchor_zone_utm,
             )
 
-            if corridor_wgs84 is not None:
+            if result is not None:
                 corridors.append({
                     'direction': dir_name,
                     'angle': angle,
                     'leg_index': leg_idx,
-                    'polygon': corridor_wgs84,
+                    'polygon': result['polygon'],
+                    'anchor_polygon': result.get('anchor_polygon'),
+                    'deep_polygon': result.get('deep_polygon'),
                 })
 
             completed_work += 1
@@ -440,13 +516,23 @@ class DriftCorridorGenerator:
     def _create_single_corridor(self, leg_utm: LineString, half_width: float,
                                 angle: float, projection_dist: float,
                                 obstacles_utm: list, utm_crs: CRS, wgs84: CRS,
-                                log_prefix: str) -> Polygon | None:
-        """Create a single corridor for one direction."""
+                                log_prefix: str,
+                                anchor_zone_utm: Polygon | None = None) -> dict | None:
+        """Create a single corridor for one direction.
+
+        Returns:
+            Dict with 'polygon' (full clipped corridor in WGS84),
+            'anchor_polygon' (blue/anchorable part), and
+            'deep_polygon' (green/deep part), or None on failure.
+        """
         # Create corridor
         corridor_utm = create_projected_corridor(leg_utm, half_width, angle, projection_dist)
 
         if corridor_utm.is_empty:
             return None
+
+        # Remember original bounds for shadow sizing
+        original_bounds = corridor_utm.bounds
 
         # Clip at obstacles
         if obstacles_utm:
@@ -456,6 +542,16 @@ class DriftCorridorGenerator:
 
         if corridor_utm.is_empty:
             return None
+
+        # Split into anchor (blue) and deep (green) zones
+        anchor_utm = Polygon()
+        deep_utm = Polygon()
+        if anchor_zone_utm is not None and not anchor_zone_utm.is_empty:
+            anchor_utm, deep_utm = split_corridor_by_anchor_zone(
+                corridor_utm, anchor_zone_utm, angle, original_bounds
+            )
+        else:
+            deep_utm = corridor_utm
 
         # Transform back to WGS84 and validate
         try:
@@ -475,6 +571,26 @@ class DriftCorridorGenerator:
             if (bounds[2] - bounds[0]) > 2 or (bounds[3] - bounds[1]) > 2:
                 return None
 
-            return corridor_wgs84
+            # Transform anchor/deep to WGS84
+            anchor_wgs84 = Polygon()
+            deep_wgs84 = Polygon()
+            if not anchor_utm.is_empty:
+                try:
+                    anchor_wgs84 = make_valid(
+                        transform_geometry(anchor_utm, utm_crs, wgs84))
+                except Exception:
+                    pass
+            if not deep_utm.is_empty:
+                try:
+                    deep_wgs84 = make_valid(
+                        transform_geometry(deep_utm, utm_crs, wgs84))
+                except Exception:
+                    pass
+
+            return {
+                'polygon': corridor_wgs84,
+                'anchor_polygon': anchor_wgs84,
+                'deep_polygon': deep_wgs84,
+            }
         except Exception:
             return None

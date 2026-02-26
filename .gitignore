@@ -4,3 +4,15 @@ __pycache__/
 help/build/
 zip_build/
 .coverage
+litterature/
+tests/example_data/
+.claude/
+.devcontainer/
+.vscode/
+tmpclaude-*
+drifting_report.md
+examples/
+
+.vscode/.env
+.vscode/launch.json
+.vscode/settings.json

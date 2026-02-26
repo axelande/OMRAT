@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 800" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976D2"/>
+    </marker>
+  </defs>
+
+  <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#1a1a2e">OMRAT Data Flow</text>
+
+  <!-- Input Sources -->
+  <rect x="30" y="55" width="170" height="50" rx="25" fill="#bbdefb" stroke="#1976D2" stroke-width="2"/>
+  <text x="115" y="85" text-anchor="middle" font-size="12" font-weight="bold" fill="#0D47A1">Route Digitization</text>
+
+  <rect x="220" y="55" width="140" height="50" rx="25" fill="#bbdefb" stroke="#1976D2" stroke-width="2"/>
+  <text x="290" y="85" text-anchor="middle" font-size="12" font-weight="bold" fill="#0D47A1">AIS Database</text>
+
+  <rect x="380" y="55" width="140" height="50" rx="25" fill="#bbdefb" stroke="#1976D2" stroke-width="2"/>
+  <text x="450" y="85" text-anchor="middle" font-size="12" font-weight="bold" fill="#0D47A1">GEBCO API</text>
+
+  <rect x="540" y="55" width="140" height="50" rx="25" fill="#bbdefb" stroke="#1976D2" stroke-width="2"/>
+  <text x="610" y="85" text-anchor="middle" font-size="12" font-weight="bold" fill="#0D47A1">IWRAP XML</text>
+
+  <rect x="700" y="55" width="170" height="50" rx="25" fill="#bbdefb" stroke="#1976D2" stroke-width="2"/>
+  <text x="785" y="85" text-anchor="middle" font-size="12" font-weight="bold" fill="#0D47A1">Manual Entry</text>
+
+  <!-- Data Collection -->
+  <rect x="150" y="140" width="600" height="50" rx="8" fill="#e8f5e9" stroke="#4CAF50" stroke-width="2"/>
+  <text x="450" y="170" text-anchor="middle" font-size="14" font-weight="bold" fill="#2E7D32">Data Collection &amp; Validation (gather_data.py, validate_data.py)</text>
+
+  <line x1="115" y1="105" x2="300" y2="140" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="290" y1="105" x2="350" y2="140" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="450" y1="105" x2="450" y2="140" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="610" y1="105" x2="550" y2="140" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="785" y1="105" x2="600" y2="140" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Data Stores -->
+  <rect x="50" y="225" width="180" height="70" rx="8" fill="#fff3e0" stroke="#FF9800" stroke-width="2"/>
+  <text x="140" y="250" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">Segment Data</text>
+  <text x="140" y="268" text-anchor="middle" font-size="10" fill="#EF6C00">Routes, legs, waypoints</text>
+  <text x="140" y="283" text-anchor="middle" font-size="10" fill="#EF6C00">Start/End points, widths</text>
+
+  <rect x="260" y="225" width="180" height="70" rx="8" fill="#fff3e0" stroke="#FF9800" stroke-width="2"/>
+  <text x="350" y="250" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">Traffic Data</text>
+  <text x="350" y="268" text-anchor="middle" font-size="10" fill="#EF6C00">Frequency, speed, draught</text>
+  <text x="350" y="283" text-anchor="middle" font-size="10" fill="#EF6C00">Per segment/dir/type/size</text>
+
+  <rect x="470" y="225" width="180" height="70" rx="8" fill="#fff3e0" stroke="#FF9800" stroke-width="2"/>
+  <text x="560" y="250" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">Obstacles</text>
+  <text x="560" y="268" text-anchor="middle" font-size="10" fill="#EF6C00">Depths (bathymetry)</text>
+  <text x="560" y="283" text-anchor="middle" font-size="10" fill="#EF6C00">Structures (bridges, etc)</text>
+
+  <rect x="680" y="225" width="180" height="70" rx="8" fill="#fff3e0" stroke="#FF9800" stroke-width="2"/>
+  <text x="770" y="250" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">Parameters</text>
+  <text x="770" y="268" text-anchor="middle" font-size="10" fill="#EF6C00">Wind rose, drift speed</text>
+  <text x="770" y="283" text-anchor="middle" font-size="10" fill="#EF6C00">Causation factors, repair</text>
+
+  <line x1="250" y1="190" x2="140" y2="225" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="380" y1="190" x2="350" y2="225" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="520" y1="190" x2="560" y2="225" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="650" y1="190" x2="770" y2="225" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Coordinate Transform -->
+  <rect x="200" y="330" width="500" height="40" rx="8" fill="#f3e5f5" stroke="#9C27B0" stroke-width="2"/>
+  <text x="450" y="355" text-anchor="middle" font-size="13" font-weight="bold" fill="#6A1B9A">CRS Transformation: WGS84 (EPSG:4326) &#x2192; UTM</text>
+  <line x1="350" y1="295" x2="400" y2="330" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="560" y1="295" x2="500" y2="330" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Three Calculation Paths -->
+  <!-- Drifting Path -->
+  <rect x="30" y="410" width="260" height="160" rx="8" fill="#e3f2fd" stroke="#1976D2" stroke-width="2"/>
+  <text x="160" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#0D47A1">Drifting Risk Pipeline</text>
+  <text x="160" y="458" text-anchor="middle" font-size="10" fill="#1565C0">1. Generate drift corridors (8 dirs)</text>
+  <text x="160" y="475" text-anchor="middle" font-size="10" fill="#1565C0">2. Clip at obstacles</text>
+  <text x="160" y="492" text-anchor="middle" font-size="10" fill="#1565C0">3. Split anchor/deep zones</text>
+  <text x="160" y="509" text-anchor="middle" font-size="10" fill="#1565C0">4. Monte Carlo probability</text>
+  <text x="160" y="526" text-anchor="middle" font-size="10" fill="#1565C0">5. Apply repair time CDF</text>
+  <text x="160" y="543" text-anchor="middle" font-size="10" fill="#1565C0">6. Weight by wind rose</text>
+  <text x="160" y="560" text-anchor="middle" font-size="10" fill="#1565C0">7. Apply causation factor</text>
+
+  <!-- Powered Path -->
+  <rect x="320" y="410" width="260" height="160" rx="8" fill="#e8eaf6" stroke="#3F51B5" stroke-width="2"/>
+  <text x="450" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#1A237E">Powered Risk Pipeline</text>
+  <text x="450" y="458" text-anchor="middle" font-size="10" fill="#283593">1. Get lateral distributions</text>
+  <text x="450" y="475" text-anchor="middle" font-size="10" fill="#283593">2. Integrate over obstacle extent</text>
+  <text x="450" y="492" text-anchor="middle" font-size="10" fill="#283593">   Cat I: Direct overlap</text>
+  <text x="450" y="509" text-anchor="middle" font-size="10" fill="#283593">   Cat II: Missed-turn decay</text>
+  <text x="450" y="526" text-anchor="middle" font-size="10" fill="#283593">3. Apply causation factor</text>
+  <text x="450" y="543" text-anchor="middle" font-size="10" fill="#283593">4. Sum over all ships/segments</text>
+
+  <!-- Collision Path -->
+  <rect x="610" y="410" width="260" height="160" rx="8" fill="#ede7f6" stroke="#673AB7" stroke-width="2"/>
+  <text x="740" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#311B92">Collision Pipeline</text>
+  <text x="740" y="458" text-anchor="middle" font-size="10" fill="#4527A0">1. Pair ship types (i,j)</text>
+  <text x="740" y="475" text-anchor="middle" font-size="10" fill="#4527A0">2. Calculate relative speed</text>
+  <text x="740" y="492" text-anchor="middle" font-size="10" fill="#4527A0">3. Geometric collision P_G</text>
+  <text x="740" y="509" text-anchor="middle" font-size="10" fill="#4527A0">4. Traffic density conversion</text>
+  <text x="740" y="526" text-anchor="middle" font-size="10" fill="#4527A0">5. Apply causation factor</text>
+  <text x="740" y="543" text-anchor="middle" font-size="10" fill="#4527A0">6. Sum over all pairs</text>
+
+  <line x1="300" y1="370" x2="160" y2="410" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="450" y1="370" x2="450" y2="410" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="600" y1="370" x2="740" y2="410" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Results Aggregation -->
+  <rect x="150" y="605" width="600" height="50" rx="8" fill="#fff8e1" stroke="#FFC107" stroke-width="2"/>
+  <text x="450" y="635" text-anchor="middle" font-size="14" font-weight="bold" fill="#F57F17">Results Aggregation &amp; Report Generation</text>
+
+  <line x1="160" y1="570" x2="300" y2="605" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="450" y1="570" x2="450" y2="605" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="740" y1="570" x2="600" y2="605" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Output -->
+  <rect x="60" y="690" width="200" height="50" rx="8" fill="#c8e6c9" stroke="#4CAF50" stroke-width="2"/>
+  <text x="160" y="720" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">QGIS Result Layers</text>
+
+  <rect x="290" y="690" width="200" height="50" rx="8" fill="#c8e6c9" stroke="#4CAF50" stroke-width="2"/>
+  <text x="390" y="720" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Probability Tables</text>
+
+  <rect x="520" y="690" width="200" height="50" rx="8" fill="#c8e6c9" stroke="#4CAF50" stroke-width="2"/>
+  <text x="620" y="720" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Project File (.omrat)</text>
+
+  <line x1="350" y1="655" x2="160" y2="690" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="450" y1="655" x2="390" y2="690" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="550" y1="655" x2="620" y2="690" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>

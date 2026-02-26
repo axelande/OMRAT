@@ -39,38 +39,49 @@ def get_pl(db:DB, lat1:float, lat2:float, lon1:float, lon2:float, l_width:float)
         pl = ""
     return pl
 
-def get_type(toc:float, sh_type:str) -> int:
-    """Return ship type in accordance with OMRAT."""
-    if toc > 79 and toc < 90 and 'product' in sh_type.lower():
-        type__cat = 1
-    elif toc > 79 and toc < 90 and 'chemical' in sh_type.lower():
-        type__cat = 2
-    elif toc > 79 and toc < 90 and (
-            'gas' in sh_type.lower() or 'lng' in sh_type.lower()):
-        type__cat = 3
-    elif toc > 79 and toc < 90:
-        type__cat = 0
-    elif toc > 69 and toc < 80 and 'container' in sh_type.lower():
-        type__cat = 4
-    elif toc > 69 and toc < 80 and 'bulk' in sh_type.lower():
-        type__cat = 6
-    elif toc > 69 and toc < 80 and 'ro-ro' in sh_type.lower() and 'passenger' not in sh_type.lower():
-        type__cat = 7
-    elif toc > 69 and toc < 80:
-        type__cat = 5
-    elif toc > 59 and toc < 70:
-        type__cat = 8
-    elif toc == 36 or toc == 37:
-        type__cat = 12
-    elif (toc > 32 and toc < 40) or (toc > 49 and toc < 60):
-        type__cat = 9
-    elif toc > 40 and toc < 50:
-        type__cat = 10
-    elif toc == 30:
-        type__cat = 11
-    else:
-        type__cat = 13
-    return type__cat
+def get_type(toc: float) -> int:
+    """Return ship type index matching the UI ship category list.
+
+    Maps AIS Type-of-Cargo (TOC) codes to indices 0-20 corresponding to:
+        0: Fishing (TOC 30)
+        1: Towing (TOC 31-32)
+        2: Dredging or underwater ops (TOC 33)
+        3: Diving ops (TOC 34)
+        4: Military ops (TOC 35)
+        5: Sailing (TOC 36)
+        6: Pleasure Craft (TOC 37)
+        7: High speed craft (TOC 40-49)
+        8: Pilot Vessel (TOC 50)
+        9: Search and Rescue vessel (TOC 51)
+        10: Tug (TOC 52)
+        11: Port Tender (TOC 53)
+        12: Anti-pollution equipment (TOC 54)
+        13: Law Enforcement (TOC 55)
+        14: Spare (TOC 56-57)
+        15: Medical Transport (TOC 58)
+        16: Noncombatant ship (TOC 59)
+        17: Passenger (TOC 60-69)
+        18: Cargo (TOC 70-79)
+        19: Tanker (TOC 80-89)
+        20: Other Type (everything else)
+    """
+    toc_int = int(toc)
+    _TOC_MAP = {
+        30: 0, 31: 1, 32: 1, 33: 2, 34: 3, 35: 4, 36: 5, 37: 6,
+        50: 8, 51: 9, 52: 10, 53: 11, 54: 12, 55: 13,
+        56: 14, 57: 14, 58: 15, 59: 16,
+    }
+    if toc_int in _TOC_MAP:
+        return _TOC_MAP[toc_int]
+    if 40 <= toc_int <= 49:
+        return 7
+    if 60 <= toc_int <= 69:
+        return 17
+    if 70 <= toc_int <= 79:
+        return 18
+    if 80 <= toc_int <= 89:
+        return 19
+    return 20
 
 def close_to_line(bearing:float, cog:float, max_angle:float) -> bool:
     """Returns True if the cog is less than the max_angle towards the bearing else False"""
@@ -284,25 +295,27 @@ class AIS:
                 loa = 100
             loa = int(loa)
             loa_cat = -1
-            for loa_i in range(len(self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'])):
+            freq_data = self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)']
+            n_loa_cats = len(freq_data[0]) if freq_data else 0
+            for loa_i in range(n_loa_cats):
                 if loa_i * 25 < loa <= (loa_i * 25 + 25):
                     loa_cat = loa_i
                     continue
             if loa_cat < 0:
-                loa_cat = 4
+                loa_cat = n_loa_cats - 1 if n_loa_cats > 0 else 0
             if sh_type is None:
                 sh_type = ''
-            type_cat = get_type(toc, sh_type)
-            self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'][loa_cat][type_cat] += 1
+            type_cat = get_type(toc)
+            self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'][type_cat][loa_cat] += 1
             if sog is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Speed (knots)'][loa_cat][type_cat].append(float(sog))
+                self.omrat.traffic.traffic_data[leg_key][dir_]['Speed (knots)'][type_cat][loa_cat].append(float(sog))
             if air_draught is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Ship heights (meters)'][loa_cat][type_cat].append(
+                self.omrat.traffic.traffic_data[leg_key][dir_]['Ship heights (meters)'][type_cat][loa_cat].append(
                     float(air_draught))
             if beam is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Ship Beam (meters)'][loa_cat][type_cat].append(float(beam))
+                self.omrat.traffic.traffic_data[leg_key][dir_]['Ship Beam (meters)'][type_cat][loa_cat].append(float(beam))
             if draugt is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Draught (meters)'][loa_cat][type_cat].append(
+                self.omrat.traffic.traffic_data[leg_key][dir_]['Draught (meters)'][type_cat][loa_cat].append(
                     float(draugt))
         np_line1 = np.array(line1)
         np_line2 = np.array(line2)

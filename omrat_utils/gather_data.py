@@ -206,7 +206,15 @@ class GatherData:
         return rows
     
     def populate(self, data):
-        self.p.traffic_data = data['traffic_data'] 
+        # Load ship categories first (needed for traffic table dimensions)
+        if 'ship_categories' in data and data['ship_categories']:
+            self.populate_ship_categories(data['ship_categories'])
+
+        # Load causation factors
+        if 'pc' in data:
+            self.p.causation_f.data = data['pc']
+
+        self.p.traffic_data = data['traffic_data']
         self.p.segment_data = data['segment_data']
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']
@@ -224,18 +232,53 @@ class GatherData:
         
         # Load data to canvas
         self.p.load_lines(data)
-        # Ensure layers get tracked for later unload
+        # Add depth features to the consolidated depth layer
         self.p.object.area_type = 'depth'
         for i, dep in enumerate(depth_rows):
-            # dep = [id, depth_value, polygon] - use depth_value (dep[1]) for layer name
             depth_value = dep[1] if len(dep) > 1 else dep[0]
-            self.p.object.load_area(f'Depth - {depth_value}m', dep[2], row=i, value=depth_value, value_field='Depth')
+            self.p.object.load_area(f'Depth - {depth_value}m', dep[2], row=i, value=depth_value,
+                                    value_field='Depth', defer_style=True)
+        self.p.object._apply_depth_graduated_style()
         self.p.object.area_type = 'object'
         for j, obj in enumerate(object_rows):
             # obj = [id, height_value, polygon] - use height_value (obj[1]) for layer name
             height_value = obj[1] if len(obj) > 1 else obj[0]
             self.p.object.load_area(f'Structure - {height_value}m', obj[2], row=j, value=height_value, value_field='Height')
             
+    def populate_ship_categories(self, ship_categories: dict[str, Any]):
+        """Populate ship types and length intervals into the ship categories widget.
+
+        Args:
+            ship_categories: Dict with 'types' (list of ship type names) and
+                           'length_intervals' (list of dicts with 'min', 'max', 'label')
+        """
+        scw = self.p.ship_cat.scw  # ShipCategoriesWidget
+
+        # Populate ship types into cvTypes table
+        types = ship_categories.get('types', [])
+        if types and hasattr(scw, 'cvTypes') and scw.cvTypes is not None:
+            scw.cvTypes.setRowCount(len(types))
+            scw.cvTypes.setColumnCount(1)
+            for i, ship_type in enumerate(types):
+                item = QTableWidgetItem(str(ship_type))
+                scw.cvTypes.setItem(i, 0, item)
+
+        # Populate length intervals into twLengths table
+        intervals = ship_categories.get('length_intervals', [])
+        if intervals and hasattr(scw, 'twLengths') and scw.twLengths is not None:
+            scw.twLengths.setRowCount(len(intervals))
+            scw.twLengths.setColumnCount(2)
+            for i, interval in enumerate(intervals):
+                min_val = interval.get('min', '')
+                max_val = interval.get('max', '')
+                item_min = QTableWidgetItem(str(min_val))
+                item_max = QTableWidgetItem(str(max_val))
+                scw.twLengths.setItem(i, 0, item_min)
+                scw.twLengths.setItem(i, 1, item_max)
+
+        # Rebuild traffic table with new dimensions
+        self.p.traffic.set_table_headings()
+
     def populate_cbTrafficSelectSeg(self):
         """Sets the segment names in cbTrafficSelectSeg"""
         self.p.main_widget.cbTrafficSelectSeg.clear()

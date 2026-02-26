@@ -14,13 +14,13 @@ class ShipCategories:
         pass
         
     def run(self):
-        self.dsw.show()
+        self.scw.show()
         # Get the button box
-        self.buttonBox = self.dsw.findChild(QDialogButtonBox, 'buttonBox')
-        
+        self.buttonBox = self.scw.findChild(QDialogButtonBox, 'buttonBox')
+
         # Connect the accepted signal to your custom slot
         self.buttonBox.ok.connect(self.commit_changes)
-        
+
         # Optionally, connect the rejected signal to a different slot
         self.buttonBox.cancel.connect(self.discard_changes)
-        self.dsw.exec_()
+        self.scw.exec_()

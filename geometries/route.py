@@ -96,35 +96,7 @@ def create_line_grid(line_utm: LineString, mu, std, width=100, height=100) -> li
             points.append(dist_point)
     return points
 
-
-def get_mean_distance(route:LineString, obj:Polygon, mu: float, std: float) -> float:
-    max_distance = 50_000
-    directions = []
-    distances = []
-    lines = []
-    points: list[QgsPointXY] = create_line_grid(route, mu, std)
-    for point in points:
-        for direction in range(0, 360, 45):
-            #v.distance
-            #point.distance()
-            p2 = proj_point(point, max_distance, direction)
-            new_line = QgsLineString((point, p2))
-            if new_line.intersects(obj):
-                dist = QgsGeometry.intersects(new_line, obj)
-                # dist = split(new_line, object_utm).geoms[0]
-                if dist.length < max_distance:
-                    distances.append(dist.length)
-                    lines.append(dist)
-                    directions.append(direction)
-                else:
-                    distances.append(0)
-                    directions.append(-1)
-            else:
-                distances.append(0)
-                directions.append(-1)
-    return np.array(distances), lines, points, directions
-
-def get_proj_tansformer(line):
+def get_proj_transformer(line):
     wgs84 = CRS('EPSG:4326')
     utm = get_best_utm([line])
     project = Transformer.from_crs(wgs84, utm, always_xy=True).transform
@@ -135,7 +107,7 @@ def get_multiple_ed(line:LineString, objs:list, mu:float, std:float,
     distribution_line = []
     for i in range(1, width + 1):
         distribution_line.append(stats.norm.ppf(i / 100, mu, std))
-    project = get_proj_tansformer(line)
+    project = get_proj_transformer(line)
     line_utm = transform(project, line)
     
     line_dir = get_angle(line_utm.coords[1], line_utm.coords[0])
@@ -163,7 +135,7 @@ def get_multiple_ed(line:LineString, objs:list, mu:float, std:float,
 
 def get_multi_drift_distance(line:LineString, objs:list[BaseGeometry], mu: float, std: float, 
                              width:int = 100, height:int = 100) -> float:
-    project = get_proj_tansformer(line)
+    project = get_proj_transformer(line)
     line_utm = transform(project, line)
     utm_objs: list[BaseGeometry] = []
     for obj in objs:

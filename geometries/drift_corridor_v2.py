@@ -42,17 +42,6 @@ from geometries.drift.clipping import (
 )
 from geometries.drift.generator import DriftCorridorGenerator
 
-# For backward compatibility - create_blocking_zone is now an internal detail
-# but some code might reference it
-def create_blocking_zone(obstacle, drift_angle_deg, corridor_bounds):
-    """
-    Create a blocking zone from an obstacle (backward compatibility wrapper).
-
-    Use create_obstacle_shadow() directly in new code.
-    """
-    return create_obstacle_shadow(obstacle, drift_angle_deg, corridor_bounds)
-
-
 __all__ = [
     # Constants
     'DIRECTIONS',
@@ -68,7 +57,6 @@ __all__ = [
     'create_projected_corridor',
     # Shadow/Blocking
     'create_obstacle_shadow',
-    'create_blocking_zone',
     'extract_polygons',
     # Clipping
     'clip_corridor_at_obstacles',

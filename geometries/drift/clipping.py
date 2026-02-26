@@ -121,6 +121,85 @@ def clip_corridor_at_obstacles(corridor: Polygon, obstacles: list,
         return corridor
 
 
+def split_corridor_by_anchor_zone(
+        clipped: Polygon,
+        anchor_zone: Polygon,
+        drift_angle_deg: float,
+        corridor_bounds: tuple[float, float, float, float],
+) -> tuple[Polygon, Polygon]:
+    """
+    Split a clipped corridor into blue (anchorable) and green (deep) zones.
+
+    The corridor starts as green (deep water) on the upwind side.  Once
+    the drift path enters an anchor zone the corridor turns blue, and
+    everything behind that anchor zone (in the drift direction) stays
+    blue — the ship has entered anchorable territory.
+
+    Concretely:
+      1. blue  = clipped ∩ anchor_zone  (actual anchorable cells)
+      2. green = clipped − anchor_zone  (deep water cells)
+      3. Create shadows from blue parts in the drift direction.
+      4. Green areas inside the shadow (= behind blue) are converted
+         to blue, not removed.
+
+    Args:
+        clipped: The corridor polygon after obstacle clipping (UTM).
+        anchor_zone: Union of all depth cells where anchoring is
+            possible (depth < anchor_threshold), in the same CRS.
+        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E).
+        corridor_bounds: (minx, miny, maxx, maxy) of the *original*
+            (unclipped) corridor – used to size shadows.
+
+    Returns:
+        (blue_zone, green_zone) polygons.
+    """
+    if clipped.is_empty:
+        return Polygon(), Polygon()
+
+    clipped = make_valid(clipped)
+    anchor_zone = make_valid(anchor_zone)
+
+    try:
+        blue = make_valid(clipped.intersection(anchor_zone))
+    except Exception:
+        blue = Polygon()
+
+    try:
+        green = make_valid(clipped.difference(anchor_zone))
+    except Exception:
+        green = clipped
+
+    # If there are no blue parts there is nothing to shadow.
+    if blue.is_empty or green.is_empty:
+        return blue, green
+
+    # Build shadow zones behind each blue polygon part.
+    blue_parts = extract_polygons(blue)
+    shadow_zones = []
+    for part in blue_parts:
+        if part.is_empty:
+            continue
+        shadow = create_obstacle_shadow(part, drift_angle_deg, corridor_bounds)
+        if not shadow.is_empty:
+            shadow_zones.append(shadow)
+
+    if not shadow_zones:
+        return blue, green
+
+    try:
+        all_shadows = make_valid(unary_union(shadow_zones))
+
+        # Green areas behind blue are converted to blue, not removed.
+        green_behind_blue = make_valid(green.intersection(all_shadows))
+        green = make_valid(green.difference(all_shadows))
+        if not green_behind_blue.is_empty:
+            blue = make_valid(unary_union([blue, green_behind_blue]))
+    except Exception:
+        pass  # keep blue/green as-is on failure
+
+    return blue, green
+
+
 def keep_reachable_part(clipped: Polygon, original_corridor: Polygon,
                         drift_angle_deg: float, log_prefix: str = "") -> Polygon:
     """

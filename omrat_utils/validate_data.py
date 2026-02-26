@@ -3,7 +3,13 @@ from typing import Dict, List, Optional, Union
 
 class PC(BaseModel):
     p_pc: float
-    d_pc: int
+    d_pc: float
+    headon: float = 4.9E-5
+    overtaking: float = 1.1E-4
+    crossing: float = 1.3E-4
+    bend: float = 1.3E-4
+    grounding: float = 1.6E-4
+    allision: float = 1.9E-4
 
 class Rose(RootModel[Dict[str, float]]):
     pass  # keys like "0", "45", etc.
