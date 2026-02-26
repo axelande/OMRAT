@@ -15,6 +15,7 @@ about=A plugin to do simple maritime risk analysis. This plugin has been funded 
 
 tracker=https://github.com/axelande/OMRAT/issues
 repository=https://github.com/axelande/OMRAT
+homepage=https://axelande.github.io/OMRAT/index.html
 # End of mandatory metadata
 
 # Recommended items:
@@ -33,7 +34,6 @@ changelog=
 # Tags are comma separated with spaces allowed
 tags=routing, analysis, ship, risk
 
-homepage=https://github.com/axelande/OMRAT
 category=Plugins
 icon=img/icon.png
 # experimental flag

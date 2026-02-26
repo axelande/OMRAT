@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#333"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#1976D2"/>
+    </marker>
+    <linearGradient id="shadow-grad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FF9800" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#FF9800" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+
+  <text x="480" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Shadow-Aware Ray Casting (Category II)</text>
+  <text x="480" y="48" text-anchor="middle" font-size="12" fill="#555" font-style="italic">N_RAYS = 500 across the lateral distribution; first-hit creates natural shadows</text>
+
+  <!-- LEFT: Lateral distribution curve -->
+  <rect x="20" y="65" width="90" height="490" rx="4" fill="#f5f5f5" stroke="#ccc" stroke-width="1"/>
+  <text x="65" y="82" text-anchor="middle" font-size="10" font-weight="bold" fill="#333">f(z)</text>
+
+  <!-- Distribution curve (bell shape, vertical) -->
+  <path d="M 95,100 C 85,130 55,200 40,260 C 30,300 28,310 40,360
+           C 55,420 85,490 95,520" fill="#1976D2" fill-opacity="0.15" stroke="#1976D2" stroke-width="2"/>
+  <!-- Mean line -->
+  <line x1="25" y1="310" x2="105" y2="310" stroke="#D32F2F" stroke-width="1" stroke-dasharray="3"/>
+  <text x="30" y="305" font-size="8" fill="#D32F2F">mu</text>
+
+  <!-- Sigma labels -->
+  <text x="35" y="205" font-size="7" fill="#666">+3sigma</text>
+  <text x="35" y="425" font-size="7" fill="#666">-3sigma</text>
+
+  <!-- MAIN AREA: Ray casting diagram -->
+  <!-- Turning point -->
+  <circle cx="145" cy="310" r="7" fill="#FF9800" stroke="#E65100" stroke-width="2"/>
+  <text x="145" y="340" text-anchor="middle" font-size="10" fill="#E65100" font-weight="bold">Turning</text>
+  <text x="145" y="352" text-anchor="middle" font-size="10" fill="#E65100" font-weight="bold">Point</text>
+
+  <!-- Obstacle A (closer, at ~350px from turning point) -->
+  <rect x="420" y="230" width="45" height="100" rx="3" fill="#F44336" fill-opacity="0.35" stroke="#D32F2F" stroke-width="2"/>
+  <text x="442" y="290" text-anchor="middle" font-size="10" fill="#C62828" font-weight="bold">A</text>
+  <text x="442" y="220" text-anchor="middle" font-size="9" fill="#C62828">Obstacle A</text>
+  <text x="442" y="345" text-anchor="middle" font-size="8" fill="#888">(closer)</text>
+
+  <!-- Obstacle B (farther, at ~650px from turning point, partially behind A) -->
+  <rect x="650" y="200" width="50" height="160" rx="3" fill="#9C27B0" fill-opacity="0.25" stroke="#7B1FA2" stroke-width="2"/>
+  <text x="675" y="285" text-anchor="middle" font-size="10" fill="#7B1FA2" font-weight="bold">B</text>
+  <text x="675" y="190" text-anchor="middle" font-size="9" fill="#7B1FA2">Obstacle B</text>
+  <text x="675" y="375" text-anchor="middle" font-size="8" fill="#888">(farther)</text>
+
+  <!-- Shadow region behind obstacle A -->
+  <rect x="465" y="232" width="300" height="96" fill="url(#shadow-grad)"/>
+  <path d="M 465,232 L 765,232 L 765,328 L 465,328 Z" fill="none" stroke="#FF9800" stroke-width="1" stroke-dasharray="4"/>
+  <text x="590" y="248" text-anchor="middle" font-size="9" fill="#E65100" font-style="italic">Shadow zone (blocked by A)</text>
+
+  <!-- Rays hitting obstacle A (red-orange) -->
+  <line x1="145" y1="240" x2="420" y2="240" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="145" y1="255" x2="420" y2="255" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="145" y1="270" x2="420" y2="270" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="145" y1="285" x2="420" y2="285" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="145" y1="300" x2="420" y2="300" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="145" y1="315" x2="420" y2="315" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="145" y1="325" x2="420" y2="325" stroke="#F44336" stroke-width="1.2" stroke-opacity="0.5"/>
+
+  <!-- Rays hitting obstacle B (purple, above/below A's shadow) -->
+  <line x1="145" y1="200" x2="650" y2="205" stroke="#9C27B0" stroke-width="1.0" stroke-opacity="0.5"/>
+  <line x1="145" y1="215" x2="650" y2="218" stroke="#9C27B0" stroke-width="1.0" stroke-opacity="0.5"/>
+  <line x1="145" y1="340" x2="650" y2="345" stroke="#9C27B0" stroke-width="1.0" stroke-opacity="0.5"/>
+  <line x1="145" y1="355" x2="650" y2="358" stroke="#9C27B0" stroke-width="1.0" stroke-opacity="0.5"/>
+
+  <!-- Rays missing both obstacles (grey, at distribution tails) -->
+  <line x1="145" y1="130" x2="800" y2="130" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+  <line x1="145" y1="155" x2="800" y2="155" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+  <line x1="145" y1="175" x2="800" y2="175" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+  <line x1="145" y1="400" x2="800" y2="400" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+  <line x1="145" y1="430" x2="800" y2="430" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+  <line x1="145" y1="460" x2="800" y2="460" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+  <line x1="145" y1="490" x2="800" y2="490" stroke="#999" stroke-width="0.6" stroke-opacity="0.3" stroke-dasharray="3"/>
+
+  <!-- Distance labels -->
+  <line x1="145" y1="540" x2="442" y2="540" stroke="#333" stroke-width="1.5"/>
+  <line x1="145" y1="535" x2="145" y2="545" stroke="#333" stroke-width="1.5"/>
+  <line x1="442" y1="535" x2="442" y2="545" stroke="#333" stroke-width="1.5"/>
+  <text x="293" y="555" text-anchor="middle" font-size="10" fill="#333" font-weight="bold">d_A</text>
+
+  <line x1="145" y1="565" x2="675" y2="565" stroke="#333" stroke-width="1.5"/>
+  <line x1="145" y1="560" x2="145" y2="570" stroke="#333" stroke-width="1.5"/>
+  <line x1="675" y1="560" x2="675" y2="570" stroke="#333" stroke-width="1.5"/>
+  <text x="410" y="580" text-anchor="middle" font-size="10" fill="#333" font-weight="bold">d_B</text>
+
+  <!-- Along-track axis label -->
+  <text x="450" y="605" text-anchor="middle" font-size="11" fill="#333">Along-track distance from turning point (m)</text>
+  <line x1="120" y1="590" x2="800" y2="590" stroke="#333" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- LEGEND BOX -->
+  <rect x="810" y="65" width="140" height="195" rx="5" fill="#fafafa" stroke="#ccc" stroke-width="1"/>
+  <text x="880" y="83" text-anchor="middle" font-size="10" font-weight="bold" fill="#333">Legend</text>
+
+  <line x1="820" y1="100" x2="855" y2="100" stroke="#F44336" stroke-width="2"/>
+  <text x="862" y="104" font-size="9" fill="#333">Rays hitting A</text>
+
+  <line x1="820" y1="122" x2="855" y2="122" stroke="#9C27B0" stroke-width="2"/>
+  <text x="862" y="126" font-size="9" fill="#333">Rays hitting B</text>
+
+  <line x1="820" y1="144" x2="855" y2="144" stroke="#999" stroke-width="1" stroke-dasharray="3"/>
+  <text x="862" y="148" font-size="9" fill="#333">Rays (no hit)</text>
+
+  <rect x="820" y="158" width="35" height="12" fill="#FF9800" fill-opacity="0.2" stroke="#FF9800" stroke-width="1" stroke-dasharray="3"/>
+  <text x="862" y="168" font-size="9" fill="#333">Shadow zone</text>
+
+  <circle cx="837" cy="192" r="5" fill="#FF9800" stroke="#E65100" stroke-width="1.5"/>
+  <text x="862" y="196" font-size="9" fill="#333">Turning point</text>
+
+  <rect x="820" y="210" width="35" height="12" fill="#F44336" fill-opacity="0.35" stroke="#D32F2F" stroke-width="1"/>
+  <text x="862" y="220" font-size="9" fill="#333">Obstacle</text>
+
+  <rect x="820" y="235" width="35" height="12" fill="#1976D2" fill-opacity="0.15" stroke="#1976D2" stroke-width="1"/>
+  <text x="862" y="245" font-size="9" fill="#333">Lateral PDF</text>
+
+  <!-- FORMULA BOX -->
+  <rect x="810" y="275" width="140" height="165" rx="5" fill="#E3F2FD" stroke="#90CAF9" stroke-width="1"/>
+  <text x="880" y="295" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">Per-obstacle sum</text>
+  <text x="880" y="315" text-anchor="middle" font-size="9" fill="#1565C0">mass_A = sum(pdf_i * dx)</text>
+  <text x="880" y="335" text-anchor="middle" font-size="8" fill="#333">(only first-hit rays)</text>
+  <text x="880" y="360" text-anchor="middle" font-size="9" fill="#1565C0">d_mean = weighted avg</text>
+  <text x="880" y="385" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">P = Pc * Q * mass</text>
+  <text x="880" y="405" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">* exp(-d_mean/a)</text>
+  <text x="880" y="425" text-anchor="middle" font-size="8" fill="#333">a = ai * V (recovery)</text>
+</svg>
