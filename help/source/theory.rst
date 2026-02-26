@@ -38,6 +38,10 @@ The **causation probability** :math:`P_C` accounts for human and
 technical factors -- the probability that the crew fails to detect and
 avoid the danger.
 
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:5`` -- `get_Fcoll() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L5>`__
+
 
 Three Risk Categories
 =====================
@@ -114,6 +118,10 @@ historical accident data.
 - **Poor visibility (3--10%)**: :math:`\times 2`
 - **Poor visibility (10--30%)**: :math:`\times 8`
 
+.. container:: source-code-ref
+
+   ``omrat_utils/causation_factors.py`` -- `CausationFactors <https://github.com/axelande/OMRAT/blob/main/omrat_utils/causation_factors.py>`__ (manages causation factor values)
+
 
 Lateral Traffic Distribution
 ============================
@@ -138,6 +146,10 @@ These distributions can be fitted automatically from AIS data or
 entered manually. The distribution parameters are stored per segment
 and per direction.
 
+.. container:: source-code-ref
+
+   ``geometries/drift/distribution.py:66`` -- `get_distribution_width() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/distribution.py#L66>`__
+
 
 Coordinate Systems
 ==================
@@ -161,6 +173,11 @@ Northern hemisphere uses EPSG codes 326XX; southern hemisphere uses
 All distance-dependent calculations (drift distances, corridor widths,
 collision geometry) are performed in UTM coordinates to ensure metric
 accuracy.
+
+.. container:: source-code-ref
+
+   ``geometries/drift/coordinates.py:12`` -- `get_utm_crs() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L12>`__ |
+   ``geometries/drift/coordinates.py:28`` -- `transform_geometry() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L28>`__
 
 
 Compass Angle Convention
@@ -218,6 +235,10 @@ The vector components in UTM are then:
 
    dx = \cos(\theta_{\text{math}}) \times d, \qquad
    dy = \sin(\theta_{\text{math}}) \times d
+
+.. container:: source-code-ref
+
+   ``geometries/drift/coordinates.py:45`` -- `compass_to_vector() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L45>`__
 
 
 References

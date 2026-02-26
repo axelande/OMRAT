@@ -121,6 +121,10 @@ the plugin lifecycle:
   ``DriftCorridorTask`` instances for background execution
 - **Menu/toolbar**: Registers QGIS menu items and toolbar buttons
 
+.. container:: source-code-ref
+
+   ``omrat.py`` -- `OMRAT <https://github.com/axelande/OMRAT/blob/main/omrat.py>`__ (main plugin entry point)
+
 OMRATMainWidget (omrat_widget.py)
 -----------------------------------
 
@@ -149,6 +153,15 @@ The main calculation engine. Key responsibilities:
 - ``run_powered_allision_model(data)``: Computes powered allision
 - ``run_drift_visualization(data)``: Creates visual corridor layers
 
+.. container:: source-code-ref
+
+   ``compute/run_calculations.py:44`` -- `Calculation <https://github.com/axelande/OMRAT/blob/main/compute/run_calculations.py#L44>`__ (mixin-based facade) |
+   Mixins: `DriftingModelMixin <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py>`__,
+   `ShipCollisionModelMixin <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py>`__,
+   `PoweredModelMixin <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py>`__,
+   `DriftingReportMixin <https://github.com/axelande/OMRAT/blob/main/compute/drifting_report.py>`__,
+   `VisualizationMixin <https://github.com/axelande/OMRAT/blob/main/compute/visualization.py>`__
+
 DriftCorridorGenerator (geometries/drift/generator.py)
 -------------------------------------------------------
 
@@ -160,6 +173,13 @@ Orchestrates drift corridor generation for all legs and directions:
 - ``_create_single_corridor()``: Creates one corridor for one leg in
   one direction
 
+.. container:: source-code-ref
+
+   ``geometries/drift/generator.py:25`` -- `DriftCorridorGenerator <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L25>`__ |
+   ``geometries/drift/generator.py:65`` -- `precollect_data() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L65>`__ |
+   ``geometries/drift/generator.py:360`` -- `generate_corridors() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L360>`__ |
+   ``geometries/drift/generator.py:516`` -- `_create_single_corridor() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L516>`__
+
 HandleQGISIface (geometries/handle_qgis_iface.py)
 ---------------------------------------------------
 
@@ -169,6 +189,10 @@ Manages QGIS layer operations for route digitisation:
 - Segment data tracking (start/end points, directions, widths)
 - Visual offset lines showing route width
 - Geometry change detection for interactive editing
+
+.. container:: source-code-ref
+
+   ``geometries/handle_qgis_iface.py`` -- `HandleQGISIface <https://github.com/axelande/OMRAT/blob/main/geometries/handle_qgis_iface.py>`__
 
 
 Data Structures
@@ -261,6 +285,10 @@ Wraps the full risk calculation pipeline:
 Signals emitted: ``progress_updated``, ``calculation_finished``,
 ``calculation_failed``.
 
+.. container:: source-code-ref
+
+   ``compute/calculation_task.py`` -- `CalculationTask <https://github.com/axelande/OMRAT/blob/main/compute/calculation_task.py>`__
+
 DriftCorridorTask
 ------------------
 
@@ -272,6 +300,10 @@ Wraps the drift corridor generation:
 
 Signals emitted: ``progress_updated``, ``corridors_generated``,
 ``generation_failed``.
+
+.. container:: source-code-ref
+
+   ``geometries/drift_corridor_task_v2.py`` -- `DriftCorridorTask <https://github.com/axelande/OMRAT/blob/main/geometries/drift_corridor_task_v2.py>`__
 
 
 IWRAP Integration
@@ -296,6 +328,10 @@ OMRAT supports bidirectional conversion with IWRAP XML format:
 The conversion handles differences in data model between IWRAP and OMRAT,
 including coordinate format, traffic representation, and distribution
 parameters.
+
+.. container:: source-code-ref
+
+   ``compute/iwrap_convertion.py`` -- `IWRAP conversion module <https://github.com/axelande/OMRAT/blob/main/compute/iwrap_convertion.py>`__
 
 
 Project Persistence
@@ -322,3 +358,8 @@ Projects are saved as ``.omrat`` files (JSON format):
 The ``validate_data.py`` module defines a Pydantic schema
 (``RootModelSchema``) that validates the structure on save and load.
 Legacy format conversion is handled by ``Storage._normalize_legacy_to_schema()``.
+
+.. container:: source-code-ref
+
+   ``omrat_utils/storage.py`` -- `Storage <https://github.com/axelande/OMRAT/blob/main/omrat_utils/storage.py>`__ |
+   ``omrat_utils/validate_data.py`` -- `Validation schemas <https://github.com/axelande/OMRAT/blob/main/omrat_utils/validate_data.py>`__

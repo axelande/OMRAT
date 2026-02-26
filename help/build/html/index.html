@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>OMRAT – Open Maritime Risk Analysis Tool &#8212; OMRAT 0.3.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=fa44fd50" />
+    <link rel="stylesheet" type="text/css" href="_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=ff28a369" />
+    <link rel="stylesheet" type="text/css" href="_static/custom.css?v=b5312e80" />
+    <script src="_static/documentation_options.js?v=4621528c"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Project Overview" href="overview.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  <div class="document">
+    
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="#">OMRAT</a></h1>
+
+
+
+<p class="blurb">Open Maritime Risk Analysis Tool - QGIS Plugin</p>
+
+
+
+
+<p>
+<iframe src="https://ghbtns.com/github-btn.html?user=axelande&repo=OMRAT&type=star&count=true&size=large&v=2"
+  allowtransparency="true" frameborder="0" scrolling="0" width="200px" height="35px"></iframe>
+</p>
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Project Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user_guide.html">User Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Theory &amp; Calculations</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="theory.html">Mathematical Foundations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="drifting.html">Drifting Risk Calculations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="collisions.html">Ship-Ship Collision Calculations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="powered.html">Powered Grounding and Allision</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture.html">Code Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API Reference</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="#">Documentation overview</a><ul>
+      <li>Next: <a href="overview.html" title="next chapter">Project Overview</a></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="omrat-open-maritime-risk-analysis-tool">
+<h1>OMRAT – Open Maritime Risk Analysis Tool<a class="headerlink" href="#omrat-open-maritime-risk-analysis-tool" title="Link to this heading">¶</a></h1>
+<p><strong>Version:</strong> 0.3.x |
+<strong>Author:</strong> Axel Horteborn |
+<strong>Organization:</strong> RISE / Naturvardsverket |
+<strong>License:</strong> GNU General Public License v2+</p>
+<p>OMRAT is a QGIS plugin for calculating the probability of maritime
+accidents – collisions, groundings, and allisions – based on the
+equations by Pedersen (1995) and Friis-Hansen (2008). It implements the
+IWRAP (International Association of Marine Aids to Navigation and
+Lighthouse Authorities Waterway Risk Assessment Programme) methodology
+as an open-source tool.</p>
+<a class="reference internal image-reference" href="_images/system_architecture.svg"><img alt="OMRAT system architecture overview" src="_images/system_architecture.svg" style="width: 100%;" />
+</a>
+<section id="contents">
+<h2>Contents<a class="headerlink" href="#contents" title="Link to this heading">¶</a></h2>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Project Overview</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#what-is-omrat">What is OMRAT?</a></li>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#background-and-funding">Background and Funding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#key-features">Key Features</a></li>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#technology-stack">Technology Stack</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#prerequisites">Prerequisites</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#installing-the-plugin">Installing the Plugin</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#installing-additional-dependencies">Installing Additional Dependencies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#verifying-the-installation">Verifying the Installation</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="user_guide.html">User Guide</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#quick-start">Quick Start</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#step-1-defining-routes">Step 1: Defining Routes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#step-2-traffic-data">Step 2: Traffic Data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#step-3-defining-obstacles">Step 3: Defining Obstacles</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#step-4-configuration">Step 4: Configuration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#step-5-running-calculations">Step 5: Running Calculations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#saving-and-loading-projects">Saving and Loading Projects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#interpreting-results">Interpreting Results</a></li>
+<li class="toctree-l2"><a class="reference internal" href="user_guide.html#tips-and-best-practices">Tips and Best Practices</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Theory &amp; Calculations</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="theory.html">Mathematical Foundations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#risk-assessment-framework">Risk Assessment Framework</a></li>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#three-risk-categories">Three Risk Categories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#causation-factors">Causation Factors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#lateral-traffic-distribution">Lateral Traffic Distribution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#coordinate-systems">Coordinate Systems</a></li>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#compass-angle-convention">Compass Angle Convention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="theory.html#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="drifting.html">Drifting Risk Calculations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#blackout-probability">Blackout Probability</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#repair-time-distribution">Repair Time Distribution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#drift-corridor-generation">Drift Corridor Generation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#probability-integration">Probability Integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#wind-rose-weighting">Wind Rose Weighting</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#final-drifting-risk">Final Drifting Risk</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#computational-complexity">Computational Complexity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="drifting.html#result-visualisation">Result Visualisation</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="collisions.html">Ship-Ship Collision Calculations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#head-on-collisions">Head-On Collisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#overtaking-collisions">Overtaking Collisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#crossing-collisions">Crossing Collisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#bend-collisions">Bend Collisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#calculation-workflow">Calculation Workflow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="collisions.html#summary-of-equations">Summary of Equations</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="powered.html">Powered Grounding and Allision</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="powered.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="powered.html#category-i-direct-overlap">Category I: Direct Overlap</a></li>
+<li class="toctree-l2"><a class="reference internal" href="powered.html#category-ii-missed-turn-at-bend">Category II: Missed Turn at Bend</a></li>
+<li class="toctree-l2"><a class="reference internal" href="powered.html#combined-powered-risk">Combined Powered Risk</a></li>
+<li class="toctree-l2"><a class="reference internal" href="powered.html#comparison-with-drifting-risk">Comparison with Drifting Risk</a></li>
+<li class="toctree-l2"><a class="reference internal" href="powered.html#causation-factor-summary">Causation Factor Summary</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture.html">Code Architecture</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#directory-structure">Directory Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#data-flow">Data Flow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#key-classes">Key Classes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#data-structures">Data Structures</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#background-task-execution">Background Task Execution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#iwrap-integration">IWRAP Integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture.html#project-persistence">Project Persistence</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API Reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api.html#compute-basic-equations">compute.basic_equations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#compute-run-calculations">compute.run_calculations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#geometries-drift">geometries.drift</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#geometries-calculate-probability-holes">geometries.calculate_probability_holes</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#geometries-result-layers">geometries.result_layers</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#omrat-utils">omrat_utils</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+<section id="indices-and-tables">
+<h2>Indices and tables<a class="headerlink" href="#indices-and-tables" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="genindex.html"><span class="std std-ref">Index</span></a></p></li>
+<li><p><a class="reference internal" href="py-modindex.html"><span class="std std-ref">Module Index</span></a></p></li>
+<li><p><a class="reference internal" href="search.html"><span class="std std-ref">Search Page</span></a></p></li>
+</ul>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+    <div class="clearer"></div>
+  </div>
+    <div class="footer">
+      &#169;2022-2026, Axel Hörteborn / RISE.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 8.2.3</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+      |
+      <a href="_sources/index.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

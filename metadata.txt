@@ -7,7 +7,7 @@ name=Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.0
 supportsQt6=True
 description=This is an open source implementation of Pedersens and Friis-Hansen equations
-version=0.4.0
+version=0.4.1
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 
@@ -22,6 +22,7 @@ repository=https://github.com/axelande/OMRAT
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.4.1 - Refactored the run_calculation and updated documentation
   Version 0.4.0 - Major update
   Version 0.3.1 - Moved database file to the compute folder
   Version 0.3.0 - Changed name from OpenMRAT to OMRAT and fixed tests etc.

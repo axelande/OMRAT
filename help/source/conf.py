@@ -11,6 +11,7 @@ extensions = [
     'sphinx.ext.todo',
     'sphinx.ext.viewcode',
     'sphinx.ext.mathjax',
+    'sphinx.ext.intersphinx',
 ]
 
 templates_path = ['_templates']
@@ -48,6 +49,11 @@ html_static_path = ['_static']
 html_last_updated_fmt = '%b %d, %Y'
 htmlhelp_basename = 'OMRATdoc'
 
+# -- Custom CSS for source code reference boxes --------------------------------
+
+def setup(app):
+    app.add_css_file('custom.css')
+
 # -- Options for LaTeX output --------------------------------------------------
 
 latex_documents = [
@@ -65,3 +71,15 @@ man_pages = [
 # -- Math rendering ------------------------------------------------------------
 # Use MathJax for HTML output (no LaTeX installation needed)
 mathjax_path = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'
+
+# -- Intersphinx ---------------------------------------------------------------
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'numpy': ('https://numpy.org/doc/stable/', None),
+    'scipy': ('https://docs.scipy.org/doc/scipy/', None),
+    'shapely': ('https://shapely.readthedocs.io/en/stable/', None),
+}
+
+# -- GitHub source code base URL -----------------------------------------------
+# Used by RST substitutions for source code links
+github_source_url = 'https://github.com/axelande/OMRAT/blob/main'

@@ -27,6 +27,25 @@ jobs:
     - name: Pull qgis image
       run: docker pull qgis/qgis:stable
 
+    - name: Pip install
+      run: |
+        docker run --name qgis_container \
+          --volume $(pwd):/app \
+          -w=/app \
+          qgis/qgis:stable sh -c "
+            python3 -m pip install --ignore-installed -r requirements.txt --break-system-packages
+          "
+        docker commit qgis_container qgis_with_deps
+
+    - name: Debug - List directory
+      run: docker run --volume $(pwd):/app -w=/app qgis_with_deps sh -c "ls -la /app"
+
+    - name: Debug - Print PYTHONPATH
+      run: docker run --volume $(pwd):/app -w=/app qgis_with_deps sh -c "echo \$PYTHONPATH"
+
     - name: Run tests
-      run: docker run --net=host --volume $(pwd):/app -w=/app qgis/qgis:stable sh -c "python3 -m pip install -r requirements.txt --break-system-packages && xvfb-run -s '+extension GLX -screen 0 1024x768x24' python3 -m pytest tests -s"
-    
+      run: |
+        docker run --volume $(pwd):/app -w=/app qgis_with_deps sh -c "
+          export PYTHONPATH=\$PYTHONPATH:/app && \
+          xvfb-run -s '+extension GLX -screen 0 1024x768x24' python3 -m pytest tests -s
+        "

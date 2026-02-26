@@ -1,0 +1,40 @@
+/* Source code reference boxes */
+.source-code-ref {
+    background: #f0f4f8;
+    border-left: 3px solid #3572a5;
+    padding: 8px 12px;
+    margin: 10px 0 16px 0;
+    font-size: 0.9em;
+    border-radius: 0 4px 4px 0;
+}
+
+.source-code-ref code.literal {
+    background: #e2e8f0;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.95em;
+}
+
+.source-code-ref a {
+    color: #3572a5;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.source-code-ref a:hover {
+    text-decoration: underline;
+}
+
+/* Orchestrator / pipeline reference */
+.source-code-ref.pipeline {
+    border-left-color: #2d8659;
+    background: #f0f8f4;
+}
+
+/* Literalinclude captions */
+div.literal-block-wrapper div.code-block-caption {
+    background: #e8edf2;
+    padding: 4px 8px;
+    font-size: 0.85em;
+    color: #555;
+}

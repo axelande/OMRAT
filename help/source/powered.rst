@@ -32,6 +32,12 @@ course correction** after an error.
    :width: 100%
    :alt: Powered grounding Category I and Category II
 
+.. container:: source-code-ref pipeline
+
+   **Grounding pipeline:** ``compute/powered_model.py:28`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L28>`__ |
+   **Allision pipeline:** ``compute/powered_model.py:178`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L178>`__ |
+   **Exponential decay:** ``compute/basic_equations.py:26`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L26>`__
+
 
 Category I: Direct Overlap
 ==========================
@@ -69,7 +75,14 @@ For a **normal distribution**, the integral evaluates to:
 Where :math:`\Phi` is the standard normal CDF and :math:`\mu, \sigma`
 are the mean and standard deviation of the lateral position distribution.
 
-**Implementation**: ``compute/basic_equations.py:get_powered_grounding_cat1()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:432`` -- `get_powered_grounding_cat1() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L432>`__
+
+.. literalinclude:: ../../compute/basic_equations.py
+   :language: python
+   :lines: 466-467
+   :caption: Category I -- direct overlap (compute/basic_equations.py)
 
 Physical Interpretation
 -----------------------
@@ -113,7 +126,14 @@ Where:
 - :math:`f(z)` = probability density at the lateral position where the
   original heading leads to the obstacle
 
-**Implementation**: ``compute/basic_equations.py:get_powered_grounding_cat2()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:470`` -- `get_powered_grounding_cat2() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L470>`__
+
+.. literalinclude:: ../../compute/basic_equations.py
+   :language: python
+   :lines: 521-532
+   :caption: Category II -- exponential decay (compute/basic_equations.py)
 
 Recovery Distance
 -----------------
@@ -135,7 +155,9 @@ For a ship travelling at 10 knots (~5.1 m/s):
 
    a = 3 \times 60 \times 5.1 \approx 920 \text{ m}
 
-**Implementation**: ``compute/basic_equations.py:get_recovery_distance()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:408`` -- `get_recovery_distance() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L408>`__
 
 Exponential Decay
 -----------------

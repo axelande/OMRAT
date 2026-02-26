@@ -17,6 +17,8 @@ compute.basic_equations
 
 Core mathematical formulas for risk calculations.
 
+**Source file:** ``compute/basic_equations.py`` (`View on GitHub <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py>`__)
+
 Drifting Functions
 ------------------
 
@@ -27,6 +29,8 @@ Drifting Functions
    :param na: Number of accident candidates
    :param pc: Causation probability
    :return: Accident frequency (:math:`F = N_A \times P_C`)
+
+   **Line:** 5 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L5>`__
 
 .. function:: get_drifting_prob(Fb, line_length, ship_speed)
 
@@ -39,6 +43,8 @@ Drifting Functions
 
    Uses: :math:`P = 1 - \exp(-F_b / (24 \times 365) \times h)`
 
+   **Line:** 9 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L9>`__
+
 .. function:: get_drift_time(distance, drift_speed)
 
    Estimate the time to drift a given distance.
@@ -46,6 +52,8 @@ Drifting Functions
    :param distance: Drift distance (metres)
    :param drift_speed: Drift speed (m/s)
    :return: Drift time (seconds)
+
+   **Line:** 14 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L14>`__
 
 .. function:: get_not_repaired(data, drift_speed, dist)
 
@@ -57,6 +65,8 @@ Drifting Functions
    :param dist: Distance to obstacle (metres)
    :return: Probability of not being repaired
 
+   **Line:** 30 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L30>`__
+
 .. function:: repairtime_function(data, x)
 
    Evaluate the repair time CDF at time ``x``.
@@ -64,6 +74,8 @@ Drifting Functions
    :param data: Repair parameters dict
    :param x: Time (hours)
    :return: Cumulative repair probability
+
+   **Line:** 18 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L18>`__
 
 Ship-Ship Collision Functions
 ------------------------------
@@ -80,12 +92,16 @@ Ship-Ship Collision Functions
    :param L_w: Leg length (m)
    :return: Geometric collision candidates per year
 
+   **Line:** 46 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L46>`__
+
 .. function:: get_overtaking_collision_candidates(Q_fast, Q_slow, V_fast, V_slow, mu_fast, mu_slow, sigma_fast, sigma_slow, B_fast, B_slow, L_w)
 
    Calculate geometric overtaking collision candidates (Hansen Eq. 4.5).
    Returns 0 if ``V_fast <= V_slow``.
 
    :return: Geometric collision candidates per year
+
+   **Line:** 147 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L147>`__
 
 .. function:: get_crossing_collision_candidates(Q1, Q2, V1, V2, L1, L2, B1, B2, theta)
 
@@ -95,6 +111,8 @@ Ship-Ship Collision Functions
    :param theta: Crossing angle (radians)
    :return: Geometric collision candidates per year
 
+   **Line:** 238 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L238>`__
+
 .. function:: get_bend_collision_candidates(Q, P_no_turn, L, B, theta)
 
    Calculate bend collision candidates at waypoints.
@@ -103,6 +121,8 @@ Ship-Ship Collision Functions
    :param P_no_turn: Probability of not turning (default 0.01)
    :param theta: Bend angle (radians)
    :return: Bend collision candidates per year
+
+   **Line:** 331 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L331>`__
 
 Powered Grounding Functions
 ----------------------------
@@ -115,6 +135,8 @@ Powered Grounding Functions
    :param ship_speed: Ship speed (m/s)
    :return: Recovery distance (metres)
 
+   **Line:** 408 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L408>`__
+
 .. function:: get_powered_grounding_cat1(Q, Pc, prob_in_obstacle)
 
    Category I powered grounding -- ships sailing directly into obstacle.
@@ -124,6 +146,8 @@ Powered Grounding Functions
    :param prob_in_obstacle: Fraction of distribution overlapping obstacle
    :return: Expected groundings per year
 
+   **Line:** 432 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L432>`__
+
 .. function:: get_powered_grounding_cat2(Q, Pc, prob_at_position, distance_to_obstacle, position_check_interval, ship_speed)
 
    Category II powered grounding -- ships failing to turn at bend.
@@ -132,13 +156,23 @@ Powered Grounding Functions
    :param position_check_interval: Check interval (minutes)
    :return: Expected groundings per year
 
+   **Line:** 470 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L470>`__
+
 
 compute.run_calculations
 ========================
 
+**Source file:** ``compute/run_calculations.py`` (`View on GitHub <https://github.com/axelande/OMRAT/blob/main/compute/run_calculations.py>`__)
+
 .. class:: Calculation(omrat)
 
    Main calculation orchestrator.
+
+   **Line:** 44 | `Source <https://github.com/axelande/OMRAT/blob/main/compute/run_calculations.py#L44>`__
+
+   Composed from mixins: ``DriftingModelMixin``, ``ShipCollisionModelMixin``,
+   ``PoweredModelMixin``, ``DriftingReportMixin``, ``VisualizationMixin``
+   (`run_calculations.py:34-50 <https://github.com/axelande/OMRAT/blob/main/compute/run_calculations.py#L34>`__)
 
    .. method:: run_drifting_model(data)
 
@@ -167,12 +201,16 @@ compute.run_calculations
 geometries.drift
 =================
 
+**Source file:** ``geometries/drift/generator.py`` (`View on GitHub <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py>`__)
+
 Drift Corridor Generation
 --------------------------
 
 .. class:: DriftCorridorGenerator(omrat)
 
    Main orchestrator for drift corridor generation.
+
+   **Line:** 25 | `Source <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L25>`__
 
    .. method:: precollect_data(depth_threshold, height_threshold)
 
@@ -247,6 +285,8 @@ geometries.calculate_probability_holes
    :param distance: Maximum drift distance (metres)
    :param progress_callback: Optional ``(completed, total, msg) -> bool``
    :return: 3D array ``[leg][direction][obstacle]`` of probabilities
+
+   **Line:** 642 | `Source <https://github.com/axelande/OMRAT/blob/main/geometries/calculate_probability_holes.py#L642>`__
 
 
 geometries.result_layers

@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 580" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
+    </marker>
+  </defs>
+
+  <text x="450" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#1a1a2e">Powered Grounding Categories (Hansen 2008)</text>
+
+  <!-- Category I -->
+  <rect x="30" y="55" width="400" height="480" rx="10" fill="#e3f2fd" stroke="#1976D2" stroke-width="2"/>
+  <text x="230" y="80" text-anchor="middle" font-size="16" font-weight="bold" fill="#0D47A1">Category I: Direct Overlap</text>
+  <text x="230" y="100" text-anchor="middle" font-size="11" fill="#1565C0" font-style="italic">Ship sailing directly into obstacle</text>
+
+  <!-- Cat I Diagram -->
+  <!-- Traffic lane with distribution -->
+  <rect x="60" y="120" width="340" height="130" rx="5" fill="#fafafa" stroke="#ddd" stroke-width="1"/>
+
+  <!-- Normal distribution curve (lateral) -->
+  <path d="M 80,220 Q 120,130 160,180 Q 180,200 200,130 Q 220,180 260,220 Q 280,200 300,220 Q 320,200 360,220" fill="none" stroke="#1976D2" stroke-width="2"/>
+  <text x="230" y="145" text-anchor="middle" font-size="10" fill="#1565C0">f(z) - lateral distribution</text>
+
+  <!-- Obstacle zone -->
+  <rect x="250" y="165" width="60" height="50" fill="#F44336" fill-opacity="0.3" stroke="#D32F2F" stroke-width="2"/>
+  <text x="280" y="195" text-anchor="middle" font-size="9" fill="#C62828" font-weight="bold">Obstacle</text>
+
+  <!-- z_min and z_max labels -->
+  <line x1="250" y1="160" x2="250" y2="225" stroke="#D32F2F" stroke-width="1" stroke-dasharray="3"/>
+  <text x="248" y="238" text-anchor="middle" font-size="9" fill="#C62828">z_min</text>
+  <line x1="310" y1="160" x2="310" y2="225" stroke="#D32F2F" stroke-width="1" stroke-dasharray="3"/>
+  <text x="312" y="238" text-anchor="middle" font-size="9" fill="#C62828">z_max</text>
+
+  <!-- Shaded overlap area -->
+  <rect x="250" y="180" width="60" height="35" fill="#1976D2" fill-opacity="0.2"/>
+  <text x="280" y="230" text-anchor="middle" font-size="9" fill="#0D47A1">Overlap area</text>
+
+  <!-- Leg centerline -->
+  <line x1="60" y1="200" x2="400" y2="200" stroke="#333" stroke-width="1" stroke-dasharray="5"/>
+  <text x="75" y="215" text-anchor="start" font-size="8" fill="#666">Leg centerline</text>
+
+  <!-- Ship arrow -->
+  <line x1="100" y1="190" x2="240" y2="190" stroke="#1976D2" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="170" y="185" text-anchor="middle" font-size="9" fill="#1565C0">Ship course</text>
+
+  <!-- Equation box -->
+  <rect x="60" y="270" width="340" height="120" rx="5" fill="#E3F2FD" stroke="#90CAF9" stroke-width="1"/>
+  <text x="230" y="295" text-anchor="middle" font-size="12" font-weight="bold" fill="#0D47A1">Hansen Eq. 4.15</text>
+  <text x="230" y="320" text-anchor="middle" font-size="11" fill="#1565C0">N_I = P_c x Q x integral[z_min to z_max] f(z) dz</text>
+  <text x="230" y="345" text-anchor="middle" font-size="10" fill="#333">Where:</text>
+  <text x="230" y="362" text-anchor="middle" font-size="10" fill="#333">P_c = causation factor (1.6E-4)</text>
+  <text x="230" y="379" text-anchor="middle" font-size="10" fill="#333">Q = traffic volume (ships/year)</text>
+
+  <!-- Description -->
+  <text x="230" y="415" text-anchor="middle" font-size="10" fill="#333">For normal distribution:</text>
+  <text x="230" y="435" text-anchor="middle" font-size="10" fill="#1565C0" font-weight="bold">prob = Phi((z_max-mu)/sigma) - Phi((z_min-mu)/sigma)</text>
+  <text x="230" y="465" text-anchor="middle" font-size="10" fill="#333">Ships whose natural course overlaps</text>
+  <text x="230" y="482" text-anchor="middle" font-size="10" fill="#333">the obstacle will ground if they</text>
+  <text x="230" y="499" text-anchor="middle" font-size="10" fill="#333">fail to take evasive action (P_c)</text>
+
+  <!-- Category II -->
+  <rect x="470" y="55" width="400" height="480" rx="10" fill="#fff3e0" stroke="#FF9800" stroke-width="2"/>
+  <text x="670" y="80" text-anchor="middle" font-size="16" font-weight="bold" fill="#E65100">Category II: Missed Turn</text>
+  <text x="670" y="100" text-anchor="middle" font-size="11" fill="#EF6C00" font-style="italic">Ship fails to change course at bend</text>
+
+  <!-- Cat II Diagram -->
+  <rect x="500" y="120" width="340" height="130" rx="5" fill="#fafafa" stroke="#ddd" stroke-width="1"/>
+
+  <!-- Bend point -->
+  <circle cx="600" cy="180" r="6" fill="#FF9800" stroke="#E65100" stroke-width="2"/>
+  <text x="600" y="170" text-anchor="middle" font-size="9" fill="#E65100">Bend</text>
+
+  <!-- Intended course (turns) -->
+  <line x1="520" y1="200" x2="595" y2="180" stroke="#4CAF50" stroke-width="2"/>
+  <line x1="605" y1="180" x2="700" y2="140" stroke="#4CAF50" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="660" y="135" text-anchor="middle" font-size="9" fill="#2E7D32">Intended</text>
+
+  <!-- Actual course (doesn't turn) -->
+  <line x1="605" y1="180" x2="810" y2="200" stroke="#D32F2F" stroke-width="2" stroke-dasharray="4" marker-end="url(#ar)"/>
+  <text x="720" y="215" text-anchor="middle" font-size="9" fill="#C62828">Actual (no turn)</text>
+
+  <!-- Obstacle -->
+  <rect x="740" y="170" width="50" height="40" fill="#F44336" fill-opacity="0.4" stroke="#D32F2F" stroke-width="2"/>
+  <text x="765" y="230" text-anchor="middle" font-size="9" fill="#C62828">Obstacle</text>
+
+  <!-- Distance d -->
+  <line x1="606" y1="240" x2="740" y2="240" stroke="#FF9800" stroke-width="1.5"/>
+  <line x1="606" y1="235" x2="606" y2="245" stroke="#FF9800" stroke-width="1.5"/>
+  <line x1="740" y1="235" x2="740" y2="245" stroke="#FF9800" stroke-width="1.5"/>
+  <text x="673" y="238" text-anchor="middle" font-size="10" fill="#E65100" font-weight="bold">d</text>
+
+  <!-- Exponential decay curve -->
+  <rect x="500" y="260" width="340" height="80" rx="5" fill="#FFF8E1" stroke="#FFE082" stroke-width="1"/>
+  <text x="670" y="280" text-anchor="middle" font-size="10" fill="#E65100">Recovery probability decays with distance:</text>
+  <path d="M 520,325 C 560,280 620,305 680,315 S 780,325 820,328" fill="none" stroke="#FF9800" stroke-width="2"/>
+  <text x="530" y="320" text-anchor="start" font-size="8" fill="#E65100">exp(-d/a)</text>
+  <text x="810" y="322" text-anchor="end" font-size="8" fill="#E65100">0</text>
+
+  <!-- Equation box -->
+  <rect x="500" y="355" width="340" height="120" rx="5" fill="#FFF3E0" stroke="#FFCC80" stroke-width="1"/>
+  <text x="670" y="380" text-anchor="middle" font-size="12" font-weight="bold" fill="#E65100">Hansen Eq. 4.16-4.17</text>
+  <text x="670" y="405" text-anchor="middle" font-size="11" fill="#EF6C00">N_II = P_c x Q x f(z) x exp(-d / a)</text>
+  <text x="670" y="430" text-anchor="middle" font-size="10" fill="#333">Where:</text>
+  <text x="670" y="447" text-anchor="middle" font-size="10" fill="#333">a = lambda x V (recovery distance)</text>
+  <text x="670" y="464" text-anchor="middle" font-size="10" fill="#333">lambda = position check interval (~3 min)</text>
+
+  <!-- Description -->
+  <text x="670" y="500" text-anchor="middle" font-size="10" fill="#333">Ships that fail to turn at a waypoint</text>
+  <text x="670" y="517" text-anchor="middle" font-size="10" fill="#333">have exponentially decreasing chance of</text>
+  <text x="670" y="534" text-anchor="middle" font-size="10" fill="#333">NOT detecting error with distance from bend</text>
+</svg>

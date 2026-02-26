@@ -39,6 +39,10 @@ Where:
 - :math:`N_G` = geometric collision candidates per year
 - :math:`P_C` = causation probability (IALA default values)
 
+.. container:: source-code-ref pipeline
+
+   **Pipeline orchestrator:** ``compute/ship_collision_model.py:526`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L526>`__
+
 
 Head-On Collisions
 ==================
@@ -93,7 +97,14 @@ Where:
   width)
 - :math:`\Phi` = standard normal CDF
 
-**Implementation**: ``compute/basic_equations.py:get_head_on_collision_candidates()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:46`` -- `get_head_on_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L46>`__
+
+.. literalinclude:: ../../compute/basic_equations.py
+   :language: python
+   :lines: 102-144
+   :caption: Head-on collision candidate calculation (compute/basic_equations.py)
 
 Default causation factor
 -------------------------
@@ -141,7 +152,9 @@ The geometric probability :math:`P_G`, combined standard deviation
 :math:`\sigma_{ij}`, and breadth :math:`B_{ij}` are calculated
 identically to the head-on case.
 
-**Implementation**: ``compute/basic_equations.py:get_overtaking_collision_candidates()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:147`` -- `get_overtaking_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L147>`__
 
 Default causation factor
 -------------------------
@@ -203,7 +216,14 @@ beams.
    anti-parallel courses), :math:`\sin\theta \to 0` and the crossing
    formula is not applicable. Use head-on or overtaking formulas instead.
 
-**Implementation**: ``compute/basic_equations.py:get_crossing_collision_candidates()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:238`` -- `get_crossing_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L238>`__
+
+.. literalinclude:: ../../compute/basic_equations.py
+   :language: python
+   :lines: 288-328
+   :caption: Crossing collision with law of cosines (compute/basic_equations.py)
 
 Default causation factor
 -------------------------
@@ -250,7 +270,9 @@ Where :math:`\theta` is the bend angle (change in heading at the
 waypoint) and the crossing collision formula is applied with
 self-interaction (same ship type on both "legs").
 
-**Implementation**: ``compute/basic_equations.py:get_bend_collision_candidates()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:331`` -- `get_bend_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L331>`__
 
 Default causation factor
 -------------------------

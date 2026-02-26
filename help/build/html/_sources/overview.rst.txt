@@ -1,0 +1,134 @@
+.. _overview:
+
+================
+Project Overview
+================
+
+What is OMRAT?
+==============
+
+The **Open Maritime Risk Analysis Tool** (OMRAT) is a QGIS plugin that
+provides comprehensive maritime risk assessment capabilities. It
+calculates the probability of ship accidents -- including collisions,
+groundings, and allisions (ship-to-structure impacts) -- for defined
+shipping routes in a geographic area.
+
+OMRAT implements the internationally recognized IWRAP methodology
+(International Association of Marine Aids to Navigation and Lighthouse
+Authorities Waterway Risk Assessment Programme), making it possible to
+perform quantitative risk assessments for:
+
+- **Drifting risks**: Ships that lose propulsion and drift into hazards
+- **Powered risks**: Ships under power that fail to navigate correctly
+- **Ship-ship collisions**: Encounters between vessels on the same or
+  crossing routes
+
+The plugin integrates directly with QGIS, using its map canvas for
+route digitization, layer management for obstacle definition, and
+coordinate transformation services for accurate distance calculations.
+
+
+Background and Funding
+======================
+
+OMRAT has been developed with funding from:
+
+- **Naturvardsverket** (Swedish Environmental Protection Agency)
+- **RISE** (Research Institutes of Sweden)
+
+The mathematical foundations come from:
+
+- Pedersen, P.T. (1995). *Collision and Grounding Mechanics.* WEMT'95.
+- Friis-Hansen, P. (2008). *IWRAP MK II - Basic Modelling Principles
+  for Prediction of Collision and Grounding Frequencies.* Technical
+  University of Denmark.
+- Talavera, A. et al. (2013). *Application of Dempster-Shafer theory
+  for the quantification and propagation of the uncertainty caused by
+  the use of AIS data.*
+- Fujii, Y. et al. (1974). *Some factors affecting the frequency of
+  accidents in marine traffic.* Journal of Navigation, 27.
+
+
+Key Features
+============
+
+Route Management
+----------------
+
+- Interactive route digitization on the QGIS map canvas
+- Multi-segment routes with waypoints
+- Automatic direction labelling (North/South, East/West going)
+- Route width configuration with visual offset lines
+
+Traffic Data
+------------
+
+- Per-segment, per-direction, per-ship-type traffic frequencies
+- Ship dimensions: speed, draught, beam, height
+- Ship type classification with configurable size bins
+- AIS data integration from PostgreSQL/PostGIS databases
+
+Obstacle Management
+-------------------
+
+- Depth polygons from shapefiles or GEBCO bathymetry data
+- Structure polygons (bridges, wind turbines, platforms)
+- Automatic GEBCO download via OpenTopography API
+- Consolidated depth layer with graduated symbology
+
+Drift Corridor Analysis
+------------------------
+
+- 8-direction drift corridor generation based on wind rose
+- Repair time modelling with lognormal distribution
+- Obstacle shadow calculation using quad-based sweep
+- Anchor zone identification and splitting
+- Background task execution for responsive UI
+
+Risk Calculations
+-----------------
+
+- Drifting grounding and allision probability
+- Powered grounding (Category I and II)
+- Ship-ship collision frequency (head-on, overtaking, crossing, bend)
+- Causation factors from IALA/Fujii/Pedersen
+- Monte Carlo probability integration with parallel execution
+
+Data Integration
+-----------------
+
+- IWRAP XML import and export
+- Project save/load in ``.omrat`` JSON format
+- Pydantic data validation
+- AIS database connectivity
+
+
+Technology Stack
+================
+
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
+
+   * - Component
+     - Technology
+   * - GUI Framework
+     - PyQt5/6
+   * - GIS Operations
+     - QGIS API (``qgis.core``, ``qgis.gui``)
+   * - Geometry Operations
+     - Shapely
+   * - Spatial DataFrames
+     - GeoPandas
+   * - Numerical Computing
+     - NumPy, SciPy
+   * - Visualization
+     - Matplotlib
+   * - Data Validation
+     - Pydantic
+   * - Database (optional)
+     - PostgreSQL / PostGIS (for AIS data)
+   * - HTTP Requests
+     - Requests (for GEBCO API)
+   * - Data Persistence
+     - JSON (``.omrat``), XML (IWRAP)

@@ -61,6 +61,11 @@ irregular shapes are depth obstacles. Notice how the corridors are
 clipped where they encounter obstacles, and how gaps between scattered
 obstacle parts remain open -- ships can drift through them.
 
+.. container:: source-code-ref pipeline
+
+   **Pipeline orchestrator:** ``compute/drifting_model.py:975`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L975>`__ |
+   **Corridor generator:** ``geometries/drift/generator.py:25`` -- `DriftCorridorGenerator <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L25>`__
+
 
 Blackout Probability
 ====================
@@ -80,7 +85,9 @@ Where:
 - :math:`h` = transit time across the leg (hours)
 - :math:`h = L / V` (leg length divided by ship speed)
 
-**Implementation**: ``compute/basic_equations.py:get_drifting_prob()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:9`` -- `get_drifting_prob() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L9>`__
 
 
 Repair Time Distribution
@@ -110,7 +117,10 @@ distance :math:`d` is:
 
 Where the drift time is :math:`d / V_{\text{drift}}` converted to hours.
 
-**Implementation**: ``compute/basic_equations.py:get_not_repaired()``
+.. container:: source-code-ref
+
+   ``compute/basic_equations.py:30`` -- `get_not_repaired() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L30>`__ |
+   ``compute/basic_equations.py:18`` -- `repairtime_function() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L18>`__
 
 Default parameters:
 
@@ -178,7 +188,14 @@ extended perpendicularly by ``half_width`` in both directions:
    B3 = end   + half_width * perp_dir
    B4 = end   - half_width * perp_dir
 
-**Implementation**: ``geometries/drift/corridor.py:create_base_surface()``
+.. container:: source-code-ref
+
+   ``geometries/drift/corridor.py:16`` -- `create_base_surface() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/corridor.py#L16>`__
+
+.. literalinclude:: ../../geometries/drift/corridor.py
+   :language: python
+   :lines: 30-51
+   :caption: Base surface corner calculation (geometries/drift/corridor.py)
 
 
 Step 2: Projection Distance
@@ -205,7 +222,9 @@ For the default parameters (std=0.95, loc=0.2, scale=0.85) and a drift
 speed of 1.94 knots (~1 m/s), the projection distance is approximately
 58 km.
 
-**Implementation**: ``geometries/drift/distribution.py:get_projection_distance()``
+.. container:: source-code-ref
+
+   ``geometries/drift/distribution.py:13`` -- `get_projection_distance() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/distribution.py#L13>`__
 
 
 Step 3: Projected Corridor
@@ -236,7 +255,9 @@ The convex hull ensures a single simple polygon. For cardinal directions
 (N, S, E, W), the result is a rectangle. For diagonal directions (NE,
 NW, SE, SW), it is a parallelogram.
 
-**Implementation**: ``geometries/drift/corridor.py:create_projected_corridor()``
+.. container:: source-code-ref
+
+   ``geometries/drift/corridor.py:54`` -- `create_projected_corridor() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/corridor.py#L54>`__
 
 
 Step 4: Obstacle Shadows (The Quad-Sweep Algorithm)
@@ -306,7 +327,15 @@ separated shoals). OMRAT handles this by:
 
 This ensures that gaps between obstacle parts remain open for drift.
 
-**Implementation**: ``geometries/drift/shadow.py:create_obstacle_shadow()``
+.. container:: source-code-ref
+
+   ``geometries/drift/shadow.py:18`` -- `create_obstacle_shadow() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/shadow.py#L18>`__ |
+   ``geometries/drift/shadow.py:96`` -- `_create_edge_quads() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/shadow.py#L96>`__
+
+.. literalinclude:: ../../geometries/drift/shadow.py
+   :language: python
+   :lines: 56-71
+   :caption: Quad-sweep core logic (geometries/drift/shadow.py)
 
 
 Step 5: Corridor Clipping
@@ -338,7 +367,9 @@ where ships enter the corridor.
 Fragments that are disconnected from the upwind edge are discarded, as
 no ship can reach them without passing through an obstacle first.
 
-**Implementation**: ``geometries/drift/clipping.py:clip_corridor_at_obstacles()``
+.. container:: source-code-ref
+
+   ``geometries/drift/clipping.py:16`` -- `clip_corridor_at_obstacles() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/clipping.py#L16>`__
 
 
 Step 6: Anchor Zone Split
@@ -373,7 +404,9 @@ to reclassify deep-water areas behind them.
    final_blue  = blue + green_behind_blue
    final_green = green - blue_shadows
 
-**Implementation**: ``geometries/drift/clipping.py:split_corridor_by_anchor_zone()``
+.. container:: source-code-ref
+
+   ``geometries/drift/clipping.py:124`` -- `split_corridor_by_anchor_zone() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/clipping.py#L124>`__
 
 
 Probability Integration
@@ -466,7 +499,9 @@ For each combination of (leg, direction, obstacle):
    integration width. The result is normalised by leg length to give
    a per-unit-length probability.
 
-**Implementation**: ``geometries/calculate_probability_holes.py:compute_probability_holes()``
+.. container:: source-code-ref
+
+   ``geometries/calculate_probability_holes.py:642`` -- `compute_probability_holes() <https://github.com/axelande/OMRAT/blob/main/geometries/calculate_probability_holes.py#L642>`__
 
 
 Vectorised Ray-Polygon Intersection
@@ -646,4 +681,6 @@ segment's outward normal and the drift direction:
 Where :math:`\theta_{\text{diff}}` is the angular difference between the
 drift direction and the segment's hit direction (normal + 180 deg).
 
-**Implementation**: ``geometries/result_layers.py:create_result_layers()``
+.. container:: source-code-ref
+
+   ``geometries/result_layers.py`` -- `create_result_layers() <https://github.com/axelande/OMRAT/blob/main/geometries/result_layers.py>`__

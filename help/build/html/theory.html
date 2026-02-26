@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Mathematical Foundations &#8212; OMRAT 0.3.1 documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=fa44fd50" />
+    <link rel="stylesheet" type="text/css" href="_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=ff28a369" />
+    <link rel="stylesheet" type="text/css" href="_static/custom.css?v=b5312e80" />
+    <script src="_static/documentation_options.js?v=4621528c"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Drifting Risk Calculations" href="drifting.html" />
+    <link rel="prev" title="User Guide" href="user_guide.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  <div class="document">
+    
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">OMRAT</a></h1>
+
+
+
+<p class="blurb">Open Maritime Risk Analysis Tool - QGIS Plugin</p>
+
+
+
+
+<p>
+<iframe src="https://ghbtns.com/github-btn.html?user=axelande&repo=OMRAT&type=star&count=true&size=large&v=2"
+  allowtransparency="true" frameborder="0" scrolling="0" width="200px" height="35px"></iframe>
+</p>
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Project Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="user_guide.html">User Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Theory &amp; Calculations</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Mathematical Foundations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#risk-assessment-framework">Risk Assessment Framework</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#three-risk-categories">Three Risk Categories</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#causation-factors">Causation Factors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#lateral-traffic-distribution">Lateral Traffic Distribution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#coordinate-systems">Coordinate Systems</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#compass-angle-convention">Compass Angle Convention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="drifting.html">Drifting Risk Calculations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="collisions.html">Ship-Ship Collision Calculations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="powered.html">Powered Grounding and Allision</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture.html">Code Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API Reference</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="user_guide.html" title="previous chapter">User Guide</a></li>
+      <li>Next: <a href="drifting.html" title="next chapter">Drifting Risk Calculations</a></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="mathematical-foundations">
+<span id="theory"></span><h1>Mathematical Foundations<a class="headerlink" href="#mathematical-foundations" title="Link to this heading">¶</a></h1>
+<p>This chapter describes the mathematical theory behind OMRAT’s risk
+calculations. The methodology is based on the IWRAP framework
+(Friis-Hansen 2008), which separates maritime risk into three main
+components: drifting risks, powered risks, and ship-ship collisions.</p>
+<nav class="contents local" id="in-this-chapter">
+<p class="topic-title">In this chapter</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#risk-assessment-framework" id="id3">Risk Assessment Framework</a></p></li>
+<li><p><a class="reference internal" href="#three-risk-categories" id="id4">Three Risk Categories</a></p></li>
+<li><p><a class="reference internal" href="#causation-factors" id="id5">Causation Factors</a></p></li>
+<li><p><a class="reference internal" href="#lateral-traffic-distribution" id="id6">Lateral Traffic Distribution</a></p></li>
+<li><p><a class="reference internal" href="#coordinate-systems" id="id7">Coordinate Systems</a></p></li>
+<li><p><a class="reference internal" href="#compass-angle-convention" id="id8">Compass Angle Convention</a></p></li>
+<li><p><a class="reference internal" href="#references" id="id9">References</a></p></li>
+</ul>
+</nav>
+<section id="risk-assessment-framework">
+<h2><a class="toc-backref" href="#id3" role="doc-backlink">Risk Assessment Framework</a><a class="headerlink" href="#risk-assessment-framework" title="Link to this heading">¶</a></h2>
+<p>The fundamental equation for maritime accident frequency is:</p>
+<div class="math notranslate nohighlight">
+\[F_{\text{accident}} = N_A \times P_C\]</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><span class="math notranslate nohighlight">\(N_A\)</span> = number of accident candidates (geometric encounters)</p></li>
+<li><p><span class="math notranslate nohighlight">\(P_C\)</span> = causation probability (probability that an encounter
+leads to an actual accident)</p></li>
+</ul>
+<p>The <strong>accident candidates</strong> <span class="math notranslate nohighlight">\(N_A\)</span> are computed purely from
+geometry and traffic patterns – how many ships pass close enough to
+an obstacle or another ship that a collision <em>could</em> occur if no
+evasive action is taken.</p>
+<p>The <strong>causation probability</strong> <span class="math notranslate nohighlight">\(P_C\)</span> accounts for human and
+technical factors – the probability that the crew fails to detect and
+avoid the danger.</p>
+<div class="source-code-ref docutils container">
+<p><code class="docutils literal notranslate"><span class="pre">compute/basic_equations.py:5</span></code> – <a class="reference external" href="https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L5">get_Fcoll()</a></p>
+</div>
+</section>
+<section id="three-risk-categories">
+<h2><a class="toc-backref" href="#id4" role="doc-backlink">Three Risk Categories</a><a class="headerlink" href="#three-risk-categories" title="Link to this heading">¶</a></h2>
+<p>OMRAT models three categories of maritime risk:</p>
+<ol class="arabic simple">
+<li><p><strong>Drifting risk</strong> – Ships that lose propulsion (blackout) and drift
+under the influence of wind and current into obstacles.</p></li>
+<li><p><strong>Powered risk</strong> – Ships under power that fail to navigate correctly,
+either by sailing directly into an obstacle (Category I) or failing
+to turn at a waypoint (Category II).</p></li>
+<li><p><strong>Ship-ship collision risk</strong> – Encounters between vessels that could
+result in contact, including head-on, overtaking, crossing, and bend
+collisions.</p></li>
+</ol>
+<p>Each category is described in detail in its own chapter:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="drifting.html#drifting"><span class="std std-ref">Drifting Risk Calculations</span></a> – Drifting risk calculations</p></li>
+<li><p><a class="reference internal" href="collisions.html#collisions"><span class="std std-ref">Ship-Ship Collision Calculations</span></a> – Ship-ship collision calculations</p></li>
+<li><p><a class="reference internal" href="powered.html#powered"><span class="std std-ref">Powered Grounding and Allision</span></a> – Powered grounding and allision calculations</p></li>
+</ul>
+</section>
+<section id="causation-factors">
+<h2><a class="toc-backref" href="#id5" role="doc-backlink">Causation Factors</a><a class="headerlink" href="#causation-factors" title="Link to this heading">¶</a></h2>
+<p>Causation factors represent the probability that a geometric encounter
+leads to an actual accident. These are empirically derived from
+historical accident data.</p>
+<table class="docutils align-default" id="id1">
+<caption><span class="caption-text">Default IALA Causation Factors</span><a class="headerlink" href="#id1" title="Link to this table">¶</a></caption>
+<colgroup>
+<col style="width: 35.0%" />
+<col style="width: 20.0%" />
+<col style="width: 20.0%" />
+<col style="width: 25.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Collision Type</p></th>
+<th class="head"><p>IALA Default</p></th>
+<th class="head"><p>Fujii (1974)</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Head-on collision</p></td>
+<td><p><span class="math notranslate nohighlight">\(4.9 \times 10^{-5}\)</span></p></td>
+<td><p><span class="math notranslate nohighlight">\(4.9 \times 10^{-5}\)</span></p></td>
+<td><p>Traffic separation helps</p></td>
+</tr>
+<tr class="row-odd"><td><p>Overtaking collision</p></td>
+<td><p><span class="math notranslate nohighlight">\(1.1 \times 10^{-4}\)</span></p></td>
+<td><p><span class="math notranslate nohighlight">\(1.1 \times 10^{-4}\)</span></p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>Crossing collision</p></td>
+<td><p><span class="math notranslate nohighlight">\(1.3 \times 10^{-4}\)</span></p></td>
+<td><p><span class="math notranslate nohighlight">\(1.2 \times 10^{-4}\)</span></p></td>
+<td><p>Pedersen value</p></td>
+</tr>
+<tr class="row-odd"><td><p>Bend collision</p></td>
+<td><p><span class="math notranslate nohighlight">\(1.3 \times 10^{-4}\)</span></p></td>
+<td><p>–</p></td>
+<td><p>Pedersen value</p></td>
+</tr>
+<tr class="row-even"><td><p>Powered grounding</p></td>
+<td><p><span class="math notranslate nohighlight">\(1.6 \times 10^{-4}\)</span></p></td>
+<td><p><span class="math notranslate nohighlight">\(1.6 \times 10^{-4}\)</span></p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>Allision (structure)</p></td>
+<td><p><span class="math notranslate nohighlight">\(1.9 \times 10^{-4}\)</span></p></td>
+<td><p><span class="math notranslate nohighlight">\(1.9 \times 10^{-4}\)</span></p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>Drifting</p></td>
+<td><p><span class="math notranslate nohighlight">\(1.0\)</span></p></td>
+<td><p>–</p></td>
+<td><p>No avoidance (powerless)</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Adjustment factors</strong> can modify the base causation probabilities:</p>
+<ul class="simple">
+<li><p><strong>Ferry/passenger vessels</strong>: <span class="math notranslate nohighlight">\(\div 20\)</span> (two navigators, familiar
+route)</p></li>
+<li><p><strong>Pilot on board</strong>: <span class="math notranslate nohighlight">\(\div 3\)</span> (COWIconsult)</p></li>
+<li><p><strong>Poor visibility (3–10%)</strong>: <span class="math notranslate nohighlight">\(\times 2\)</span></p></li>
+<li><p><strong>Poor visibility (10–30%)</strong>: <span class="math notranslate nohighlight">\(\times 8\)</span></p></li>
+</ul>
+<div class="source-code-ref docutils container">
+<p><code class="docutils literal notranslate"><span class="pre">omrat_utils/causation_factors.py</span></code> – <a class="reference external" href="https://github.com/axelande/OMRAT/blob/main/omrat_utils/causation_factors.py">CausationFactors</a> (manages causation factor values)</p>
+</div>
+</section>
+<section id="lateral-traffic-distribution">
+<h2><a class="toc-backref" href="#id6" role="doc-backlink">Lateral Traffic Distribution</a><a class="headerlink" href="#lateral-traffic-distribution" title="Link to this heading">¶</a></h2>
+<p>Vessel positions across a shipping lane are modelled as a mixture of
+up to three normal distributions plus one uniform distribution:</p>
+<div class="math notranslate nohighlight">
+\[f(z) = \sum_{i=1}^{3} w_i \cdot \phi\!\left(\frac{z - \mu_i}{\sigma_i}\right)
+     + w_u \cdot U(z; a, b)\]</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><span class="math notranslate nohighlight">\(z\)</span> = lateral distance from the leg centreline (metres)</p></li>
+<li><p><span class="math notranslate nohighlight">\(w_i\)</span> = weight of normal component <span class="math notranslate nohighlight">\(i\)</span> (all weights sum to 1)</p></li>
+<li><p><span class="math notranslate nohighlight">\(\mu_i, \sigma_i\)</span> = mean and standard deviation of component <span class="math notranslate nohighlight">\(i\)</span></p></li>
+<li><p><span class="math notranslate nohighlight">\(w_u\)</span> = weight of the uniform component</p></li>
+<li><p><span class="math notranslate nohighlight">\(U(z; a, b)\)</span> = uniform distribution between <span class="math notranslate nohighlight">\(a\)</span> and <span class="math notranslate nohighlight">\(b\)</span></p></li>
+</ul>
+<p>These distributions can be fitted automatically from AIS data or
+entered manually. The distribution parameters are stored per segment
+and per direction.</p>
+<div class="source-code-ref docutils container">
+<p><code class="docutils literal notranslate"><span class="pre">geometries/drift/distribution.py:66</span></code> – <a class="reference external" href="https://github.com/axelande/OMRAT/blob/main/geometries/drift/distribution.py#L66">get_distribution_width()</a></p>
+</div>
+</section>
+<section id="coordinate-systems">
+<h2><a class="toc-backref" href="#id7" role="doc-backlink">Coordinate Systems</a><a class="headerlink" href="#coordinate-systems" title="Link to this heading">¶</a></h2>
+<p>OMRAT uses two coordinate reference systems:</p>
+<ul class="simple">
+<li><p><strong>WGS84 (EPSG:4326)</strong> – Geographic coordinates (longitude, latitude)
+for storage and display</p></li>
+<li><p><strong>UTM</strong> – Projected coordinates (metres) for distance calculations</p></li>
+</ul>
+<p>The appropriate UTM zone is determined automatically from the centroid
+of the study area:</p>
+<div class="math notranslate nohighlight">
+\[\text{zone} = \left\lfloor \frac{\text{longitude} + 180}{6} \right\rfloor + 1\]</div>
+<p>Northern hemisphere uses EPSG codes 326XX; southern hemisphere uses
+327XX, where XX is the zone number.</p>
+<p>All distance-dependent calculations (drift distances, corridor widths,
+collision geometry) are performed in UTM coordinates to ensure metric
+accuracy.</p>
+<div class="source-code-ref docutils container">
+<p><code class="docutils literal notranslate"><span class="pre">geometries/drift/coordinates.py:12</span></code> – <a class="reference external" href="https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L12">get_utm_crs()</a> |
+<code class="docutils literal notranslate"><span class="pre">geometries/drift/coordinates.py:28</span></code> – <a class="reference external" href="https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L28">transform_geometry()</a></p>
+</div>
+</section>
+<section id="compass-angle-convention">
+<h2><a class="toc-backref" href="#id8" role="doc-backlink">Compass Angle Convention</a><a class="headerlink" href="#compass-angle-convention" title="Link to this heading">¶</a></h2>
+<p>OMRAT uses a <strong>nautical compass convention</strong> for wind and drift
+directions:</p>
+<a class="reference internal image-reference" href="_images/wind_rose.svg"><img alt="Wind rose showing 8 compass directions" class="align-center" src="_images/wind_rose.svg" style="width: 60%;" />
+</a>
+<table class="docutils align-default" id="id2">
+<caption><span class="caption-text">Direction Angles</span><a class="headerlink" href="#id2" title="Link to this table">¶</a></caption>
+<colgroup>
+<col style="width: 20.0%" />
+<col style="width: 20.0%" />
+<col style="width: 60.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Direction</p></th>
+<th class="head"><p>Angle</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>N</p></td>
+<td><p>0 deg</p></td>
+<td><p>North (+Y in UTM)</p></td>
+</tr>
+<tr class="row-odd"><td><p>NW</p></td>
+<td><p>45 deg</p></td>
+<td><p>NorthWest</p></td>
+</tr>
+<tr class="row-even"><td><p>W</p></td>
+<td><p>90 deg</p></td>
+<td><p>West (-X in UTM)</p></td>
+</tr>
+<tr class="row-odd"><td><p>SW</p></td>
+<td><p>135 deg</p></td>
+<td><p>SouthWest</p></td>
+</tr>
+<tr class="row-even"><td><p>S</p></td>
+<td><p>180 deg</p></td>
+<td><p>South (-Y in UTM)</p></td>
+</tr>
+<tr class="row-odd"><td><p>SE</p></td>
+<td><p>225 deg</p></td>
+<td><p>SouthEast</p></td>
+</tr>
+<tr class="row-even"><td><p>E</p></td>
+<td><p>270 deg</p></td>
+<td><p>East (+X in UTM)</p></td>
+</tr>
+<tr class="row-odd"><td><p>NE</p></td>
+<td><p>315 deg</p></td>
+<td><p>NorthEast</p></td>
+</tr>
+</tbody>
+</table>
+<p>To convert from compass to mathematical convention (0 deg = East, CCW):</p>
+<div class="math notranslate nohighlight">
+\[\theta_{\text{math}} = 90^\circ + \theta_{\text{compass}}\]</div>
+<p>The vector components in UTM are then:</p>
+<div class="math notranslate nohighlight">
+\[dx = \cos(\theta_{\text{math}}) \times d, \qquad
+dy = \sin(\theta_{\text{math}}) \times d\]</div>
+<div class="source-code-ref docutils container">
+<p><code class="docutils literal notranslate"><span class="pre">geometries/drift/coordinates.py:45</span></code> – <a class="reference external" href="https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L45">compass_to_vector()</a></p>
+</div>
+</section>
+<section id="references">
+<h2><a class="toc-backref" href="#id9" role="doc-backlink">References</a><a class="headerlink" href="#references" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Friis-Hansen, P. (2008). <em>IWRAP MK II - Basic Modelling Principles
+for Prediction of Collision and Grounding Frequencies.</em> Technical
+University of Denmark.</p></li>
+<li><p>Pedersen, P.T. (1995). <em>Collision and Grounding Mechanics.</em> WEMT’95.</p></li>
+<li><p>Fujii, Y. et al. (1974). <em>Some factors affecting the frequency of
+accidents in marine traffic.</em> Journal of Navigation, 27.</p></li>
+<li><p>Talavera, A. et al. (2013). <em>Application of Dempster-Shafer theory
+for the quantification and propagation of the uncertainty caused by
+the use of AIS data.</em> Reliability Engineering and System Safety, 111,
+95–105.</p></li>
+<li><p>Engberg, P.C. (2017). <em>IWRAP Mk2 v5.3.0 Manual.</em> GateHouse A/S.</p></li>
+</ul>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+    <div class="clearer"></div>
+  </div>
+    <div class="footer">
+      &#169;2022-2026, Axel Hörteborn / RISE.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 8.2.3</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+      |
+      <a href="_sources/theory.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
