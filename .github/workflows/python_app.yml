@@ -46,6 +46,6 @@ jobs:
     - name: Run tests
       run: |
         docker run --volume $(pwd):/app -w=/app qgis_with_deps sh -c "
-          export PYTHONPATH=\$PYTHONPATH:/app && \
+          export PYTHONPATH=\$PYTHONPATH:/app:/usr/share/qgis/python/plugins && \
           xvfb-run -s '+extension GLX -screen 0 1024x768x24' python3 -m pytest tests -s
         "
