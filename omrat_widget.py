@@ -26,7 +26,7 @@ import os
 
 
 from qgis.PyQt import QtGui, QtWidgets, uic
-from qgis.PyQt.QtCore import pyqtSignal
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'omrat_base.ui'))
@@ -47,6 +47,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.setupUi(self)
         self.plugin = plugin
         self.is_active = True
+        self._apply_visual_refresh()
         
         # Route tab
         self.twRouteList: QtWidgets.QTableWidget
@@ -137,6 +138,81 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.leHeightThreshold: QtWidgets.QLineEdit
         self.pbRunDriftAnalysis: QtWidgets.QPushButton
         self.label_drift_status: QtWidgets.QLabel
+
+    def _apply_visual_refresh(self):
+        def qt_enum(owner, direct_name, scoped_group, scoped_name):
+            value = getattr(owner, direct_name, None)
+            if value is not None:
+                return value
+            return getattr(getattr(owner, scoped_group), scoped_name)
+
+        layout_constraint = qt_enum(
+            QtWidgets.QLayout,
+            "SetDefaultConstraint",
+            "SizeConstraint",
+            "SetDefaultConstraint",
+        )
+        cursor_shape = qt_enum(Qt, "PointingHandCursor", "CursorShape", "PointingHandCursor")
+        no_frame = qt_enum(QtWidgets.QFrame, "NoFrame", "Shape", "NoFrame")
+        select_rows = qt_enum(
+            QtWidgets.QAbstractItemView,
+            "SelectRows",
+            "SelectionBehavior",
+            "SelectRows",
+        )
+        single_selection = qt_enum(
+            QtWidgets.QAbstractItemView,
+            "SingleSelection",
+            "SelectionMode",
+            "SingleSelection",
+        )
+        header_stretch = qt_enum(QtWidgets.QHeaderView, "Stretch", "ResizeMode", "Stretch")
+        align_left = qt_enum(Qt, "AlignLeft", "AlignmentFlag", "AlignLeft")
+        align_vcenter = qt_enum(Qt, "AlignVCenter", "AlignmentFlag", "AlignVCenter")
+
+        self.horizontalLayout.setSizeConstraint(layout_constraint)
+        self.tabWidget.setDocumentMode(True)
+        self.tabWidget.setUsesScrollButtons(True)
+
+        for line_edit in self.findChildren(QtWidgets.QLineEdit):
+            line_edit.setMinimumHeight(32)
+
+        for combo_box in self.findChildren(QtWidgets.QComboBox):
+            combo_box.setMinimumHeight(32)
+
+        for spin_box in self.findChildren(QtWidgets.QSpinBox):
+            spin_box.setMinimumHeight(32)
+
+        for button in self.findChildren(QtWidgets.QPushButton):
+            button.setCursor(cursor_shape)
+            button.setMinimumHeight(32)
+
+        for scroll_area in (self.scrollArea, self.scrollArea_2):
+            scroll_area.setFrameShape(no_frame)
+
+        for table in self.findChildren(QtWidgets.QTableWidget):
+            table.setAlternatingRowColors(True)
+            table.setShowGrid(False)
+            table.setSelectionBehavior(select_rows)
+            table.setSelectionMode(single_selection)
+            table.setFrameShape(no_frame)
+            table.setWordWrap(False)
+            table.setCornerButtonEnabled(False)
+            table.verticalHeader().setVisible(False)
+            table.verticalHeader().setDefaultSectionSize(28)
+            table.horizontalHeader().setStretchLastSection(True)
+            table.horizontalHeader().setHighlightSections(False)
+
+        self.TWDepthIntervals.horizontalHeader().setSectionResizeMode(
+            header_stretch
+        )
+
+        self.LEModelName.setPlaceholderText("Collision risk model")
+        self.LEReportPath.setPlaceholderText("Select output folder")
+        self.LEOpenTopoAPIKey.setPlaceholderText("OpenTopography API key")
+
+        self.label_drift_status.setAlignment(align_left | align_vcenter)
+        self.label_drift_status.setMinimumHeight(28)
 
     def closeEvent(self, event):
         self.closingPlugin.emit()

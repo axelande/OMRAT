@@ -13,12 +13,193 @@
   <property name="windowTitle">
    <string>Open Maritime Risk Analysis Tool</string>
   </property>
+  <property name="styleSheet">
+   <string notr="true">QDockWidget {
+    background: #f4f7fb;
+    color: #203244;
+    font: 9pt &quot;Segoe UI&quot;;
+}
+
+QDockWidget::title {
+    background: #0f3557;
+    color: #ffffff;
+    text-align: left;
+    padding: 10px 14px;
+    font: 600 10pt &quot;Segoe UI Semibold&quot;;
+}
+
+QWidget#dockWidgetContents {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #f7fafd, stop:1 #eef3f8);
+}
+
+QTabWidget::pane {
+    border: 1px solid #cfdae6;
+    border-radius: 12px;
+    background: #ffffff;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: #dfe7f0;
+    color: #49627b;
+    border: 1px solid #cfdae6;
+    border-bottom: none;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    padding: 8px 14px;
+    margin-right: 4px;
+    min-width: 92px;
+}
+
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #0f3557;
+    font: 600 9pt &quot;Segoe UI Semibold&quot;;
+}
+
+QTabBar::tab:hover:!selected {
+    background: #e8eef5;
+}
+
+QPushButton {
+    background: #e9eff6;
+    color: #17324d;
+    border: 1px solid #c8d4e1;
+    border-radius: 8px;
+    padding: 7px 12px;
+    min-height: 18px;
+}
+
+QPushButton:hover {
+    background: #dbe7f3;
+}
+
+QPushButton:pressed {
+    background: #ccd8e7;
+}
+
+QPushButton#pbRunModel,
+QPushButton#pbRunDriftAnalysis,
+QPushButton#pbUpdateAIS,
+QPushButton#pbGetGebcoDephts,
+QPushButton#PBUpdateDepthIntervals {
+    background: #0f5b8d;
+    color: #ffffff;
+    border-color: #0f5b8d;
+    font: 600 9pt &quot;Segoe UI Semibold&quot;;
+}
+
+QPushButton#pbRunModel:hover,
+QPushButton#pbRunDriftAnalysis:hover,
+QPushButton#pbUpdateAIS:hover,
+QPushButton#pbGetGebcoDephts:hover,
+QPushButton#PBUpdateDepthIntervals:hover {
+    background: #0d6fa9;
+}
+
+QLineEdit,
+QComboBox,
+QSpinBox,
+QTableWidget,
+QWidget#scrollAreaWidgetContents,
+QWidget#scrollAreaWidgetContents_2,
+QWidget#verticalLayoutWidget,
+QWidget#gridLayoutWidget,
+QWidget#verticalWidget {
+    background: #ffffff;
+    border: 1px solid #d5dfe9;
+    border-radius: 10px;
+    color: #1f2f40;
+}
+
+QLineEdit,
+QComboBox,
+QSpinBox {
+    padding: 6px 8px;
+    min-height: 20px;
+}
+
+QLineEdit:focus,
+QComboBox:focus,
+QSpinBox:focus {
+    border: 1px solid #0f5b8d;
+}
+
+QLineEdit:disabled {
+    background: #eef2f6;
+    color: #647789;
+}
+
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+
+QTableWidget {
+    alternate-background-color: #f6f9fc;
+    gridline-color: #e7edf4;
+    padding: 4px;
+}
+
+QHeaderView::section {
+    background: #edf2f7;
+    color: #4b6177;
+    border: none;
+    border-bottom: 1px solid #d5dfe9;
+    padding: 7px 10px;
+    font: 600 9pt &quot;Segoe UI Semibold&quot;;
+}
+
+QLabel {
+    color: #24384b;
+}
+
+QLabel#laDir1,
+QLabel#laDir2,
+QLabel#label_drift_title {
+    color: #0f3557;
+    background: #eef5fb;
+    border: 1px solid #d9e6f2;
+    border-radius: 10px;
+    padding: 10px;
+    font: 600 10pt &quot;Segoe UI Semibold&quot;;
+}
+
+QLabel#label_drift_description,
+QLabel#label_43 {
+    color: #5c6f84;
+    line-height: 1.4;
+}
+
+QToolTip {
+    background: #0f3557;
+    color: #ffffff;
+    border: none;
+    padding: 6px 8px;
+}</string>
+  </property>
   <widget class="QWidget" name="dockWidgetContents">
    <layout class="QGridLayout" name="gridLayout">
+    <property name="leftMargin">
+     <number>12</number>
+    </property>
+    <property name="topMargin">
+     <number>12</number>
+    </property>
+    <property name="rightMargin">
+     <number>12</number>
+    </property>
+    <property name="bottomMargin">
+     <number>12</number>
+    </property>
+    <property name="spacing">
+     <number>0</number>
+    </property>
     <item row="5" column="0">
      <layout class="QHBoxLayout" name="horizontalLayout">
       <property name="sizeConstraint">
-       <enum>QLayout::SetFixedSize</enum>
+       <enum>QLayout::SetDefaultConstraint</enum>
       </property>
       <property name="leftMargin">
        <number>0</number>
@@ -703,7 +884,7 @@
         </widget>
         <widget class="QWidget" name="Traffic_tab">
          <attribute name="title">
-          <string>Traffic data</string>
+                    <string>Traffic Data</string>
          </attribute>
          <layout class="QVBoxLayout" name="verticalLayout_3">
           <item>
@@ -767,475 +948,529 @@
         </widget>
         <widget class="QWidget" name="depths">
          <attribute name="title">
-          <string>Depth</string>
+          <string>Depths</string>
          </attribute>
-         <widget class="QTableWidget" name="twDepthList">
-          <property name="geometry">
-           <rect>
-            <x>10</x>
-            <y>10</y>
-            <width>381</width>
-            <height>321</height>
-           </rect>
+         <layout class="QVBoxLayout" name="verticalLayout_depths">
+          <property name="leftMargin">
+           <number>12</number>
           </property>
-          <column>
-           <property name="text">
-            <string>Id</string>
-           </property>
-          </column>
-          <column>
-           <property name="text">
-            <string>Depth</string>
-           </property>
-          </column>
-          <column>
-           <property name="text">
-            <string>Polygon</string>
-           </property>
-          </column>
-         </widget>
-         <widget class="QPushButton" name="pbRemoveDepth">
-          <property name="geometry">
-           <rect>
-            <x>200</x>
-            <y>340</y>
-            <width>75</width>
-            <height>23</height>
-           </rect>
+          <property name="topMargin">
+           <number>12</number>
           </property>
-          <property name="text">
-           <string>Remove</string>
+          <property name="rightMargin">
+           <number>12</number>
           </property>
-         </widget>
-         <widget class="QPushButton" name="pbAddSimpleDepth">
-          <property name="geometry">
-           <rect>
-            <x>20</x>
-            <y>340</y>
-            <width>75</width>
-            <height>23</height>
-           </rect>
+          <property name="bottomMargin">
+           <number>12</number>
           </property>
-          <property name="text">
-           <string>Add manual</string>
+          <property name="spacing">
+           <number>10</number>
           </property>
-         </widget>
-         <widget class="QPushButton" name="pbLoadDepth">
-          <property name="geometry">
-           <rect>
-            <x>110</x>
-            <y>340</y>
-            <width>75</width>
-            <height>23</height>
-           </rect>
-          </property>
-          <property name="text">
-           <string>Load</string>
-          </property>
-         </widget>
-         <widget class="QWidget" name="verticalLayoutWidget">
-          <property name="geometry">
-           <rect>
-            <x>20</x>
-            <y>370</y>
-            <width>301</width>
-            <height>141</height>
-           </rect>
-          </property>
-          <layout class="QVBoxLayout" name="verticalLayout_8">
-           <item>
-            <layout class="QHBoxLayout" name="horizontalLayout_12">
-             <item>
-              <widget class="QPushButton" name="pbGetGebcoDephts">
-               <property name="minimumSize">
-                <size>
-                 <width>150</width>
-                 <height>0</height>
-                </size>
-               </property>
-               <property name="text">
-                <string>Gather Gebco depth</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="LEGebcoExtension">
-               <property name="text">
-                <string>50</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="label_44">
-               <property name="text">
-                <string>%</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </item>
-           <item>
-            <layout class="QHBoxLayout" name="horizontalLayout_13">
-             <item>
-              <widget class="QLabel" name="label_45">
-               <property name="maximumSize">
-                <size>
-                 <width>16777215</width>
-                 <height>20</height>
-                </size>
-               </property>
-               <property name="text">
-                <string>API Key:</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLineEdit" name="LEOpenTopoAPIKey">
-               <property name="maximumSize">
-                <size>
-                 <width>16777215</width>
-                 <height>20</height>
-                </size>
-               </property>
-               <property name="text">
-                <string>79d84ad839b1e6b214f9a31edb70bac3</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </item>
-           <item>
-            <widget class="QLabel" name="label_43">
+          <item>
+           <widget class="QTableWidget" name="twDepthList">
+            <column>
              <property name="text">
-              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;To get rougth data you can use the depth data from Gebco, to access it you need to register an account at &lt;a href=&quot;https://portal.opentopograph.org&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://portal.opentopograph.org&lt;/span&gt;&lt;/a&gt; and generate an API key. When obtaining data from Gebco you can add data &amp;quot;outside&amp;quot; the leg, in the field above you specify how much outside the legs you wants to add data for&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <string>Id</string>
              </property>
-             <property name="wordWrap">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </widget>
-         <widget class="QWidget" name="gridLayoutWidget">
-          <property name="geometry">
-           <rect>
-            <x>330</x>
-            <y>380</y>
-            <width>249</width>
-            <height>143</height>
-           </rect>
-          </property>
-          <layout class="QGridLayout" name="gridLayout_3">
-           <item row="1" column="0">
-            <widget class="QLabel" name="label_47">
+            </column>
+            <column>
              <property name="text">
-              <string>Max depth</string>
+              <string>Depth</string>
              </property>
-            </widget>
-           </item>
-           <item row="2" column="0">
-            <widget class="QPushButton" name="PBUpdateDepthIntervals">
+            </column>
+            <column>
              <property name="text">
-              <string>Update list</string>
+              <string>Polygon</string>
              </property>
-            </widget>
-           </item>
-           <item row="1" column="1">
-            <widget class="QLineEdit" name="LEMaxDepth">
-             <property name="inputMethodHints">
-              <set>Qt::ImhDigitsOnly</set>
-             </property>
-             <property name="text">
-              <string>50</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="0">
-            <widget class="QLabel" name="label_46">
-             <property name="text">
-              <string>Depth interval</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="1">
-            <widget class="QSpinBox" name="SBDepthInterval">
-             <property name="value">
-              <number>3</number>
-             </property>
-            </widget>
-           </item>
-           <item row="1" column="2">
-            <widget class="QTableWidget" name="TWDepthIntervals">
-             <attribute name="horizontalHeaderMinimumSectionSize">
-              <number>20</number>
-             </attribute>
-             <attribute name="horizontalHeaderDefaultSectionSize">
-              <number>50</number>
-             </attribute>
-             <attribute name="verticalHeaderMinimumSectionSize">
-              <number>10</number>
-             </attribute>
-             <attribute name="verticalHeaderDefaultSectionSize">
-              <number>20</number>
-             </attribute>
-             <row>
+            </column>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_depth_actions">
+            <property name="spacing">
+             <number>8</number>
+            </property>
+            <item>
+             <widget class="QPushButton" name="pbAddSimpleDepth">
               <property name="text">
-               <string/>
+               <string>Add manually</string>
               </property>
-             </row>
-             <row>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="pbLoadDepth">
               <property name="text">
-               <string/>
+               <string>Load</string>
               </property>
-             </row>
-             <row>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="pbRemoveDepth">
               <property name="text">
-               <string/>
+               <string>Remove</string>
               </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_depth_actions">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
               </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
               </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <row>
-              <property name="text">
-               <string/>
-              </property>
-             </row>
-             <column>
-              <property name="text">
-               <string>Depths</string>
-              </property>
-             </column>
-             <item row="0" column="0">
-              <property name="text">
-               <string>0</string>
-              </property>
-             </item>
-             <item row="1" column="0">
-              <property name="text">
-               <string>3</string>
-              </property>
-             </item>
-             <item row="2" column="0">
-              <property name="text">
-               <string>6</string>
-              </property>
-             </item>
-             <item row="3" column="0">
-              <property name="text">
-               <string>9</string>
-              </property>
-             </item>
-             <item row="4" column="0">
-              <property name="text">
-               <string>12</string>
-              </property>
-             </item>
-             <item row="5" column="0">
-              <property name="text">
-               <string>15</string>
-              </property>
-             </item>
-             <item row="6" column="0">
-              <property name="text">
-               <string>18</string>
-              </property>
-             </item>
-             <item row="7" column="0">
-              <property name="text">
-               <string>21</string>
-              </property>
-             </item>
-             <item row="8" column="0">
-              <property name="text">
-               <string>24</string>
-              </property>
-             </item>
-             <item row="9" column="0">
-              <property name="text">
-               <string>27</string>
-              </property>
-             </item>
-             <item row="10" column="0">
-              <property name="text">
-               <string>30</string>
-              </property>
-             </item>
-             <item row="11" column="0">
-              <property name="text">
-               <string>33</string>
-              </property>
-             </item>
-             <item row="12" column="0">
-              <property name="text">
-               <string>36</string>
-              </property>
-             </item>
-             <item row="13" column="0">
-              <property name="text">
-               <string>39</string>
-              </property>
-             </item>
-             <item row="14" column="0">
-              <property name="text">
-               <string>42</string>
-              </property>
-             </item>
-             <item row="15" column="0">
-              <property name="text">
-               <string>45</string>
-              </property>
-             </item>
-             <item row="16" column="0">
-              <property name="text">
-               <string>48</string>
-              </property>
-             </item>
-             <item row="17" column="0">
-              <property name="text">
-               <string>50</string>
-              </property>
-             </item>
-            </widget>
-           </item>
-          </layout>
-         </widget>
+             </spacer>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_depth_panels" stretch="3,2">
+            <property name="spacing">
+             <number>10</number>
+            </property>
+            <item>
+             <widget class="QWidget" name="verticalLayoutWidget">
+              <layout class="QVBoxLayout" name="verticalLayout_8">
+               <property name="leftMargin">
+                <number>12</number>
+               </property>
+               <property name="topMargin">
+                <number>12</number>
+               </property>
+               <property name="rightMargin">
+                <number>12</number>
+               </property>
+               <property name="bottomMargin">
+                <number>12</number>
+               </property>
+               <property name="spacing">
+                <number>10</number>
+               </property>
+               <item>
+                <layout class="QHBoxLayout" name="horizontalLayout_12">
+                 <item>
+                  <widget class="QPushButton" name="pbGetGebcoDephts">
+                   <property name="minimumSize">
+                    <size>
+                     <width>150</width>
+                     <height>0</height>
+                    </size>
+                   </property>
+                   <property name="text">
+                    <string>Fetch GEBCO depth</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLineEdit" name="LEGebcoExtension">
+                   <property name="text">
+                    <string>50</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="label_44">
+                   <property name="text">
+                    <string>%</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </item>
+               <item>
+                <layout class="QHBoxLayout" name="horizontalLayout_13">
+                 <item>
+                  <widget class="QLabel" name="label_45">
+                   <property name="maximumSize">
+                    <size>
+                     <width>16777215</width>
+                     <height>20</height>
+                    </size>
+                   </property>
+                   <property name="text">
+                    <string>API Key:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLineEdit" name="LEOpenTopoAPIKey">
+                   <property name="maximumSize">
+                    <size>
+                     <width>16777215</width>
+                     <height>20</height>
+                    </size>
+                   </property>
+                   <property name="text">
+                    <string>79d84ad839b1e6b214f9a31edb70bac3</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </item>
+               <item>
+                <widget class="QLabel" name="label_43">
+                 <property name="text">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;To get rougth data you can use the depth data from Gebco, to access it you need to register an account at &lt;a href=&quot;https://portal.opentopograph.org&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://portal.opentopograph.org&lt;/span&gt;&lt;/a&gt; and generate an API key. When obtaining data from Gebco you can add data &amp;quot;outside&amp;quot; the leg, in the field above you specify how much outside the legs you wants to add data for&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QWidget" name="gridLayoutWidget">
+              <layout class="QGridLayout" name="gridLayout_3">
+               <property name="leftMargin">
+                <number>12</number>
+               </property>
+               <property name="topMargin">
+                <number>12</number>
+               </property>
+               <property name="rightMargin">
+                <number>12</number>
+               </property>
+               <property name="bottomMargin">
+                <number>12</number>
+               </property>
+               <property name="horizontalSpacing">
+                <number>8</number>
+               </property>
+               <property name="verticalSpacing">
+                <number>8</number>
+               </property>
+               <item row="1" column="0">
+                <widget class="QLabel" name="label_47">
+                 <property name="text">
+                  <string>Max depth</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="2" column="0" colspan="2">
+                <widget class="QPushButton" name="PBUpdateDepthIntervals">
+                 <property name="text">
+                  <string>Update list</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QLineEdit" name="LEMaxDepth">
+                 <property name="inputMethodHints">
+                  <set>Qt::ImhDigitsOnly</set>
+                 </property>
+                 <property name="text">
+                  <string>50</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="0" column="0">
+                <widget class="QLabel" name="label_46">
+                 <property name="text">
+                  <string>Depth interval</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="0" column="1">
+                <widget class="QSpinBox" name="SBDepthInterval">
+                 <property name="value">
+                  <number>3</number>
+                 </property>
+                </widget>
+               </item>
+               <item row="3" column="0" colspan="2">
+                <widget class="QTableWidget" name="TWDepthIntervals">
+                 <attribute name="horizontalHeaderMinimumSectionSize">
+                  <number>20</number>
+                 </attribute>
+                 <attribute name="horizontalHeaderDefaultSectionSize">
+                  <number>50</number>
+                 </attribute>
+                 <attribute name="verticalHeaderMinimumSectionSize">
+                  <number>10</number>
+                 </attribute>
+                 <attribute name="verticalHeaderDefaultSectionSize">
+                  <number>20</number>
+                 </attribute>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <row>
+                  <property name="text">
+                   <string/>
+                  </property>
+                 </row>
+                 <column>
+                  <property name="text">
+                   <string>Depths</string>
+                  </property>
+                 </column>
+                 <item row="0" column="0">
+                  <property name="text">
+                   <string>0</string>
+                  </property>
+                 </item>
+                 <item row="1" column="0">
+                  <property name="text">
+                   <string>3</string>
+                  </property>
+                 </item>
+                 <item row="2" column="0">
+                  <property name="text">
+                   <string>6</string>
+                  </property>
+                 </item>
+                 <item row="3" column="0">
+                  <property name="text">
+                   <string>9</string>
+                  </property>
+                 </item>
+                 <item row="4" column="0">
+                  <property name="text">
+                   <string>12</string>
+                  </property>
+                 </item>
+                 <item row="5" column="0">
+                  <property name="text">
+                   <string>15</string>
+                  </property>
+                 </item>
+                 <item row="6" column="0">
+                  <property name="text">
+                   <string>18</string>
+                  </property>
+                 </item>
+                 <item row="7" column="0">
+                  <property name="text">
+                   <string>21</string>
+                  </property>
+                 </item>
+                 <item row="8" column="0">
+                  <property name="text">
+                   <string>24</string>
+                  </property>
+                 </item>
+                 <item row="9" column="0">
+                  <property name="text">
+                   <string>27</string>
+                  </property>
+                 </item>
+                 <item row="10" column="0">
+                  <property name="text">
+                   <string>30</string>
+                  </property>
+                 </item>
+                 <item row="11" column="0">
+                  <property name="text">
+                   <string>33</string>
+                  </property>
+                 </item>
+                 <item row="12" column="0">
+                  <property name="text">
+                   <string>36</string>
+                  </property>
+                 </item>
+                 <item row="13" column="0">
+                  <property name="text">
+                   <string>39</string>
+                  </property>
+                 </item>
+                 <item row="14" column="0">
+                  <property name="text">
+                   <string>42</string>
+                  </property>
+                 </item>
+                 <item row="15" column="0">
+                  <property name="text">
+                   <string>45</string>
+                  </property>
+                 </item>
+                 <item row="16" column="0">
+                  <property name="text">
+                   <string>48</string>
+                  </property>
+                 </item>
+                 <item row="17" column="0">
+                  <property name="text">
+                   <string>50</string>
+                  </property>
+                 </item>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
         </widget>
         <widget class="QWidget" name="objects">
          <attribute name="title">
           <string>Objects</string>
          </attribute>
-         <widget class="QPushButton" name="pbLoadObject">
-          <property name="geometry">
-           <rect>
-            <x>120</x>
-            <y>340</y>
-            <width>75</width>
-            <height>23</height>
-           </rect>
+         <layout class="QVBoxLayout" name="verticalLayout_objects">
+          <property name="leftMargin">
+           <number>12</number>
           </property>
-          <property name="text">
-           <string>Load</string>
+          <property name="topMargin">
+           <number>12</number>
           </property>
-         </widget>
-         <widget class="QTableWidget" name="twObjectList">
-          <property name="geometry">
-           <rect>
-            <x>20</x>
-            <y>10</y>
-            <width>361</width>
-            <height>321</height>
-           </rect>
+          <property name="rightMargin">
+           <number>12</number>
           </property>
-          <column>
-           <property name="text">
-            <string>Id</string>
-           </property>
-          </column>
-          <column>
-           <property name="text">
-            <string>Height</string>
-           </property>
-          </column>
-          <column>
-           <property name="text">
-            <string>Polygon</string>
-           </property>
-          </column>
-         </widget>
-         <widget class="QPushButton" name="pbAddSimpleObject">
-          <property name="geometry">
-           <rect>
-            <x>30</x>
-            <y>340</y>
-            <width>75</width>
-            <height>23</height>
-           </rect>
+          <property name="bottomMargin">
+           <number>12</number>
           </property>
-          <property name="text">
-           <string>Add manual</string>
+          <property name="spacing">
+           <number>10</number>
           </property>
-         </widget>
-         <widget class="QPushButton" name="pbRemoveObject">
-          <property name="geometry">
-           <rect>
-            <x>210</x>
-            <y>340</y>
-            <width>75</width>
-            <height>23</height>
-           </rect>
-          </property>
-          <property name="text">
-           <string>Remove</string>
-          </property>
-         </widget>
+          <item>
+           <widget class="QTableWidget" name="twObjectList">
+            <column>
+             <property name="text">
+              <string>Id</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Height</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Polygon</string>
+             </property>
+            </column>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_object_actions">
+            <property name="spacing">
+             <number>8</number>
+            </property>
+            <item>
+             <widget class="QPushButton" name="pbAddSimpleObject">
+              <property name="text">
+               <string>Add manually</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="pbLoadObject">
+              <property name="text">
+               <string>Load</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="pbRemoveObject">
+              <property name="text">
+               <string>Remove</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_object_actions">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+           </layout>
+          </item>
+         </layout>
         </widget>
         <widget class="QWidget" name="tab_9">
          <attribute name="title">
@@ -1361,7 +1596,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1398,7 +1633,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1435,7 +1670,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1472,7 +1707,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1509,7 +1744,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1546,7 +1781,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1583,7 +1818,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1620,7 +1855,7 @@
                   </size>
                  </property>
                  <property name="text">
-                  <string>View way</string>
+                  <string>View</string>
                  </property>
                 </widget>
                </item>
@@ -1646,7 +1881,7 @@
         </widget>
         <widget class="QWidget" name="analyse_drift_tab">
          <attribute name="title">
-          <string>Analyse drift</string>
+                    <string>Drift Analysis</string>
          </attribute>
          <layout class="QVBoxLayout" name="verticalLayout_9">
           <item>
@@ -1719,7 +1954,7 @@ shadows/holes created by shallow depths and low structures.</string>
           <item>
            <widget class="QPushButton" name="pbRunDriftAnalysis">
             <property name="text">
-             <string>Run analyses</string>
+                         <string>Run analysis</string>
             </property>
             <property name="toolTip">
              <string>Generate 8 drift corridors per leg direction (16 per leg)</string>

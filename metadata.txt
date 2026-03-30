@@ -5,9 +5,10 @@
 [general]
 name=Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.0
+qgisMaximumVersion=5.0
 supportsQt6=True
 description=This is an open source implementation of Pedersens and Friis-Hansen equations
-version=0.4.1
+version=0.4.2
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 

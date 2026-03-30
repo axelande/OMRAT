@@ -595,11 +595,11 @@ def _compute_single_direction(
         # OPTIMIZATION: Use Monte Carlo instead of dblquad
         # Adaptive sample count based on cumulative coverage
         if cumulative_hole > 0.95:
-            n_samples = 200
-        elif cumulative_hole > 0.8:
-            n_samples = 300
-        else:
             n_samples = 500
+        elif cumulative_hole > 0.8:
+            n_samples = 1000
+        else:
+            n_samples = 2000
 
         try:
             monte_carlo_start = time.perf_counter()
@@ -619,8 +619,8 @@ def _compute_single_direction(
             monte_carlo_elapsed = time.perf_counter() - monte_carlo_start
             _record_monte_carlo_time(monte_carlo_elapsed)
 
-            # CRITICAL: Normalize by leg length to get geometric causation factor (per unit length)
-            probability_hole = probability_hole / leg_len if leg_len > 0 else 0.0
+            # MC already samples s in [0,1] (normalized position along leg),
+            # so the result is an average probability, not a per-meter density.
             # Clamp to reasonable range [0, 1]
             probability_hole = max(0.0, min(1.0, probability_hole))
         except Exception as e:

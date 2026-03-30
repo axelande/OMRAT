@@ -11,7 +11,10 @@ The class ``DriftingModelMixin`` is designed to be composed into the
 
 from typing import Any, Callable
 import os
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 from numpy import exp, log
 from pathlib import Path
 
@@ -52,6 +55,7 @@ from geometries.get_drifting_overlap import (
     compute_dir_leg_overlap_fraction_by_object,
 )
 from geometries.calculate_probability_holes import compute_probability_holes
+from geometries.analytical_probability import compute_probability_holes_analytical
 from geometries.result_layers import create_result_layers
 
 
@@ -78,14 +82,24 @@ class DriftingModelMixin:
             try:
                 rep = data.get('drift', {}).get('repair', {})
                 use_ln = rep.get('use_lognormal', False)
-                if use_ln:
+                dist_type = rep.get('dist_type', '')
+                t99_h = None
+
+                if dist_type == 'weibull':
+                    wb_shape = float(rep.get('wb_shape', 1.0))
+                    wb_loc = float(rep.get('wb_loc', 0.0))
+                    wb_scale = float(rep.get('wb_scale', 1.0))
+                    t99_h = float(stats.weibull_min(c=wb_shape, loc=wb_loc, scale=wb_scale).ppf(0.99))
+                elif use_ln:
                     s = float(rep.get('std', 0.0))
                     loc = float(rep.get('loc', 0.0))
                     scale = float(rep.get('scale', 1.0))
                     t99_h = float(stats.lognorm(s, loc=loc, scale=scale).ppf(0.99))
+
+                if t99_h is not None and t99_h > 0:
                     drift_speed_kts = float(data.get('drift', {}).get('speed', 0.0))
                     drift_speed = drift_speed_kts * 1852.0 / 3600.0  # Convert knots to m/s
-                    if t99_h > 0 and drift_speed > 0:
+                    if drift_speed > 0:
                         reach_distance = drift_speed * 3600.0 * t99_h
                         reach_distance = min(reach_distance, longest_length * 10.0)
             except Exception:
@@ -271,12 +285,17 @@ class DriftingModelMixin:
                 phase_progress = weighted_progress / total_weighted_work
                 return self._report_progress('spatial', phase_progress, label)
 
-            # Calculate structures using accurate dblquad integration (allision)
-            # This computes the true geometric probability that a drifting ship
-            # hits the obstacle, integrating the lateral PDF along the leg.
-            # Distance-dependent repair probability is handled separately in the
-            # cascade via get_not_repaired().
-            struct_probability_holes = compute_probability_holes(
+            # Choose probability hole computation method
+            use_analytical = data.get('use_analytical', True) if data else True
+            compute_holes_fn = (
+                compute_probability_holes_analytical if use_analytical
+                else compute_probability_holes
+            )
+            method_name = "analytical cross-section CDF" if use_analytical else "Monte Carlo"
+            logger.info(f"Probability holes: using {method_name} method")
+
+            # Calculate structures (allision)
+            struct_probability_holes = compute_holes_fn(
                 transformed_lines, distributions, weights, structs_gdfs,
                 distance=reach_distance,
                 progress_callback=spatial_progress_callback
@@ -284,10 +303,8 @@ class DriftingModelMixin:
 
             struct_done = True  # Switch to depths
 
-            # Calculate depths using accurate dblquad integration (grounding)
-            # NOTE: No draught filtering here - the cascade calculation
-            # filters by draught per vessel category
-            depth_probability_holes = compute_probability_holes(
+            # Calculate depths (grounding)
+            depth_probability_holes = compute_holes_fn(
                 transformed_lines, distributions, weights, depths_gdfs,
                 distance=reach_distance,
                 progress_callback=spatial_progress_callback
@@ -726,6 +743,7 @@ class DriftingModelMixin:
             distributions: list[list[Any]] | None = None,
             weights: list[list[float]] | None = None,
             reach_distance: float = 0.0,
+            threshold_to_idx: dict[float, int] | None = None,
         ) -> tuple[float, float, dict[str, Any]]:
         drift = data['drift']
         blackout_per_hour = float(drift.get('drift_p', 0.0)) / (365.0 * 24.0)
@@ -832,9 +850,10 @@ class DriftingModelMixin:
                     math_dir_idx = _compass_idx_to_math_idx(d_idx)
 
                     # Add all structures (allision targets)
+                    # Drifting allision: ship drifts sideways into the structure
+                    # (pier, column, turbine foundation) at water level — no height filtering
                     if struct_min_dists and struct_probability_holes:
                         for s_idx, s in enumerate(structures):
-                            if s['height'] < height:
                                 try:
                                     dist = struct_min_dists[leg_idx][math_dir_idx][s_idx]
                                     hole_pct = struct_probability_holes[leg_idx][math_dir_idx][s_idx]
@@ -843,8 +862,33 @@ class DriftingModelMixin:
                                 except (IndexError, TypeError):
                                     pass
 
-                    # Add all depths (anchoring or grounding)
-                    if depth_min_dists and depth_probability_holes:
+                    # Add merged depth obstacles (anchoring or grounding)
+                    # With threshold merging, depths are indexed by threshold level
+                    if depth_min_dists and depth_probability_holes and threshold_to_idx:
+                        anchor_threshold = anchor_d * draught if anchor_d > 0.0 else 0.0
+                        # Look up grounding merged polygon for this ship's draught
+                        grounding_idx = threshold_to_idx.get(round(draught, 2))
+                        if grounding_idx is not None:
+                            try:
+                                dist = depth_min_dists[leg_idx][math_dir_idx][grounding_idx]
+                                hole_pct = depth_probability_holes[leg_idx][math_dir_idx][grounding_idx]
+                                if dist is not None and hole_pct > 0.0:
+                                    obstacles.append(('grounding', grounding_idx, dist, hole_pct))
+                            except (IndexError, TypeError):
+                                pass
+                        # Look up anchoring merged polygon
+                        if anchor_threshold > 0.0:
+                            anchoring_idx = threshold_to_idx.get(round(anchor_threshold, 2))
+                            if anchoring_idx is not None:
+                                try:
+                                    dist = depth_min_dists[leg_idx][math_dir_idx][anchoring_idx]
+                                    hole_pct = depth_probability_holes[leg_idx][math_dir_idx][anchoring_idx]
+                                    if dist is not None and hole_pct > 0.0:
+                                        obstacles.append(('anchoring', anchoring_idx, dist, hole_pct))
+                                except (IndexError, TypeError):
+                                    pass
+                    elif depth_min_dists and depth_probability_holes:
+                        # Fallback: no threshold merging, use individual depths
                         anchor_threshold = anchor_d * draught if anchor_d > 0.0 else 0.0
                         for dep_idx, dep in enumerate(depths):
                             try:
@@ -852,8 +896,6 @@ class DriftingModelMixin:
                                 hole_pct = depth_probability_holes[leg_idx][math_dir_idx][dep_idx]
                                 if dist is None or hole_pct <= 0.0:
                                     continue
-
-                                # Determine if this depth is for anchoring or grounding
                                 if anchor_threshold > 0.0 and dep['depth'] < anchor_threshold:
                                     obstacles.append(('anchoring', dep_idx, dist, hole_pct))
                                 if dep['depth'] < draught:
@@ -1005,6 +1047,74 @@ class DriftingModelMixin:
         longest_length = max(line.length for line in transformed_lines) if transformed_lines else 0.0
         reach_distance = self._compute_reach_distance(data, longest_length)
         drift = data.get('drift', {})
+
+        # --- Optionally merge depth polygons by depth level for performance ---
+        # When there are many depth polygons, merge them by unique depth value.
+        # Many thresholds (draughts) map to the same merged polygon because
+        # only the unique depth VALUES determine which polygons are included.
+        # E.g., with depth values [0, 3, 6, 9, 12], any threshold in (6, 9]
+        # includes the same set of polygons (those with depth <= 6).
+        from shapely.ops import unary_union
+
+        # Get unique depth values (boundaries) from the depth polygons
+        unique_depth_vals = sorted(set(d['depth'] for d in depths)) if depths else []
+
+        # Only merge when it reduces work (more depth polygons than unique levels)
+        use_merged = len(depths) > len(unique_depth_vals) + 1 and len(unique_depth_vals) > 0
+
+        merged_depths_gdfs: list[gpd.GeoDataFrame] = []
+        merged_depths_meta: list[dict[str, Any]] = []
+        # Map any threshold to the correct merged polygon index
+        # For threshold T, the merged polygon includes all depths with depth < T
+        # which is the same as "all depths <= max_depth_val where max_depth_val < T"
+        threshold_to_idx: dict[float, int] = {}
+
+        if use_merged and depths:
+            # Build one merged polygon per unique depth boundary
+            # boundary_merged[i] = union of all depth polygons with depth <= unique_depth_vals[i]
+            cumulative_geoms: list = []
+            for boundary in unique_depth_vals:
+                qualifying = [d['wkt'] for d in depths if d['depth'] <= boundary]
+                if qualifying:
+                    merged_geom = unary_union(qualifying)
+                    idx = len(merged_depths_gdfs)
+                    merged_depths_gdfs.append(gpd.GeoDataFrame(geometry=[merged_geom]))
+                    merged_depths_meta.append({
+                        'id': f'merged_depth_le_{boundary}',
+                        'depth': boundary,
+                        'wkt': merged_geom,
+                    })
+                    cumulative_geoms.append((boundary, idx))
+
+            # Build threshold_to_idx: for any threshold T, find the largest
+            # depth boundary that is strictly less than T
+            # Collect all thresholds from traffic draughts and anchor thresholds
+            draughts: set[float] = set()
+            for _, _, _, leg_traffic, _ in clean_traffic(data):
+                for cell in leg_traffic:
+                    d = float(cell.get('draught', 0.0))
+                    if d > 0:
+                        draughts.add(round(d, 2))
+            anchor_d_val = float(drift.get('anchor_d', 0.0))
+            all_thresholds: set[float] = set()
+            for d in draughts:
+                all_thresholds.add(d)
+                if anchor_d_val > 0:
+                    all_thresholds.add(round(anchor_d_val * d, 2))
+
+            for threshold in all_thresholds:
+                # Find the highest boundary < threshold
+                best_idx = None
+                for boundary, idx in cumulative_geoms:
+                    if boundary < threshold:
+                        best_idx = idx
+                if best_idx is not None:
+                    threshold_to_idx[round(threshold, 2)] = best_idx
+
+        # Use merged or original depths for spatial precomputation
+        effective_depths_gdfs = merged_depths_gdfs if use_merged else depths_gdfs
+        effective_depths_meta = merged_depths_meta if use_merged else depths
+
         (
             struct_min_dists, depth_min_dists,
             struct_overlap_fracs_dir, depth_overlap_fracs_dir,
@@ -1015,16 +1125,17 @@ class DriftingModelMixin:
             depth_probability_holes,
         ) = self._precompute_spatial(
             transformed_lines, distributions, weights,
-            structs_gdfs, depths_gdfs, reach_distance, data
+            structs_gdfs, effective_depths_gdfs, reach_distance, data
         )
 
         total_allision, total_grounding, report = self._iterate_traffic_and_sum(
-            data, line_names, transformed_lines, structures, depths,
+            data, line_names, transformed_lines, structures, effective_depths_meta,
             struct_min_dists, depth_min_dists,
             struct_overlap_fracs_dir, depth_overlap_fracs_dir, depth_overlap_fracs_leg,
             depth_overlap_fracs_dir_leg, struct_overlap_fracs_dir_leg,
             struct_probability_holes, depth_probability_holes,
-            distributions, weights, reach_distance
+            distributions, weights, reach_distance,
+            threshold_to_idx=threshold_to_idx if use_merged else None,
         )
 
         pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}

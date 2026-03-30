@@ -12,7 +12,7 @@ from qgis.core import (
     QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsSingleSymbolRenderer,
     QgsLineSymbol, QgsPointXY, QgsSymbol
 )
-from qgis.PyQt.QtCore import QMetaType, QVariant
+from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 from qgis.gui import QgsMapToolPan
@@ -89,11 +89,11 @@ class HandleQGISIface:
         
     def create_fields(self) -> QgsFields:
         fields = QgsFields()
-        fields.append(QgsField("segmentId", QMetaType.Int))
-        fields.append(QgsField("routeId", QMetaType.Int))
-        fields.append(QgsField("startPoint", QMetaType.QString))
-        fields.append(QgsField("endPoint", QMetaType.QString))
-        fields.append(QgsField("label", QMetaType.QString))  # Field for labeling
+        fields.append(QgsField("segmentId", QMetaType.Type.Int))
+        fields.append(QgsField("routeId", QMetaType.Type.Int))
+        fields.append(QgsField("startPoint", QMetaType.Type.QString))
+        fields.append(QgsField("endPoint", QMetaType.Type.QString))
+        fields.append(QgsField("label", QMetaType.Type.QString))  # Field for labeling
         return fields
 
     def create_line(self, point: QgsPoint):
@@ -322,6 +322,40 @@ class HandleQGISIface:
                 # Update the tangent line for this segment
                 self.create_offset_lines(start_pointXY, end_pointXY, width / 2, fid)
 
+                # Keep backing segment_data in sync so save/export uses edited geometry.
+                seg_key = str(fid)
+                if seg_key in self.omrat.segment_data:
+                    self.omrat.segment_data[seg_key]['Start_Point'] = self.format_wkt(start_point)
+                    self.omrat.segment_data[seg_key]['End_Point'] = self.format_wkt(end_point)
+
+                    # Recompute heading-based direction labels and line length in meters.
+                    degrees: float = (start_point.azimuth(end_pointXY) + 360) % 360
+                    if degrees > 315 or degrees <= 45:
+                        dirs = ['North going', 'South going']
+                    elif degrees > 45 and degrees <= 135:
+                        dirs = ['East going', 'West going']
+                    elif degrees > 135 and degrees <= 225:
+                        dirs = ['South going', 'North going']
+                    else:
+                        dirs = ['West going', 'East going']
+                    self.omrat.segment_data[seg_key]['Dirs'] = dirs
+                    self.leg_dirs[seg_key] = dirs
+
+                    longitude = (start_pointXY.x() + end_pointXY.x()) / 2
+                    utm_zone = int((longitude + 180) / 6) + 1
+                    is_northern = start_point.y() >= 0
+                    utm_crs = QgsCoordinateReferenceSystem(
+                        f"EPSG:{32600 + utm_zone if is_northern else 32700 + utm_zone}"
+                    )
+                    transform_to_utm = QgsCoordinateTransform(
+                        QgsCoordinateReferenceSystem("EPSG:4326"),
+                        utm_crs,
+                        QgsProject.instance(),
+                    )
+                    start_utm = transform_to_utm.transform(start_pointXY)
+                    end_utm = transform_to_utm.transform(end_pointXY)
+                    self.omrat.segment_data[seg_key]['line_length'] = start_utm.distance(end_utm)
+
                 # Stop processing once the correct row is updated
                 return
 
@@ -459,7 +493,7 @@ class HandleQGISIface:
     def ensure_tangent_fields(self):
         if self.tangent_layer.fields().lookupField("type") < 0:
             pr = self.tangent_layer.dataProvider()
-            pr.addAttributes([QgsField("type", QVariant.String)])
+            pr.addAttributes([QgsField("type", QMetaType.Type.QString)])
             self.tangent_layer.updateFields()
 
     def calculate_midpoint_utm(self, start: QgsPointXY, end: QgsPointXY) -> tuple[QgsPointXY, QgsCoordinateTransform, QgsCoordinateTransform]:

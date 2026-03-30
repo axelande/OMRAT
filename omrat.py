@@ -227,7 +227,7 @@ class OMRAT:
 
     def show_error_popup(self, message: str, function_name:str) -> None:
         msg_box = QMessageBox()
-        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setIcon(QMessageBox.Icon.Critical)
         msg_box.setWindowTitle(self.tr(f"Failure in {function_name}"))
         msg_box.setText(self.tr("A failure occurred:"))
         msg_box.setInformativeText(message)
@@ -250,16 +250,16 @@ class OMRAT:
             return 'clear'
 
         msg_box = QMessageBox(self.main_widget)
-        msg_box.setIcon(QMessageBox.Question)
+        msg_box.setIcon(QMessageBox.Icon.Question)
         msg_box.setWindowTitle(self.tr(f'{action_label} Project'))
         msg_box.setText(self.tr(
             'The current model contains data.\n\n'
             'Do you want to clear all current data before loading,\n'
             'or merge the new data into the existing model?'
         ))
-        btn_clear = msg_box.addButton(self.tr('Clear && Load'), QMessageBox.AcceptRole)
-        btn_merge = msg_box.addButton(self.tr('Merge'), QMessageBox.ActionRole)
-        msg_box.addButton(QMessageBox.Cancel)
+        btn_clear = msg_box.addButton(self.tr('Clear && Load'), QMessageBox.ButtonRole.AcceptRole)
+        btn_merge = msg_box.addButton(self.tr('Merge'), QMessageBox.ButtonRole.ActionRole)
+        msg_box.addButton(QMessageBox.StandardButton.Cancel)
         msg_box.setDefaultButton(btn_clear)
         msg_box.exec()
 
@@ -988,9 +988,9 @@ class OMRAT:
 
             # Add fields
             fields = QgsFields()
-            fields.append(QgsField("direction", QMetaType.QString))
-            fields.append(QgsField("angle", QMetaType.Int))
-            fields.append(QgsField("leg_index", QMetaType.Int))
+            fields.append(QgsField("direction", QMetaType.Type.QString))
+            fields.append(QgsField("angle", QMetaType.Type.Int))
+            fields.append(QgsField("leg_index", QMetaType.Type.Int))
 
             provider = vl.dataProvider()
             if provider is None:

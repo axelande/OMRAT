@@ -79,7 +79,7 @@ class TestHeadOnCollisions:
         result = get_head_on_collision_candidates(
             Q1=100, Q2=100,
             V1=5.0, V2=5.0,
-            mu1=500.0, mu2=500.0,  # Sum = 1000m apart
+            mu1=500.0, mu2=-500.0,  # mu_ij = 500 - (-500) = 1000m apart
             sigma1=10.0, sigma2=10.0,  # Small std dev
             B1=20.0, B2=20.0,
             L_w=1000.0
@@ -175,7 +175,8 @@ class TestHeadOnCollisions:
             B1=20.0, B2=20.0,
             L_w=1000.0
         )
-        # Double both speeds -> 2x candidates (since V_ij = V1 + V2)
+        # Double both speeds -> V_ij doubles but V1*V2 quadruples,
+        # so N_G = Q1*Q2*V_ij*P_G*L/(V1*V2*T) halves
         double_speed = get_head_on_collision_candidates(
             Q1=100, Q2=100,
             V1=10.0, V2=10.0,  # Total: 20 m/s
@@ -184,29 +185,35 @@ class TestHeadOnCollisions:
             B1=20.0, B2=20.0,
             L_w=1000.0
         )
-        assert isclose(double_speed, 2 * base_result, rtol=1e-10)
+        assert isclose(double_speed, base_result / 2, rtol=1e-10)
 
     def test_head_on_zero_sigma_within_beam(self):
         """Test zero variance case where ships are within collision beam."""
         # When sigma is 0 and mu_ij is within B_ij, P_G should be 1
+        # mu_ij = mu1 - mu2 = 5 - (-5) = 10m (dir2 negated in OMRAT convention)
         result = get_head_on_collision_candidates(
             Q1=100, Q2=100,
             V1=5.0, V2=5.0,
-            mu1=5.0, mu2=5.0,  # mu_ij = 10m
+            mu1=5.0, mu2=-5.0,  # mu_ij = 5 - (-5) = 10m
             sigma1=0.0, sigma2=0.0,  # No variance
             B1=20.0, B2=20.0,  # B_ij = 20m > |mu_ij|
             L_w=1000.0
         )
         # P_G = 1 since |mu_ij| <= B_ij
-        expected = 100 * 100 * 10.0 * 1.0 * 1000.0
+        # N_G = density1 * density2 * V_ij * P_G * L_w * T
+        seconds_per_year = 365.25 * 24 * 3600
+        d1 = 100 / (5.0 * seconds_per_year)
+        d2 = 100 / (5.0 * seconds_per_year)
+        expected = d1 * d2 * 10.0 * 1.0 * 1000.0 * seconds_per_year
         assert isclose(result, expected, rtol=1e-10)
 
     def test_head_on_zero_sigma_outside_beam(self):
         """Test zero variance case where ships are outside collision beam."""
+        # mu_ij = mu1 - mu2 = 25 - (-25) = 50m
         result = get_head_on_collision_candidates(
             Q1=100, Q2=100,
             V1=5.0, V2=5.0,
-            mu1=25.0, mu2=25.0,  # mu_ij = 50m
+            mu1=25.0, mu2=-25.0,  # mu_ij = 25 - (-25) = 50m
             sigma1=0.0, sigma2=0.0,  # No variance
             B1=20.0, B2=20.0,  # B_ij = 20m < |mu_ij|
             L_w=1000.0
@@ -1015,12 +1022,10 @@ class TestRealisticScenarios:
         )
         Pc = 4.9e-5
         annual_collisions = result * Pc
-        # The formula returns geometric collision candidates per year.
-        # For a busy 50km channel with 1000 ships/year in each direction,
-        # the expected result is on the order of millions before applying
-        # additional factors (navigation aids, traffic separation, etc.).
-        # The raw geometric candidates * causation factor gives ~4.5e6.
-        assert 1e6 < annual_collisions < 1e7
+        # With ships centered (mu=0) in a 50km channel, 1000 ships/year each way:
+        # N_G ~ 110 geometric candidates/year, times Pc gives ~0.005 collisions/year.
+        # This is a realistic order of magnitude for a busy channel.
+        assert 1e-3 < annual_collisions < 1e0
 
     def test_ferry_route_overtaking(self):
         """Test overtaking on a ferry route."""
@@ -1189,12 +1194,16 @@ class TestMathematicalProperties:
         # Same lane should have higher collision probability
         assert result_same_lane > result_diff_lane
 
-    def test_head_on_mu_addition(self):
-        """Verify head-on uses addition for lateral distance (opposite directions)."""
-        # For head-on, mu_ij = mu1 + mu2
-        # If both at 0, mu_ij = 0
-        # If ship1 at +50 and ship2 at +50 (opposite direction convention), mu_ij = 100
+    def test_head_on_mu_separation(self):
+        """Verify head-on uses mu1 - mu2 for lateral separation.
 
+        Hansen Eq. 4.4: mu_ij = mu_i + mu_j, both positive from own
+        sailing direction.  OMRAT stores dir-2 means negated to a fixed
+        frame, so the formula becomes mu_ij = mu1 - mu2.
+
+        mu1=0, mu2=0  -> mu_ij=0  (centered, high collision)
+        mu1=50, mu2=-50 -> mu_ij=100 (ships on opposite sides, lower collision)
+        """
         result_centered = get_head_on_collision_candidates(
             Q1=100, Q2=100,
             V1=5.0, V2=5.0,
@@ -1207,14 +1216,14 @@ class TestMathematicalProperties:
         result_offset = get_head_on_collision_candidates(
             Q1=100, Q2=100,
             V1=5.0, V2=5.0,
-            mu1=50.0, mu2=50.0,  # mu_ij = 100
+            mu1=50.0, mu2=-50.0,  # mu_ij = 50 - (-50) = 100
             sigma1=50.0, sigma2=50.0,
             B1=20.0, B2=20.0,
             L_w=1000.0
         )
 
         # Centered traffic should have higher collision probability
-        # when both offsets are positive (ships actually further apart in absolute terms)
+        # than ships offset to opposite sides of the channel
         assert result_centered > result_offset
 
 

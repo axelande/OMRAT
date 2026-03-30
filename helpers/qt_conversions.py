@@ -13,7 +13,7 @@ Usage:
 """
 
 from typing import Any
-from qgis.PyQt import QtCore
+from qgis.PyQt import QtCore, QtGui
 
 
 class QtCompat:
@@ -25,9 +25,35 @@ class QtCompat:
     """
 
     # Detect Qt version
-    QT_VERSION = QtCore.QT_VERSION_STR
+    QT_VERSION = getattr(QtCore, 'QT_VERSION_STR', None) or getattr(QtCore, 'qVersion')()
     QT_MAJOR_VERSION = int(QT_VERSION.split('.')[0])
     IS_QT6 = QT_MAJOR_VERSION >= 6
+
+    @staticmethod
+    def create_regex_validator(pattern: str, parent: Any = None) -> Any:
+        """
+        Create a regex validator that works in both Qt5 and Qt6.
+
+        Qt5 uses QRegExp/QRegExpValidator.
+        Qt6 uses QRegularExpression/QRegularExpressionValidator.
+
+        Args:
+            pattern: Regular expression pattern
+            parent: Optional QObject parent for the validator
+
+        Returns:
+            A QValidator instance configured with the pattern
+        """
+        if QtCompat.IS_QT6:
+            regular_expression_class = getattr(QtCore, 'QRegularExpression')
+            validator_class = getattr(QtGui, 'QRegularExpressionValidator')
+            regular_expression = regular_expression_class(pattern)
+            return validator_class(regular_expression, parent)
+
+        regular_expression_class = getattr(QtCore, 'QRegExp')
+        validator_class = getattr(QtGui, 'QRegExpValidator')
+        regular_expression = regular_expression_class(pattern)
+        return validator_class(regular_expression, parent)
 
     @staticmethod
     def to_int(enum_value: Any) -> int:
@@ -38,14 +64,14 @@ class QtCompat:
         In Qt6, enums are proper Python enums and need .value property.
 
         Args:
-            enum_value: An enum value from Qt (e.g., QMetaType.QString)
+            enum_value: An enum value from Qt (e.g., QMetaType.Type.QString)
 
         Returns:
             The integer value of the enum
 
         Example:
             >>> from qgis.PyQt.QtCore import QMetaType
-            >>> QtCompat.to_int(QMetaType.QString)
+            >>> QtCompat.to_int(QMetaType.Type.QString)
         """
         if QtCompat.IS_QT6:
             # Qt6 uses proper enums that have a .value attribute
@@ -234,3 +260,17 @@ def is_qt5() -> bool:
         True if Qt5, False if Qt6
     """
     return not QtCompat.IS_QT6
+
+
+def create_regex_validator(pattern: str, parent: Any = None) -> Any:
+    """
+    Convenience wrapper for creating a Qt version-compatible regex validator.
+
+    Args:
+        pattern: Regular expression pattern
+        parent: Optional QObject parent for the validator
+
+    Returns:
+        A QValidator instance
+    """
+    return QtCompat.create_regex_validator(pattern, parent)

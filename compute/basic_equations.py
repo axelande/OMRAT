@@ -102,8 +102,11 @@ def get_head_on_collision_candidates(
     # Relative closing speed for head-on collision
     V_ij = V1 + V2
 
-    # Mean lateral distance between vessels (head-on: opposite directions)
-    mu_ij = mu1 + mu2
+    # Mean lateral separation between vessels (head-on: opposite directions).
+    # Hansen Eq. 4.4: mu_ij = mu_i^(1) + mu_j^(2), both positive from own
+    # sailing perspective.  OMRAT stores dir-2 means negated to a fixed
+    # reference frame, so we subtract to recover the Hansen convention.
+    mu_ij = mu1 - mu2
 
     # Combined standard deviation
     sigma_ij = sqrt(sigma1**2 + sigma2**2)

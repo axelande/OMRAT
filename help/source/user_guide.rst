@@ -64,6 +64,20 @@ segment. To change the width:
 1. Edit the **Width** column in the route table
 2. The visual offset line updates automatically
 
+Editing Existing Segments
+-------------------------
+
+You can edit an existing route leg directly on the map (vertex/line
+editing in QGIS). When geometry changes:
+
+- The route table ``Start_Point`` / ``End_Point`` values are updated
+- Segment direction labels are recalculated
+- Segment ``line_length`` is recalculated in metres
+
+These updates are persisted to project save/export (including IWRAP
+export), so edited map geometry and exported model geometry stay in
+sync.
+
 
 Step 2: Traffic Data
 =====================

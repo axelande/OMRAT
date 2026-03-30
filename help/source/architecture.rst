@@ -149,7 +149,8 @@ The main calculation engine. Key responsibilities:
 - ``run_ship_collision_model(data)``: Computes ship-ship collision
   frequencies
 - ``run_powered_grounding_model(data)``: Computes powered grounding
-  (Category I and II)
+   (Category I and II) with depth-bin caching and per-bin progress
+   updates
 - ``run_powered_allision_model(data)``: Computes powered allision
 - ``run_drift_visualization(data)``: Creates visual corridor layers
 
@@ -189,6 +190,9 @@ Manages QGIS layer operations for route digitisation:
 - Segment data tracking (start/end points, directions, widths)
 - Visual offset lines showing route width
 - Geometry change detection for interactive editing
+- Geometry edit persistence: map edits are synchronised back to
+   ``segment_data`` (start/end points, directions, and line length), so
+   save/export use the edited geometry
 
 .. container:: source-code-ref
 

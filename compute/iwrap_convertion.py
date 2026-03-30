@@ -1109,17 +1109,37 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
                     except ValueError:
                         drift_data['repair'][attr] = val
 
-            # Map IWRAP repair time to scipy.stats.lognorm(s, loc, scale) format.
-            # IWRAP combi "/Mean/Std. Dev./Lower Bound" means:
+            # Map IWRAP repair time to scipy distribution format.
+            # IWRAP combi "/Mean/Std. Dev./Lower Bound" means lognormal:
             #   param_0 = Mean of repair time (hours)
             #   param_1 = Std deviation of repair time (hours)
             #   param_2 = Lower bound (minimum repair time, hours)
-            # scipy.stats.lognorm uses: s=shape(sigma), loc=shift, scale=exp(mu)
+            # IWRAP combi "/Delta/Beta/Lower Bound" means Weibull:
+            #   param_0 = Delta (scale parameter)
+            #   param_1 = Beta (shape parameter)
+            #   param_2 = Lower Bound (location/shift)
             combi = repair_el.get('combi', '')
+            dist_type = repair_el.get('type', '')
             p0 = float(repair_el.get('param_0', 0))
             p1 = float(repair_el.get('param_1', 0))
             p2 = float(repair_el.get('param_2', 0))
-            if 'Mean' in combi and 'Std' in combi and 'Lower' in combi:
+            if 'Delta' in combi and 'Beta' in combi or dist_type == 'Weibull':
+                # Weibull distribution: weibull_min(c=beta, loc=lower_bound, scale=delta)
+                wb_scale = p0   # Delta
+                wb_shape = p1   # Beta
+                wb_loc = p2     # Lower Bound
+                drift_data['repair']['use_lognormal'] = False
+                drift_data['repair']['dist_type'] = 'weibull'
+                drift_data['repair']['wb_shape'] = wb_shape
+                drift_data['repair']['wb_loc'] = wb_loc
+                drift_data['repair']['wb_scale'] = wb_scale
+                drift_data['repair']['func'] = (
+                    f"__import__('scipy.stats', fromlist=['weibull_min'])"
+                    f".weibull_min(c={wb_shape}, loc={wb_loc}, scale={wb_scale}).cdf(x)"
+                )
+                if debug:
+                    print(f"    Weibull repair: shape={wb_shape}, loc={wb_loc}, scale={wb_scale}")
+            elif 'Mean' in combi and 'Std' in combi and 'Lower' in combi:
                 iwrap_mean = p0
                 iwrap_std = p1
                 iwrap_lower = p2
@@ -1207,10 +1227,11 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
                             draught_val = float(cat_el.get('draught', 0))
                             height_val = float(cat_el.get('height_1', 0))
                             beam_val = float(cat_el.get('width', 0))
+                            speed_val = float(cat_el.get('speed', 0))
 
                             # Derive missing dimensions from Ship Type Codes table
                             # when IWRAP provides 0 values
-                            if (draught_val == 0 or beam_val == 0) and '-' in length_interval:
+                            if (draught_val == 0 or beam_val == 0 or speed_val == 0) and '-' in length_interval:
                                 try:
                                     lpp_min = int(length_interval.split('-')[0])
                                 except (ValueError, IndexError):
@@ -1222,9 +1243,11 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
                                         draught_val = round(stc_entry['draught'], 2)
                                     if beam_val == 0:
                                         beam_val = round(stc_entry['beam'], 2)
+                                    if speed_val == 0:
+                                        speed_val = round(stc_entry['speed'], 2)
                                     if debug:
                                         print(f"    STC lookup ({st_name}, {length_interval}): "
-                                              f"draught={draught_val}m, beam={beam_val}m")
+                                              f"draught={draught_val}m, beam={beam_val}m, speed={speed_val}kts")
                                 elif draught_val == 0:
                                     # Fallback: estimate draught from mid-length / 12
                                     try:
@@ -1241,7 +1264,7 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
                                 'shiptype': omrat_type,
                                 'length_interval': length_interval,
                                 'freq': float(cat_el.get('freq', 0)),
-                                'speed': float(cat_el.get('speed', 0)),
+                                'speed': speed_val,
                                 'draught': draught_val,
                                 'height': height_val,
                                 'beam': beam_val,
@@ -1656,8 +1679,82 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
     if gs_el is not None:
         cf_el = gs_el.find('causation_factors')
         if cf_el is not None:
-            # Store causation factors if needed
-            pass
+            pc = result['pc']
+            # Map IWRAP causation factor names to OMRAT pc keys
+            cf_mapping = {
+                'p_headon_causation': 'headon',
+                'p_overtaking_causation': 'overtaking',
+                'p_crossing_causation': 'crossing',
+                'p_bend_causation': 'bend',
+                'p_merging_causation': 'merging',
+                'p_grounding_causation': 'p_pc',
+                'p_allision_causation': 'allision_pc',
+                'p_grounding_drifting_causation': 'grounding_drifting_rf',
+                'p_allision_drifting_causation': 'allision_drifting_rf',
+                'p_grounding_no_turn_causation': 'grounding_no_turn_pc',
+                'p_allision_no_turn_causation': 'allision_no_turn_pc',
+            }
+            for iwrap_key, omrat_key in cf_mapping.items():
+                val = cf_el.get(iwrap_key)
+                if val is not None:
+                    try:
+                        pc[omrat_key] = float(val)
+                    except (ValueError, TypeError):
+                        pass
+            # Import mean time between checks from misc element
+            misc_el = gs_el.find('misc')
+            if misc_el is not None:
+                mtbc_val = misc_el.get('meantime_between_checks')
+                if mtbc_val is not None:
+                    try:
+                        mtbc = float(mtbc_val)
+                        result['pc']['mean_time_between_checks'] = mtbc
+                        # Set ai (position check interval in seconds) on all segments
+                        # that don't already have it set from per-leg data
+                        for seg in result['segment_data'].values():
+                            if seg.get('ai1', 0.0) == 0.0:
+                                seg['ai1'] = mtbc
+                            if seg.get('ai2', 0.0) == 0.0:
+                                seg['ai2'] = mtbc
+                        if debug:
+                            print(f"  Mean time between checks: {mtbc}s -> set ai on all segments")
+                    except (ValueError, TypeError):
+                        pass
+
+    # Compute bend angles between consecutive legs sharing waypoints
+    seg_ids = sorted(result['segment_data'].keys(), key=lambda x: int(x))
+    for i, seg_id in enumerate(seg_ids):
+        seg = result['segment_data'][seg_id]
+        seg_end = seg.get('End_Point', '')
+        # Find the next leg whose Start_Point matches this leg's End_Point
+        for other_id in seg_ids:
+            if other_id == seg_id:
+                continue
+            other = result['segment_data'][other_id]
+            other_start = other.get('Start_Point', '')
+            if seg_end and other_start and seg_end == other_start:
+                # Compute bearing of each leg
+                try:
+                    sp1 = seg['Start_Point'].split()
+                    ep1 = seg['End_Point'].split()
+                    sp2 = other['Start_Point'].split()
+                    ep2 = other['End_Point'].split()
+                    dx1 = float(ep1[0]) - float(sp1[0])
+                    dy1 = float(ep1[1]) - float(sp1[1])
+                    dx2 = float(ep2[0]) - float(sp2[0])
+                    dy2 = float(ep2[1]) - float(sp2[1])
+                    bearing1 = math.degrees(math.atan2(dx1, dy1)) % 360
+                    bearing2 = math.degrees(math.atan2(dx2, dy2)) % 360
+                    bend_angle = abs(bearing2 - bearing1)
+                    if bend_angle > 180:
+                        bend_angle = 360 - bend_angle
+                    # Store bend angle on both legs sharing this waypoint
+                    seg['bend_angle'] = bend_angle
+                    other['bend_angle'] = bend_angle
+                    if debug:
+                        print(f"  Bend angle at shared waypoint ({seg['Leg_name']}<->{other['Leg_name']}): {bend_angle:.1f} deg")
+                except (ValueError, IndexError):
+                    pass
 
     if debug:
         print(f"\n{'='*70}")

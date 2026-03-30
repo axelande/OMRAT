@@ -186,7 +186,14 @@ compute.run_calculations
 
    .. method:: run_powered_grounding_model(data)
 
-      Calculate powered grounding (Category I and II).
+         Calculate powered grounding (Category I and II).
+
+         Implementation details:
+
+         - Groups draughts into effective depth bins based on depth
+            contours.
+         - Reuses cached shadow/ray-casting computations per bin.
+         - Emits progress updates per obstacle-bin step for long runs.
 
    .. method:: run_powered_allision_model(data)
 

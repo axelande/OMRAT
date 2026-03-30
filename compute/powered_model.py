@@ -82,20 +82,48 @@ class PoweredModelMixin:
         if not draught_set:
             draught_set = {5.0}  # Default draught
 
-        # For each unique draught, build obstacle list and run shadow computation
-        # Cache: draught -> {(seg_id, dir_idx, obs_key) -> {mass, mean_dist}}
-        draught_results: dict[float, list[dict]] = {}
-        for max_draft in sorted(draught_set):
+        # Effective bins: obstacle set only changes when crossing a depth contour.
+        # This avoids repeating heavy geometry/ray computations for many similar draughts.
+        depth_values: list[float] = []
+        for dep in depths_list:
             try:
+                depth_values.append(float(dep[1]))
+            except (IndexError, ValueError, TypeError):
+                continue
+        unique_depths = sorted(set(depth_values))
+
+        def _depth_bin_key(draught: float) -> float | None:
+            valid = [d for d in unique_depths if d <= draught]
+            return valid[-1] if valid else None
+
+        bins_needed: set[float | None] = {_depth_bin_key(d) for d in draught_set}
+
+        # Cache: depth-bin key -> precomputed overlap results for that obstacle set.
+        bin_results: dict[float | None, list[dict]] = {}
+        sorted_bins = sorted([b for b in bins_needed if b is not None])
+        if None in bins_needed:
+            sorted_bins = [None] + sorted_bins
+
+        total_bins = len(sorted_bins)
+        for idx, bin_key in enumerate(sorted_bins, start=1):
+            # Optional progress callback so long powered runs don't look stuck.
+            if getattr(self, "_progress_callback", None):
+                self._progress_callback(
+                    idx - 1,
+                    max(total_bins, 1),
+                    f"Powered grounding: obstacle bin {idx}/{max(total_bins, 1)}",
+                )
+
+            try:
+                max_draft = -1.0 if bin_key is None else float(bin_key)
                 legs, all_obstacles, _, _, _ = _build_legs_and_obstacles(
                     data, proj, mode="grounding", max_draft=max_draft)
                 if all_obstacles:
-                    comps = _run_all_computations(legs, all_obstacles)
-                    draught_results[max_draft] = comps
+                    bin_results[bin_key] = _run_all_computations(legs, all_obstacles)
                 else:
-                    draught_results[max_draft] = []
+                    bin_results[bin_key] = []
             except Exception:
-                draught_results[max_draft] = []
+                bin_results[bin_key] = []
 
         # Sum per-ship-type contributions using pre-computed shadow results
         for leg_key, leg_dirs in traffic_data.items():
@@ -147,10 +175,8 @@ class PoweredModelMixin:
                             pass
                         speed_ms = speed_kts * 1852.0 / 3600.0
 
-                        # Find the closest matching draught bracket
-                        best_draft = min(draught_set,
-                                         key=lambda d: abs(d - draught))
-                        comps = draught_results.get(best_draft, [])
+                        # Map ship draught to effective depth bin results.
+                        comps = bin_results.get(_depth_bin_key(draught), [])
 
                         # Sum over matching leg/direction computations
                         for comp in comps:
@@ -201,6 +227,14 @@ class PoweredModelMixin:
 
         pc_allision = float(pc_vals.get('allision', 1.9e-4))
 
+        # Build obstacle height lookup from objects list, keyed by ID
+        obj_heights: dict[str, float] = {}
+        for obj in objects_list:
+            try:
+                obj_heights[str(obj[0])] = float(obj[1])
+            except (IndexError, ValueError, TypeError):
+                pass
+
         # Build projector and geometry once
         try:
             first_seg = segment_data[list(segment_data.keys())[0]]
@@ -241,6 +275,7 @@ class PoweredModelMixin:
 
             freq_array = dir_data.get('Frequency (ships/year)', [])
             speed_array = dir_data.get('Speed (knots)', [])
+            height_array = dir_data.get('Ship heights (meters)', [])
 
             for loa_i, freq_row in enumerate(freq_array):
                 if not hasattr(freq_row, '__iter__'):
@@ -265,12 +300,29 @@ class PoweredModelMixin:
                         pass
                     speed_ms = speed_kts * 1852.0 / 3600.0
 
+                    # Get ship height for allision filtering
+                    ship_height = 0.0
+                    try:
+                        if loa_i < len(height_array) and type_j < len(height_array[loa_i]):
+                            h_val = height_array[loa_i][type_j]
+                            if isinstance(h_val, (int, float)):
+                                ship_height = float(h_val)
+                    except Exception:
+                        pass
+
                     # Sum over obstacles hit by this leg/direction
                     for key, s in comp["summaries"].items():
+                        kind, obs_id = key
                         mass = s["mass"]
                         d_mean = s["mean_dist"]
                         if mass <= 0 or d_mean <= 0:
                             continue
+                        # Height check: if ship is shorter than the structure,
+                        # it passes under (e.g. ship under a bridge)
+                        if kind == "object":
+                            struct_height = obj_heights.get(str(obs_id), 0.0)
+                            if ship_height < struct_height:
+                                continue
                         recovery = ai_seconds * speed_ms
                         if recovery <= 0:
                             continue

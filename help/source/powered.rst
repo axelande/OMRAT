@@ -28,6 +28,13 @@ Unlike drifting accidents, powered accidents depend on the **lateral
 traffic distribution** relative to obstacles and the **probability of
 course correction** after an error.
 
+Current implementation notes:
+
+- Powered grounding uses **effective depth bins** (by depth contour)
+   instead of recomputing geometry for every individual draught value.
+- Progress is reported per obstacle-bin step, so long runs show
+   meaningful status updates in the task manager.
+
 .. image:: _static/images/powered_grounding.svg
    :width: 100%
    :alt: Powered grounding Category I and Category II
@@ -242,6 +249,26 @@ For each leg and direction (turning point + extension direction):
         \times \exp\!\left(-\frac{d_{\text{mean}}}{a}\right)
 
    Where :math:`a = \lambda \times V` is the recovery distance.
+
+Performance Optimization (Depth-Bin Caching)
+--------------------------------------------
+
+Powered grounding now groups ships by an **effective depth bin**:
+
+1. Extract unique depth contour values from ``depths``.
+2. Map each ship draught to the deepest contour that is still shallower
+   than or equal to that draught.
+3. Run expensive shadow/ray computations **once per bin**, then reuse
+   results for all ship classes mapped to that bin.
+
+This avoids repeated ray-casting with identical obstacle sets and
+significantly reduces runtime on projects with many draught entries.
+
+.. container:: source-code-ref
+
+   ``compute/powered_model.py:85`` -- depth-bin grouping and caching in `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L85>`__ |
+   ``compute/powered_model.py:114`` -- per-bin progress updates |
+   ``compute/powered_model.py:178`` -- ship draught -> cached bin mapping
 
 .. container:: source-code-ref
 

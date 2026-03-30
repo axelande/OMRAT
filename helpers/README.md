@@ -31,7 +31,7 @@ else:
 **Enum Handling:**
 ```python
 # Convert Qt enums to integers (Qt5/Qt6 compatible)
-value = QtCompat.to_int(QMetaType.QString)
+value = QtCompat.to_int(QMetaType.Type.QString)
 ```
 
 **Dialog Execution:**
@@ -155,7 +155,7 @@ from helpers.qt_conversions import QtCompat
 # Qt5 uses integer constants
 # QtCompat handles both:
 
-meta_type = QMetaType.QString
+meta_type = QMetaType.Type.QString
 type_id = QtCompat.to_int(meta_type)
 ```
 
