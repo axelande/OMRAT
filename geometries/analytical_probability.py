@@ -314,19 +314,12 @@ def _compute_single_direction_analytical(
         polygon_coords_dict[(gi, ri)] = _extract_polygon_rings(geom)
 
     dir_holes: list[float] = []
-    cumulative_hole = 0.0
     skipped_full_coverage = 0
     skipped_too_far = 0
 
     for obj_idx, (gi, ri) in enumerate(obj_index_map):
         obj = objs_gdf_list[gi].geometry.iloc[ri]
         polygon_rings = polygon_coords_dict[(gi, ri)]
-
-        # Early termination
-        if cumulative_hole >= 0.99:
-            dir_holes.append(0.0)
-            skipped_full_coverage += 1
-            continue
 
         # Quick distance check
         min_dist = line.distance(obj)
@@ -349,7 +342,6 @@ def _compute_single_direction_analytical(
             n_slices=n_slices,
         )
 
-        cumulative_hole += probability_hole
         dir_holes.append(probability_hole)
 
     return (leg_idx, dir_idx, dir_holes, skipped_full_coverage, skipped_too_far)

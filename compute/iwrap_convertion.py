@@ -76,13 +76,18 @@ def prettify_xml(elem: ET.Element) -> str:
 def build_drifting(parent: ET.Element, drift: dict):
     drifting = ET.SubElement(parent, 'drifting')
     # Set attributes on drifting per XSD
-    if (v := drift.get('drift_p')) is not None:
+    if (v := drift.get('anchor_p')) is not None:
+        drifting.set('anchor_probability', str(v))
+    elif (v := drift.get('drift_p')) is not None:
+        # Backward-compatible fallback for legacy data where anchor_p may be missing.
         drifting.set('anchor_probability', str(v))
     if (v := drift.get('anchor_d')) is not None:
         drifting.set('max_anchor_depth', str(v))
     if (v := drift.get('speed') or drift.get('drift_speed')) is not None:
         drifting.set('drift_speed', str(v))
-    if (v := drift.get('drift_blackout_other') or drift.get('drift_p')) is not None:
+    if (v := drift.get('drift_blackout_other')) is not None:
+        drifting.set('blackout_other', str(v))
+    elif (v := drift.get('drift_p')) is not None:
         # Best effort mapping if provided
         drifting.set('blackout_other', str(v))
     # Required children per XSD: repair_time and drift_directions
@@ -92,9 +97,15 @@ def build_drifting(parent: ET.Element, drift: dict):
     for attr in ['combi', 'param_0', 'param_1', 'param_2', 'type', 'weight']:
         if attr in repair and repair.get(attr) is not None:
             rep.set(attr, str(repair.get(attr)))
-    # Optional repair_time_func
+    # Optional repair_time_func.
+    # IWRAP treats presence of repair_time_func as Function mode; when a known
+    # distribution is provided via repair_time attributes, omit function node.
     func = repair.get('func') if isinstance(repair, dict) else None
-    if func:
+    has_distribution_attrs = any(
+        repair.get(attr) is not None
+        for attr in ['combi', 'param_0', 'param_1', 'param_2', 'type']
+    )
+    if func and not has_distribution_attrs:
         rf = ET.SubElement(drifting, 'repair_time_func')
         rf.set('name', str(func))
     # Drift directions as attributes
@@ -103,7 +114,9 @@ def build_drifting(parent: ET.Element, drift: dict):
     for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
         akey = str(angle)
         if akey in rose and rose.get(akey) is not None:
-            dd.set(f'angle_{angle}', str(rose.get(akey)))
+            # IWRAP uses 180° offset from OMRAT compass convention
+            iwrap_angle = (angle + 180) % 360
+            dd.set(f'angle_{iwrap_angle}', str(rose.get(akey)))
 
 def build_bridges(parent: ET.Element, objects: list):
     if not objects:
@@ -822,18 +835,53 @@ def build_traffic_distributions(parent: ET.Element, traffic_data: dict, segment_
         # Helper to emit categories into a target shiptypes container
         def emit_shiptypes(shiptypes_target: ET.Element, freq_mat, speed_mat, draft_mat, height_mat, beam_mat):
             if not types:
+                # If pre-built shiptype/category dicts are available use them.
                 leg_shiptypes = global_shiptypes or [{'name': 'General cargo ship', 'categories': global_categories or leg_td.get('categories', [])}]
+                pre_cats = []
                 for st in leg_shiptypes:
+                    pre_cats.extend(st.get('categories', []) or [])
+                if pre_cats:
+                    for st in leg_shiptypes:
+                        st_el = ET.SubElement(shiptypes_target, 'shiptype')
+                        st_el.set('causation_reduction_factor', str(st.get('causation_reduction_factor', 0)))
+                        st_el.set('freq_adjustment', str(st.get('freq_adjustment', 1)))
+                        st_el.set('grounding_safety_margin', str(st.get('grounding_safety_margin', -1)))
+                        st_el.set('name', str(st.get('name', 'Unknown')))
+                        cats_el = ET.SubElement(st_el, 'categories')
+                        cats = st.get('categories', []) or []
+                        for cat in cats:
+                            if isinstance(cat, dict):
+                                add_category_attr(cats_el, cat)
+                    return
+                # No pre-built categories: derive from matrices, one category per non-zero cell.
+                if freq_mat:
                     st_el = ET.SubElement(shiptypes_target, 'shiptype')
-                    st_el.set('causation_reduction_factor', str(st.get('causation_reduction_factor', 0)))
-                    st_el.set('freq_adjustment', str(st.get('freq_adjustment', 1)))
-                    st_el.set('grounding_safety_margin', str(st.get('grounding_safety_margin', -1)))
-                    st_el.set('name', str(st.get('name', 'Unknown')))
+                    st_el.set('causation_reduction_factor', '0')
+                    st_el.set('freq_adjustment', '1')
+                    st_el.set('grounding_safety_margin', '-1')
+                    st_el.set('name', 'General cargo ship')
                     cats_el = ET.SubElement(st_el, 'categories')
-                    cats = st.get('categories', []) or []
-                    for cat in cats:
-                        if isinstance(cat, dict):
-                            add_category_attr(cats_el, cat)
+                    cat_idx = 0
+                    for r, row in enumerate(freq_mat):
+                        for c, fv in enumerate(row):
+                            freq_val = sanitize_num(fv)
+                            if freq_val <= 0:
+                                continue
+                            speed_val = sanitize_num(speed_mat[r][c]) if speed_mat and r < len(speed_mat) and c < len(speed_mat[r]) else 0.0
+                            draft_val = sanitize_num(draft_mat[r][c]) if draft_mat and r < len(draft_mat) and c < len(draft_mat[r]) else 0.0
+                            height_val = sanitize_num(height_mat[r][c]) if height_mat and r < len(height_mat) and c < len(height_mat[r]) else 0.0
+                            beam_val = sanitize_num(beam_mat[r][c]) if beam_mat and r < len(beam_mat) and c < len(beam_mat[r]) else 0.0
+                            add_category_attr(cats_el, {
+                                'name': f'cat_{r}_{c}',
+                                'freq': freq_val,
+                                'speed': speed_val,
+                                'draught': draft_val,
+                                'height_1': height_val,
+                                'width': beam_val,
+                                'depth': 0,
+                                'p_ballast': 0,
+                            })
+                            cat_idx += 1
                 return
 
             ui_to_iwrap = {
@@ -1091,8 +1139,15 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
     if drifting_el is not None:
         if drifting_el.get('anchor_probability') is not None:
             drift_data['anchor_p'] = float(drifting_el.get('anchor_probability'))
-            # drift_p must be int (probability as 0 or 1)
-            drift_data['drift_p'] = int(round(float(drifting_el.get('anchor_probability'))))
+        # Primary blackout source from IWRAP drifting settings.
+        if drifting_el.get('blackout_other') is not None:
+            drift_data['drift_p'] = float(drifting_el.get('blackout_other'))
+        elif drifting_el.get('blackout_roro_passenger') is not None:
+            # Conservative fallback when blackout_other is absent.
+            drift_data['drift_p'] = float(drifting_el.get('blackout_roro_passenger'))
+        elif drifting_el.get('anchor_probability') is not None:
+            # Backward-compatible fallback for malformed exports that only had anchor_probability.
+            drift_data['drift_p'] = float(drifting_el.get('anchor_probability'))
         if drifting_el.get('max_anchor_depth') is not None:
             drift_data['anchor_d'] = int(round(float(drifting_el.get('max_anchor_depth'))))
         if drifting_el.get('drift_speed') is not None:
@@ -1123,7 +1178,22 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
             p0 = float(repair_el.get('param_0', 0))
             p1 = float(repair_el.get('param_1', 0))
             p2 = float(repair_el.get('param_2', 0))
-            if 'Delta' in combi and 'Beta' in combi or dist_type == 'Weibull':
+            if ('Mean' in combi and 'Std' in combi and 'Lower' not in combi) or dist_type == 'Normal':
+                # Normal repair distribution in hours.
+                # IWRAP /Mean/Std. Dev. maps directly to normal(loc=mean, scale=std).
+                norm_mean = p0
+                norm_std = p1 if p1 > 0 else 1e-6
+                drift_data['repair']['use_lognormal'] = False
+                drift_data['repair']['dist_type'] = 'normal'
+                drift_data['repair']['norm_mean'] = norm_mean
+                drift_data['repair']['norm_std'] = norm_std
+                drift_data['repair']['func'] = (
+                    f"__import__('scipy.stats', fromlist=['norm'])"
+                    f".norm(loc={norm_mean}, scale={norm_std}).cdf(x)"
+                )
+                if debug:
+                    print(f"    Normal repair: mean={norm_mean}, std={norm_std}")
+            elif 'Delta' in combi and 'Beta' in combi or dist_type == 'Weibull':
                 # Weibull distribution: weibull_min(c=beta, loc=lower_bound, scale=delta)
                 wb_scale = p0   # Delta
                 wb_shape = p1   # Beta
@@ -1171,7 +1241,9 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
             for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
                 val = dd_el.get(f'angle_{angle}')
                 if val is not None:
-                    drift_data['rose'][str(angle)] = float(val)
+                    # IWRAP uses 180° offset from OMRAT compass convention; convert back
+                    omrat_angle = (angle + 180) % 360
+                    drift_data['rose'][str(omrat_angle)] = float(val)
 
     result['drift'] = drift_data
 
@@ -1653,17 +1725,33 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
             else:
                 wkt = ""
 
-            # Check if this is an object (negative depth) or depth area
-            # IWRAP uses negative depth values for objects:
-            #   -1 for general objects
-            #   -10, -12, etc. for bridges and other structures
+            # Classify area polygons into objects vs depth areas.
+            # 1) Negative depth always means object-like obstacle in IWRAP.
+            # 2) Non-zero area type indicates structure/object semantics in IWRAP
+            #    (e.g., wind turbines stored as type=1 with depth=0).
             try:
                 depth_num = float(depth_val)
-                is_object = depth_num < 0
-                height_val = str(abs(depth_num)) if is_object else depth_val
+                is_object_by_depth = depth_num < 0
+                is_object_by_type = str(area_type).strip() != '0'
+                is_object = is_object_by_depth or is_object_by_type
+                if is_object_by_depth:
+                    height_val = str(abs(depth_num))
+                elif is_object_by_type:
+                    # Most structure-style areas in IWRAP do not carry height.
+                    # Keep them as objects with neutral default height.
+                    height_val = '0'
+                else:
+                    height_val = depth_val
             except ValueError:
-                is_object = depth_val.strip().startswith('-')
-                height_val = depth_val.strip().lstrip('-') if is_object else depth_val
+                is_object_by_depth = depth_val.strip().startswith('-')
+                is_object_by_type = str(area_type).strip() != '0'
+                is_object = is_object_by_depth or is_object_by_type
+                if is_object_by_depth:
+                    height_val = depth_val.strip().lstrip('-')
+                elif is_object_by_type:
+                    height_val = '0'
+                else:
+                    height_val = depth_val
 
             if is_object:
                 # This is an object (negative depth) - store as list: [id, height, polygon]

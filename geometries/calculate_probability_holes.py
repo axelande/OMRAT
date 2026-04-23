@@ -564,22 +564,14 @@ def _compute_single_direction(
         polygon_coords_dict[(gi, ri)] = _extract_polygon_rings(geom)
 
     dir_holes: list[float] = []
-    cumulative_hole = 0.0
-    skipped_full_coverage = 0
     skipped_too_far = 0
+    skipped_full_coverage = 0
 
     for obj_idx, (gi, ri) in enumerate(obj_index_map):
         obj = objs_gdf_list[gi].geometry.iloc[ri]
         polygon_rings = polygon_coords_dict[(gi, ri)]
 
-        # OPTIMIZATION 1: Early termination - if cumulative probability > 0.99, skip remaining objects
-        if cumulative_hole >= 0.99:
-            probability_hole = 0.0
-            dir_holes.append(probability_hole)
-            skipped_full_coverage += 1
-            continue
-
-        # OPTIMIZATION 2: Quick distance check - if object is too far, skip
+        # Quick distance check - if object is too far, skip
         geom_start = time.perf_counter()
         min_dist = line.distance(obj)
         geom_elapsed = time.perf_counter() - geom_start
@@ -592,14 +584,7 @@ def _compute_single_direction(
             skipped_too_far += 1
             continue
 
-        # OPTIMIZATION: Use Monte Carlo instead of dblquad
-        # Adaptive sample count based on cumulative coverage
-        if cumulative_hole > 0.95:
-            n_samples = 500
-        elif cumulative_hole > 0.8:
-            n_samples = 1000
-        else:
-            n_samples = 2000
+        n_samples = 2000
 
         try:
             monte_carlo_start = time.perf_counter()
@@ -628,8 +613,6 @@ def _compute_single_direction(
             logger.debug(f"Monte Carlo failed for leg {leg_idx}, dir {dir_idx}, obj {obj_idx}: {e}")
             probability_hole = 0.0
 
-        # Update cumulative coverage for this direction
-        cumulative_hole += probability_hole
         dir_holes.append(probability_hole)
 
     # Record task timing

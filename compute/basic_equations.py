@@ -39,6 +39,101 @@ def get_not_repaired(data: dict[str,str|float|bool], drift_speed:float, dist:flo
     return prob_not_repaired
 
 
+# Canonical ship-type names per OMRAT ship-type index (0-based row in the
+# traffic matrix).  Used by the settings GUI and the drifting calculation to
+# apply per-type parameters (e.g. blackout rate) without having to duplicate
+# the mapping in multiple files.
+SHIP_TYPE_NAMES: dict[int, str] = {
+    0:  "Other ship",
+    1:  "Search & rescue",
+    2:  "Sailing vessel",
+    3:  "Pleasure craft",
+    4:  "High speed craft",
+    5:  "Fishing (small)",
+    6:  "Fishing (large)",
+    7:  "Tug / push",
+    8:  "Passenger ferry",
+    9:  "Ro-pax",
+    10: "Ro-ro",
+    11: "Passenger cruise",
+    12: "Container feeder",
+    13: "Container",
+    14: "General cargo",
+    15: "General cargo (large)",
+    16: "Dry bulk (small)",
+    17: "Dry bulk (Panamax+)",
+    18: "Bulk carrier",
+    19: "Tanker (crude/product)",
+    20: "Chemical / gas tanker",
+}
+
+# IWRAP-like default blackout rate per ship-type index, events per ship-year.
+# IWRAP distinguishes "roro_passenger" (Passenger ferry, Ro-pax, Ro-ro,
+# Passenger cruise) which typically have a one-order-of-magnitude lower
+# blackout rate than other commercial vessels.  These match IWRAP's default
+# ``blackout_other = 1.0`` and ``blackout_roro_passenger = 0.1``.
+_DEFAULT_BLACKOUT_BY_SHIP_TYPE: dict[int, float] = {i: 1.0 for i in SHIP_TYPE_NAMES}
+for _i in (8, 9, 10, 11):  # Passenger ferry, Ro-pax, Ro-ro, Passenger cruise
+    _DEFAULT_BLACKOUT_BY_SHIP_TYPE[_i] = 0.1
+
+
+def default_blackout_by_ship_type() -> dict[int, float]:
+    """Return a fresh copy of the default per-ship-type blackout rate map."""
+    return dict(_DEFAULT_BLACKOUT_BY_SHIP_TYPE)
+
+
+# Block-coefficient defaults per OMRAT ship-type index (0-based row in traffic matrix).
+# Values are typical design Cb from published statistics (IACS, literature).
+# 0=Other, 1=Search & rescue, ..., 18=Cargo/bulk, 19=Tanker, 20=Passenger.
+# Types with no dedicated Cb default to 0.70 (mid-range merchant vessel).
+_CB_BY_SHIP_TYPE: dict[int, float] = {
+    0:  0.70,   # Other ship
+    1:  0.50,   # Search & rescue (fast craft)
+    2:  0.65,   # Sailing vessel
+    3:  0.55,   # Pleasure craft
+    4:  0.65,   # High speed craft
+    5:  0.60,   # Fishing (small)
+    6:  0.65,   # Fishing (large)
+    7:  0.65,   # Tug/push
+    8:  0.70,   # Passenger ferry
+    9:  0.65,   # Ro-pax
+    10: 0.65,   # Ro-ro
+    11: 0.70,   # Passenger cruise
+    12: 0.65,   # Container feeder
+    13: 0.67,   # Container
+    14: 0.72,   # General cargo
+    15: 0.72,   # General cargo (large)
+    16: 0.72,   # Dry bulk (small)
+    17: 0.80,   # Dry bulk (Panamax+)
+    18: 0.80,   # Bulk carrier
+    19: 0.82,   # Tanker (crude/product)
+    20: 0.67,   # Chemical/gas tanker
+}
+
+
+def squat_m(speed_kts: float, ship_type: int = -1, cb: float | None = None) -> float:
+    """Estimate under-keel squat (metres) using the Barras (1979) open-water formula.
+
+    Barras formula (open water):
+        S = C_b * V_k^2 / 100
+
+    where:
+        C_b     block coefficient (dimensionless)
+        V_k     ship speed in knots
+
+    The block coefficient is taken from ``cb`` if supplied, otherwise looked up
+    by ``ship_type`` index (OMRAT row index in the traffic matrix).  If the
+    ship type is unknown the default C_b = 0.75 is used (conservative).
+
+    Returns 0 when speed <= 0.
+    """
+    if speed_kts <= 0.0:
+        return 0.0
+    if cb is None:
+        cb = _CB_BY_SHIP_TYPE.get(int(ship_type) if ship_type >= 0 else -1, 0.75)
+    return cb * speed_kts ** 2 / 100.0
+
+
 # =============================================================================
 # Ship-Ship Collision Equations (Hansen 2008 - IWRAP Theory)
 # =============================================================================

@@ -24,6 +24,7 @@ class DriftSettingsWidget(QtWidgets.QDialog, FORM_CLASS):
         self.leDriftSW: QtWidgets.QLineEdit
         self.leDriftW: QtWidgets.QLineEdit
         self.leDriftN: QtWidgets.QLineEdit
+        self.cbStartDriftingFrom: QtWidgets.QComboBox
         self.leDriftSpeed: QtWidgets.QLineEdit
         self.leRepairLoc: QtWidgets.QLineEdit
         self.leRepairScale: QtWidgets.QLineEdit

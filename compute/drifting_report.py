@@ -137,7 +137,11 @@ class DriftingReportMixin:
         md_lines.append(f"- Total grounding (before RF): {float(totals.get('grounding', 0.0)):.3e}")
         md_lines.append(f"- Allision reduction factor: {allision_rf:.3f}")
         md_lines.append(f"- Grounding reduction factor: {grounding_rf:.3f}")
-        md_lines.append(f"- Aggregated ship-hours on legs used in model: {total_base_hours:.2f}")
+        drift_p_val = float(drift.get('drift_p', 0.0)) if isinstance(drift, dict) else 0.0
+        md_lines.append(f"- Aggregated blackout-weighted exposure (sum(base*rose)): {total_base_hours:.2f}")
+        if drift_p_val > 0.0:
+            est_ship_hours = total_base_hours * (365.0 * 24.0) / drift_p_val
+            md_lines.append(f"- Estimated aggregated ship-hours on legs: {est_ship_hours:.2f}")
         md_lines.append("")
         md_lines.append("## Parameters")
         drift_speed_kts = float(drift.get('speed', 0.0)) if isinstance(drift, dict) else 0.0
@@ -205,7 +209,7 @@ class DriftingReportMixin:
             pass
 
         md_lines.append("## Directional Aggregates")
-        md_lines.append("| Direction | Base hours | Allision | Grounding | Avg anchor | Avg not-repaired | Avg overlap |")
+        md_lines.append("| Direction | Base exposure | Allision | Grounding | Avg anchor | Avg not-repaired | Avg overlap |")
         md_lines.append("|---:|---:|---:|---:|---:|---:|---:|")
         for ang in sorted(dir_agg.keys(), key=lambda x: int(x)):
             md_lines.append(dir_row(ang, dir_agg[ang]))

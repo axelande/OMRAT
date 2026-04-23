@@ -54,6 +54,11 @@ def extend_polygon_in_directions(
     extended_polygons: list[BaseGeometry] = []  # List to store the 8 separate polygons
     centre_lines: list[LineString] = []
 
+    # Degenerate/empty geometry can occur for pathological distributions.
+    # Return empty placeholders rather than crashing downstream processing.
+    if polygon is None or polygon.is_empty:
+        return [Polygon()] * 8, [LineString()] * 8
+
     for angle in range(0, 360, 45):
         # Translate the polygon in the given direction
         dx = distance * np.cos(np.radians(angle))
@@ -63,7 +68,12 @@ def extend_polygon_in_directions(
         # Create a polygon that spans from the original polygon to the translated polygon
         connecting_polygon = polygon.union(translated_polygon).convex_hull
         extended_polygons.append(connecting_polygon)
-        centre_lines.append(LineString((polygon.centroid, translated_polygon.centroid)))
+        try:
+            c0 = polygon.representative_point()
+            c1 = translated_polygon.representative_point()
+            centre_lines.append(LineString([(c0.x, c0.y), (c1.x, c1.y)]))
+        except Exception:
+            centre_lines.append(LineString())
 
     return extended_polygons, centre_lines
 
@@ -136,6 +146,139 @@ def estimate_weighted_overlap(
     # Calculate the weighted overlap as the sum of combined probabilities
     weighted_overlap = combined_probabilities.sum() * 100  # Convert to percentage
     return weighted_overlap, distances
+
+
+def estimate_directional_min_distance(
+    intersection: BaseGeometry,
+    drift_center_line: LineString,
+) -> float | None:
+    """Estimate obstacle distance along the drift direction centerline.
+
+    .. deprecated::
+        This projection-based estimator returns spuriously small distances
+        for obstacles that sit near the lateral extent of the drift corridor
+        but not in the drift direction itself -- Shapely's
+        :meth:`LineString.project` clamps points outside the line's span to
+        ``0`` or ``length``.  Use :func:`directional_min_distance_reverse_ray`
+        (below) or
+        :func:`drifting.engine.directional_distance_to_point_from_offset_leg`
+        instead.  Kept for backwards compatibility only.
+    """
+    if drift_center_line is None or drift_center_line.is_empty or drift_center_line.length <= 0:
+        return None
+
+    if isinstance(intersection, Polygon):
+        sample_points = np.array(intersection.exterior.coords)
+    elif isinstance(intersection, MultiPolygon):
+        sample_points = np.vstack([np.array(poly.exterior.coords) for poly in intersection.geoms])
+    else:
+        return None
+
+    sample_points = np.atleast_2d(sample_points)
+    if sample_points.size == 0:
+        return None
+
+    # Project each sampled point to the directional centerline and take
+    # the first (minimum curvilinear) distance along the line.
+    projs: list[float] = []
+    for pt in sample_points:
+        try:
+            p = Point(float(pt[0]), float(pt[1]))
+            s = float(drift_center_line.project(p))
+            projs.append(s)
+        except Exception:
+            continue
+
+    if not projs:
+        return None
+
+    md = min(projs)
+    return max(0.0, min(md, float(drift_center_line.length)))
+
+
+def directional_min_distance_reverse_ray(
+    intersection: BaseGeometry,
+    leg: LineString,
+    compass_angle_deg: float,
+) -> float | None:
+    """Minimum along-drift distance from ``leg`` to any vertex of ``intersection``.
+
+    For every vertex of ``intersection`` we cast a reverse ray back along the
+    anti-drift direction and intersect with ``leg``; the vertex-to-leg
+    distance along the drift direction is the minimum of these.
+
+    This is the correct "directional travel distance" for failure-time
+    (:math:`P_{NR}`) calculations: an obstacle that sits near the lateral
+    corridor but not in the drift direction returns :code:`None` (no ray
+    hits the leg), while an obstacle genuinely downstream returns its
+    along-drift distance to the nearest vertex.
+
+    This is a drop-in replacement for the previous centerline-projection
+    estimator which could return spuriously small distances (e.g. 187 m
+    when the true along-drift distance was 12 km).
+
+    Args:
+        intersection: Polygon or MultiPolygon (typically the clip of an
+            obstacle against the leg's extended drift corridor).
+        leg: The leg LineString (UTM).
+        compass_angle_deg: Drift direction in compass degrees (0 = N,
+            90 = E, 180 = S, 270 = W).
+
+    Returns:
+        Minimum along-drift distance in metres, or ``None`` if no vertex
+        of ``intersection`` is reachable by drifting from ``leg`` in that
+        direction.
+    """
+    if leg is None or leg.is_empty:
+        return None
+
+    coords: list[tuple[float, float]] = []
+    if isinstance(intersection, Polygon):
+        coords = list(intersection.exterior.coords)
+        for hole in intersection.interiors:
+            coords.extend(hole.coords)
+    elif isinstance(intersection, MultiPolygon):
+        for poly in intersection.geoms:
+            coords.extend(poly.exterior.coords)
+            for hole in poly.interiors:
+                coords.extend(hole.coords)
+    else:
+        return None
+
+    if not coords:
+        return None
+
+    # Local import avoids pulling drifting.engine at module import time
+    # (keeps this geometry module usable in contexts where drifting.engine
+    # isn't available, e.g. unit tests without the full runtime).
+    from drifting.engine import (
+        LegState,
+        directional_distance_to_point_from_offset_leg,
+    )
+
+    leg_state = LegState(
+        leg_id="",
+        line=leg,
+        mean_offset_m=0.0,
+        lateral_sigma_m=1.0,   # not used when use_leg_offset=False
+    )
+
+    min_d: float | None = None
+    for x, y in coords:
+        try:
+            d = directional_distance_to_point_from_offset_leg(
+                leg_state,
+                float(compass_angle_deg),
+                Point(float(x), float(y)),
+                use_leg_offset=False,
+            )
+        except Exception:
+            d = None
+        if d is None or d < 0.0:
+            continue
+        if min_d is None or d < min_d:
+            min_d = d
+    return min_d
 
 
 def visualize(
@@ -480,6 +623,13 @@ def compute_min_distance_by_object(
 
         # For each of the 8 directions
         for d_idx, polygon in enumerate(extended_polygons):
+            # d_idx maps to the math-angle convention (0=East, 90=North, ...)
+            # because extend_polygon_in_directions translates by angle=d_idx*45
+            # using cos/sin directly.  Convert to the compass angle that
+            # directional_distance_to_point_from_offset_leg expects.
+            math_angle = (d_idx * 45) % 360
+            compass_angle = (90 - math_angle) % 360
+
             # Initialize as None (no intersection)
             min_dists: list[float | None] = [None] * n_objs
             # Iterate per GeoDataFrame and each geometry
@@ -489,11 +639,16 @@ def compute_min_distance_by_object(
                     if polygon.intersects(obj):
                         intersection = polygon.intersection(obj)
                         try:
-                            _, distances = estimate_weighted_overlap(
-                                intersection, centre_lines[d_idx], dist, wgt
+                            # Reverse-ray distance from leg to any vertex of
+                            # the intersection, along the drift direction.
+                            # This returns None for vertices that are not
+                            # reachable by drifting (i.e. "behind" the leg),
+                            # which is the correct behaviour for the
+                            # directional distance used in P_NR.
+                            md = directional_min_distance_reverse_ray(
+                                intersection, line, compass_angle,
                             )
-                            if distances.size > 0:
-                                md = float(np.min(distances))
+                            if md is not None:
                                 prev = min_dists[flat_idx]
                                 if prev is None or md < prev:
                                     min_dists[flat_idx] = md

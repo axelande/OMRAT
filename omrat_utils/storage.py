@@ -145,11 +145,65 @@ class Storage:
         # drift defaults
         drift = out.get('drift', {}) or {}
         repair = drift.get('repair', {}) or {}
+        # Backward-compatible repair migration:
+        # legacy files may store IWRAP type=Normal together with use_lognormal=True.
+        # In that case, switch to an explicit normal CDF model so loaded .omrat
+        # behaves like current XML import logic.
+        try:
+            combi = str(repair.get('combi', ''))
+            rep_type = str(repair.get('type', ''))
+            use_ln = bool(repair.get('use_lognormal', False))
+            if use_ln and (rep_type.lower() == 'normal' or ('Mean' in combi and 'Std' in combi and 'Lower' not in combi)):
+                mean = float(repair.get('param_0', repair.get('loc', 0.0)))
+                std = float(repair.get('param_1', repair.get('scale', 1.0)))
+                if std <= 0:
+                    std = 1e-6
+                repair['use_lognormal'] = False
+                repair['dist_type'] = 'normal'
+                repair['norm_mean'] = mean
+                repair['norm_std'] = std
+                repair['func'] = (
+                    f"__import__('scipy.stats', fromlist=['norm'])"
+                    f".norm(loc={mean}, scale={std}).cdf(x)"
+                )
+        except Exception:
+            pass
         repair.setdefault('use_lognormal', False)
         drift['repair'] = repair
+        if 'anchor_p' not in drift:
+            drift['anchor_p'] = 0.7
+        try:
+            anchor_p = float(drift.get('anchor_p', 0.7))
+            # Guard against legacy files storing anchor probability in percentage.
+            if anchor_p > 1.0:
+                anchor_p = anchor_p / 100.0
+            drift['anchor_p'] = max(0.0, min(1.0, anchor_p))
+        except Exception:
+            drift['anchor_p'] = 0.7
         if 'anchor_d' not in drift:
             # try alternate key or default
             drift['anchor_d'] = drift.get('anchor_depth', 0)
+        if 'start_from' not in drift:
+            drift['start_from'] = 'leg_center'
+        if 'squat_mode' not in drift:
+            drift['squat_mode'] = 'average_speed'
+        # Per-ship-type blackout rate: default to IWRAP-compatible values
+        # (1.0 for most, 0.1 for Passenger / Ro-ro / Ro-pax).  JSON keys are
+        # serialised as strings; convert to int keys on load.
+        if 'blackout_by_ship_type' in drift and isinstance(drift['blackout_by_ship_type'], dict):
+            converted: dict[int, float] = {}
+            for k, v in drift['blackout_by_ship_type'].items():
+                try:
+                    converted[int(k)] = float(v)
+                except Exception:
+                    continue
+            drift['blackout_by_ship_type'] = converted
+        else:
+            try:
+                from compute.basic_equations import default_blackout_by_ship_type
+                drift['blackout_by_ship_type'] = default_blackout_by_ship_type()
+            except Exception:
+                drift['blackout_by_ship_type'] = {}
         out['drift'] = drift
         return out
 

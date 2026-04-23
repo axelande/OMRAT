@@ -190,6 +190,10 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         for scroll_area in (self.scrollArea, self.scrollArea_2):
             scroll_area.setFrameShape(no_frame)
 
+        # twTrafficData uses its vertical header for ship-type labels, so
+        # it must keep its vertical header visible.  Other tables use their
+        # first column as the "name" column and don't need the header.
+        _needs_vheader = {'twTrafficData'}
         for table in self.findChildren(QtWidgets.QTableWidget):
             table.setAlternatingRowColors(True)
             table.setShowGrid(False)
@@ -198,7 +202,8 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
             table.setFrameShape(no_frame)
             table.setWordWrap(False)
             table.setCornerButtonEnabled(False)
-            table.verticalHeader().setVisible(False)
+            if table.objectName() not in _needs_vheader:
+                table.verticalHeader().setVisible(False)
             table.verticalHeader().setDefaultSectionSize(28)
             table.horizontalHeader().setStretchLastSection(True)
             table.horizontalHeader().setHighlightSections(False)

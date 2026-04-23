@@ -55,7 +55,7 @@
           <item row="1" column="0">
            <widget class="QLabel" name="label_10">
             <property name="text">
-             <string>Probability of anchoring (0-1):</string>
+                 <string>Probability of anchoring (%):</string>
             </property>
             <property name="alignment">
              <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -65,14 +65,14 @@
           <item row="1" column="1">
            <widget class="QLineEdit" name="leAnchorProb">
             <property name="text">
-             <string>0.95</string>
+                 <string>70</string>
             </property>
            </widget>
           </item>
           <item row="2" column="0">
            <widget class="QLabel" name="label_23">
             <property name="text">
-             <string>Max depth (Ship depth):</string>
+                 <string>Max depth (Ship draught):</string>
             </property>
             <property name="alignment">
              <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -84,6 +84,59 @@
             <property name="text">
              <string>7</string>
             </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="label_startDriftingFrom">
+            <property name="text">
+             <string>Start drifting from:</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QComboBox" name="cbStartDriftingFrom">
+            <item>
+             <property name="text">
+              <string>Leg center</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Distribution center</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="label_squatMode">
+            <property name="text">
+             <string>Squat:</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QComboBox" name="cbSquatMode">
+            <item>
+             <property name="text">
+              <string>Use average speed</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Use drift speed</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Don't include</string>
+             </property>
+            </item>
            </widget>
           </item>
          </layout>

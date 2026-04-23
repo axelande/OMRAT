@@ -66,6 +66,18 @@ class Traffic:
         self.dw.twTrafficData.setHorizontalHeaderLabels(sizes)
         self.dw.twTrafficData.setRowCount(len(types))
         self.dw.twTrafficData.setVerticalHeaderLabels(types)
+        # Ensure the vertical header is visible and wide enough to display
+        # the ship-type labels.  The main-widget styling hides vertical
+        # headers on other tables; this force-shows it specifically for the
+        # traffic-data table regardless of that styling path.
+        vh = self.dw.twTrafficData.verticalHeader()
+        vh.setVisible(True)
+        if types:
+            # Size the header to fit the widest label + a little padding.
+            fm = self.dw.twTrafficData.fontMetrics()
+            width = max(fm.horizontalAdvance(t) for t in types) + 16
+            vh.setDefaultSectionSize(28)
+            vh.setMinimumWidth(width)
         for row in range(len(types)):
             for col in range(len(sizes)):
                 item = QSpinBox()

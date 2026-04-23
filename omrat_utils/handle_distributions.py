@@ -4,7 +4,12 @@ import numpy as np
 from scipy import stats
 from matplotlib.axes import Axes
 from qgis.PyQt.QtWidgets import QLineEdit, QSpinBox, QDoubleSpinBox
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+try:
+    # QGIS 4 / Qt6 path
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+except ImportError:
+    # Backward compatibility for older Qt5 environments
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 if TYPE_CHECKING:
     from omrat import OMRAT, OMRATMainWidget
@@ -236,15 +241,31 @@ class Distributions:
             print(e)
             
     def run_update_plot(self, segment_id:str| None=None) -> None:
+        print(f"[Distributions] run_update_plot called with segment_id={segment_id}, last_id={self.last_id}")
         self.change_dist_segment(segment_id)
         if segment_id is None:
             segment_id = self.last_id
             update_dist = True
         else:
             update_dist = False
-        if segment_id not in self.omrat.ais.dist_data:
-            return
-        d = self.omrat.ais.dist_data[segment_id]
+        print(f"[Distributions] using segment_id={segment_id}, update_dist={update_dist}")
+        if segment_id in self.omrat.ais.dist_data:
+            d = self.omrat.ais.dist_data[segment_id]
+        else:
+            print(f"[Distributions] segment_id={segment_id} not found in ais.dist_data keys={list(self.omrat.ais.dist_data.keys())}")
+            segment = self.omrat.segment_data.get(segment_id, {})
+            if 'dist1' in segment and 'dist2' in segment:
+                d = {'line1': segment['dist1'], 'line2': segment['dist2']}
+                print(f"[Distributions] using segment_data fallback for segment_id={segment_id}")
+            else:
+                return
+        try:
+            line1_len = len(d['line1'])
+            line2_len = len(d['line2'])
+        except Exception:
+            line1_len = 'n/a'
+            line2_len = 'n/a'
+        print(f"[Distributions] dist_data ready for segment_id={segment_id}, line1_len={line1_len}, line2_len={line2_len}")
         p1, p2 = self.get_leg_params()
         self.plot_data(d['line1'], d['line2'], p1, p2, update_dist)
         self.last_id = segment_id
@@ -252,10 +273,13 @@ class Distributions:
     def plot_data(self, data: np.ndarray, data2: np.ndarray, parameters1: Params, parameters2: Params, 
                   update_dist:bool=True) -> None:
         """Makes the plot in the top left corner"""
+        print(f"[Distributions] plot_data called: len(data)={len(data)}, len(data2)={len(data2)}, update_dist={update_dist}")
         import matplotlib.pyplot as plt
         import matplotlib.gridspec as gridspec
+        import matplotlib
         from matplotlib.figure import Figure
         from matplotlib.axes import Axes
+        print(f"[Distributions] matplotlib backend={matplotlib.get_backend()}")
 
         fig: Figure = plt.figure(figsize=(10, 6)) # type: ignore
         gs = gridspec.GridSpec(1, 1)
@@ -272,14 +296,18 @@ class Distributions:
         # Remove the previous canvas if it exists
         if hasattr(self.dw, "DistributionWidget") and self.dw.DistributionWidget is not None:
             if hasattr(self, "canvas") and self.canvas is not None:
+                print("[Distributions] removing previous canvas")
                 self.dw.DistributionWidget.removeWidget(self.canvas)
                 self.canvas.deleteLater()
 
         fig.tight_layout()
         self.canvas = FigureCanvas(fig)
+        print(f"[Distributions] adding new canvas type={type(self.canvas)}")
         self.dw.DistributionWidget.addWidget(self.canvas)
         self.canvas.draw()
-        plt.close(fig)
+        self.dw.DistributionWidget.update()
+        print("[Distributions] canvas draw/update complete")
+        # Do not close the figure - FigureCanvas owns it
 
     def adjust_weights(self, changed_widget: QSpinBox | QLineEdit) -> None:
         """Adjust the weights so that their sum equals 100 while maintaining order."""

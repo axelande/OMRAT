@@ -8,6 +8,4 @@ shapely
 geopandas
 matplotlib
 pydantic
-python-docx
-deep-translator
 requests

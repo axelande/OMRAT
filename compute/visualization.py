@@ -94,7 +94,7 @@ class VisualizationMixin:
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="allision", max_draft=max_draft,
         )
-        dialog.exec_()
+        dialog.exec()
 
     def run_powered_grounding_visualization(self, data: dict[str, Any]) -> None:
         """Show an interactive Cat II powered grounding visualisation dialog.
@@ -114,4 +114,4 @@ class VisualizationMixin:
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="grounding", max_draft=max_draft,
         )
-        dialog.exec_()
+        dialog.exec()

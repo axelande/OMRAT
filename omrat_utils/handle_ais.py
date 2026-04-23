@@ -219,6 +219,11 @@ class AIS:
                                     self.omrat.traffic.traffic_data[key1][key2][key3][idx1][idx2] = np.inf
 
     def update_dist_data(self, line1:np.ndarray, line2:np.ndarray, key:str) -> None:
+        # Keep a dedicated distribution cache used by Distributions.run_update_plot.
+        self.dist_data[key] = {
+            'line1': line1,
+            'line2': line2
+        }
         self.omrat.segment_data[key]['mean1_1'] = line1.mean()
         self.omrat.segment_data[key]['std1_1'] = line1.std()
         self.omrat.segment_data[key]['mean2_1'] = line2.mean()

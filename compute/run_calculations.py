@@ -82,12 +82,13 @@ class Calculation(
         Report progress across multiple calculation phases.
 
         Phases and their weight in overall progress:
-        - 'spatial': 0-60% (probability hole calculations - expensive)
-        - 'cascade': 60-90% (traffic cascade - moderate)
-        - 'layers': 90-100% (result layer creation - fast)
+        - 'spatial': 0-40%  (probability hole + min-distance pre-computation)
+        - 'shadow':  40-60% (shadow polygons + per-obstacle edge geometry)
+        - 'cascade': 60-90% (traffic cascade -- per-ship lookups, cheap)
+        - 'layers':  90-100% (result layer creation - fast)
 
         Args:
-            phase: One of 'spatial', 'cascade', 'layers'
+            phase: One of 'spatial', 'shadow', 'cascade', 'layers'
             phase_progress: Progress within the phase (0.0 to 1.0)
             message: Status message to display
 
@@ -99,9 +100,10 @@ class Calculation(
 
         # Phase weights (must sum to 1.0)
         phase_weights = {
-            'spatial': (0.0, 0.60),   # 0% to 60%
-            'cascade': (0.60, 0.90),  # 60% to 90%
-            'layers': (0.90, 1.0),    # 90% to 100%
+            'spatial': (0.0, 0.40),
+            'shadow':  (0.40, 0.60),
+            'cascade': (0.60, 0.90),
+            'layers':  (0.90, 1.0),
         }
 
         start, end = phase_weights.get(phase, (0.0, 1.0))

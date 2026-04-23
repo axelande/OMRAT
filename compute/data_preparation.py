@@ -16,6 +16,19 @@ from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
 
+def _is_qgis_available() -> bool:
+    """Return True only when a real (non-mocked) QGIS environment is active.
+
+    MagicMock stubs are detected because their ``isValid()`` returns a Mock
+    object, not a Python bool.
+    """
+    try:
+        crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        return isinstance(crs.isValid(), bool)
+    except Exception:
+        return False
+
+
 def get_distribution(segment_data: dict[str, Any], direction: int) -> tuple[list[Any], list[float]]:
     d = direction + 1  # given as 0, 1 and should be 1, 2
     distributions: list[Any] = []
@@ -195,19 +208,25 @@ def transform_to_utm(lines, objects):
     else:
         utm_epsg = 32700 + utm_zone  # Southern hemisphere
 
-    # Create QGIS CRS objects
-    wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
-    utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+    if _is_qgis_available():
+        # QGIS path – use the native CRS transform to stay consistent with the
+        # rest of the plugin when running inside QGIS.
+        wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+        transform_context = QgsProject.instance().transformContext()
+        coord_transform = QgsCoordinateTransform(wgs84_crs, utm_crs, transform_context)
 
-    # Create coordinate transform
-    transform_context = QgsProject.instance().transformContext()
-    coord_transform = QgsCoordinateTransform(wgs84_crs, utm_crs, transform_context)
+        def transform_coords(x, y):
+            from qgis.core import QgsPointXY
+            point = coord_transform.transform(QgsPointXY(x, y))
+            return point.x(), point.y()
+    else:
+        # Standalone / test path – fall back to pyproj (available in OSGeo4W).
+        from pyproj import Transformer as _Transformer
+        _proj = _Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
 
-    def transform_coords(x, y):
-        """Transform a single coordinate pair from WGS84 to UTM."""
-        from qgis.core import QgsPointXY
-        point = coord_transform.transform(QgsPointXY(x, y))
-        return point.x(), point.y()
+        def transform_coords(x, y):
+            return _proj.transform(x, y)
 
     def transform_geometry(geom):
         """Transform a shapely geometry from WGS84 to UTM."""

@@ -215,6 +215,10 @@ class GatherData:
             self.p.causation_f.data = data['pc']
 
         self.p.traffic_data = data['traffic_data']
+        # The Traffic instance captures its own reference to the dict at
+        # __init__; update it too so cbTrafficDirectionSelect gets populated.
+        if hasattr(self.p, 'traffic') and self.p.traffic is not None:
+            self.p.traffic.traffic_data = self.p.traffic_data
         self.p.segment_data = data['segment_data']
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']
