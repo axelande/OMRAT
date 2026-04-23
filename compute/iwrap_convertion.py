@@ -977,9 +977,6 @@ def write_iwrap_xml(json_path: str, output_path: str):
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(xml_str)
 
-# Example usage:
-#main('tests/example_data/proj.omrat', 'tests/example_data/iwrap.xml')
-#run_structure_checks('tests/example_data/proj.omrat')
 
 # ── IWRAP Ship Type Codes mapping ──────────────────────────────────────
 # Maps IWRAP XML ship type names to numeric Ship Code (1-14) used in the

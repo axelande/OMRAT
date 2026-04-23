@@ -7,6 +7,8 @@ with special attention to handling missing fields like dist1 and dist2.
 import json
 import os
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Add project root to path for imports
@@ -24,7 +26,7 @@ except ImportError:
         def fail(msg):
             raise AssertionError(msg)
 
-from compute.iwrap_convertion import parse_iwrap_xml, read_iwrap_xml
+from compute.iwrap_convertion import parse_iwrap_xml, read_iwrap_xml, build_drifting
 
 
 def test_parse_case2_23_xml():
@@ -247,6 +249,141 @@ def test_no_crash_on_empty_elements():
         print(f"✓ No crashes on empty elements")
     except Exception as e:
         pytest.fail(f"Import crashed on empty elements: {e}")
+
+
+def test_drifting_import_uses_blackout_not_anchor_probability():
+    """Regression: drift_p must come from blackout_other, not anchor_probability."""
+    xml_content = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<riskmodel name=\"map_test\">
+  <drifting anchor_probability=\"0.7\" blackout_other=\"0.2\" drift_speed=\"1.0\" max_anchor_depth=\"7\">
+    <repair_time combi=\"/Mean/Std. Dev.\" param_0=\"0\" param_1=\"1\" type=\"Normal\" />
+    <drift_directions angle_0=\"0.125\" angle_45=\"0.125\" angle_90=\"0.125\" angle_135=\"0.125\" angle_180=\"0.125\" angle_225=\"0.125\" angle_270=\"0.125\" angle_315=\"0.125\" />
+  </drifting>
+</riskmodel>
+"""
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False, encoding='utf-8') as tf:
+        tf.write(xml_content)
+        tf_path = tf.name
+
+    try:
+        result = parse_iwrap_xml(tf_path)
+        drift = result['drift']
+        assert drift['anchor_p'] == 0.7
+        assert drift['drift_p'] == 0.2
+    finally:
+        if os.path.exists(tf_path):
+            os.remove(tf_path)
+
+
+def test_build_drifting_exports_anchor_and_blackout_separately():
+    """Regression: export must not map anchor_probability from drift_p."""
+    root = ET.Element('riskmodel')
+    drift = {
+        'anchor_p': 0.7,
+        'drift_p': 0.2,
+        'anchor_d': 7,
+        'speed': 1.0,
+        'rose': {
+            '0': 0.125, '45': 0.125, '90': 0.125, '135': 0.125,
+            '180': 0.125, '225': 0.125, '270': 0.125, '315': 0.125,
+        },
+        'repair': {'combi': '/Mean/Std. Dev.', 'param_0': 0, 'param_1': 1, 'type': 'Normal'},
+    }
+
+    build_drifting(root, drift)
+    drifting = root.find('drifting')
+    assert drifting is not None
+    assert drifting.get('anchor_probability') == '0.7'
+    assert drifting.get('blackout_other') == '0.2'
+
+
+def test_drifting_import_preserves_drift_speed_in_knots():
+    """Regression: IWRAP stores `drift_speed` in knots and OMRAT expects
+    knots in `drift.speed` (the cascade multiplies by 1852/3600 to get
+    m/s).  Import must not apply any unit conversion.
+
+    The GUI was once double-converting: save path divided by 1852/3600,
+    display path multiplied -- so an imported 1.94 knots displayed as
+    3.771 knots and round-tripped wrongly.  That bug is in the GUI but
+    this test guards the import side of the data path.
+    """
+    xml_content = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<riskmodel name=\"speed_test\">
+  <drifting anchor_probability=\"0.7\" blackout_other=\"0.2\" drift_speed=\"1.94\" max_anchor_depth=\"7\">
+    <repair_time combi=\"/Mean/Std. Dev.\" param_0=\"0\" param_1=\"1\" type=\"Normal\" />
+    <drift_directions angle_0=\"0.125\" angle_45=\"0.125\" angle_90=\"0.125\" angle_135=\"0.125\" angle_180=\"0.125\" angle_225=\"0.125\" angle_270=\"0.125\" angle_315=\"0.125\" />
+  </drifting>
+</riskmodel>
+"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False, encoding='utf-8') as tf:
+        tf.write(xml_content)
+        tf_path = tf.name
+
+    try:
+        result = parse_iwrap_xml(tf_path)
+        drift = result['drift']
+        assert drift['speed'] == 1.94, (
+            f"drift.speed must be 1.94 knots after IWRAP import, got "
+            f"{drift['speed']!r}.  If this is ~0.998, the import is "
+            f"incorrectly converting to m/s (it should stay in knots)."
+        )
+    finally:
+        if os.path.exists(tf_path):
+            os.remove(tf_path)
+
+
+def test_drifting_export_preserves_drift_speed_in_knots():
+    """Companion to the import test: exporting drift.speed=1.94 must
+    write `drift_speed="1.94"` to the XML, not a m/s value.
+    """
+    root = ET.Element('riskmodel')
+    drift = {
+        'anchor_p': 0.7,
+        'drift_p': 0.2,
+        'anchor_d': 7,
+        'speed': 1.94,
+        'rose': {
+            '0': 0.125, '45': 0.125, '90': 0.125, '135': 0.125,
+            '180': 0.125, '225': 0.125, '270': 0.125, '315': 0.125,
+        },
+        'repair': {'combi': '/Mean/Std. Dev.', 'param_0': 0, 'param_1': 1, 'type': 'Normal'},
+    }
+
+    build_drifting(root, drift)
+
+    drifting = root.find('drifting')
+    assert drifting is not None
+    assert drifting.get('drift_speed') == '1.94', (
+        f"Export must write drift_speed='1.94' (knots), got "
+        f"{drifting.get('drift_speed')!r}."
+    )
+
+
+def test_drifting_import_maps_normal_repair_model():
+    """Regression: IWRAP type=Normal should not be treated as lognormal."""
+    xml_content = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<riskmodel name=\"repair_test\">
+  <drifting anchor_probability=\"0.7\" blackout_other=\"0.2\" drift_speed=\"1.0\" max_anchor_depth=\"7\">
+    <repair_time combi=\"/Mean/Std. Dev.\" param_0=\"0\" param_1=\"1\" type=\"Normal\" />
+    <drift_directions angle_0=\"0.125\" angle_45=\"0.125\" angle_90=\"0.125\" angle_135=\"0.125\" angle_180=\"0.125\" angle_225=\"0.125\" angle_270=\"0.125\" angle_315=\"0.125\" />
+  </drifting>
+</riskmodel>
+"""
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False, encoding='utf-8') as tf:
+        tf.write(xml_content)
+        tf_path = tf.name
+
+    try:
+        result = parse_iwrap_xml(tf_path)
+        repair = result['drift']['repair']
+        assert repair['use_lognormal'] is False
+        assert repair.get('dist_type') == 'normal'
+        assert 'norm(' in repair.get('func', '')
+    finally:
+        if os.path.exists(tf_path):
+            os.remove(tf_path)
 
 
 if __name__ == '__main__':

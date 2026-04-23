@@ -15,19 +15,28 @@ The tests are split into two groups:
    for ship frequency, ship speed, drift speed, anchor success rate,
    anchor-area size, and grounding-area size.
 
-The ``_cascade`` helper replicates the inner loop of
-``_iterate_traffic_and_sum`` in ``compute/run_calculations.py`` (lines
-~1497-1559)::
+The ``_cascade`` helper mirrors the shadow-coverage model used inside
+``_iterate_traffic_and_sum`` in ``compute/drifting_model.py``::
 
     base = (line_length / (speed_kts * 1852)) * freq * (drift_p / (365 * 24))
 
-    Obstacles sorted by distance (closest first):
-        anchoring:  anchor_contrib = base * rp * remaining * anchor_p * hole_pct
-                    remaining *= (1 - anchor_p * hole_pct)
-        allision:   contrib = base * rp * remaining * hole_pct * p_nr
-                    remaining *= (1 - hole_pct)
-        grounding:  contrib = base * rp * remaining * hole_pct * p_nr
-                    remaining *= (1 - hole_pct)
+    Obstacles sorted by distance (closest first).  The cascade carries a
+    *shadow fraction* per obstacle -- the fraction of the obstacle's
+    probability-hole rays that were already blocked by closer allision or
+    grounding polygons, and an *anchor fraction* -- the fraction of the
+    remaining rays that also pass through a closer anchor zone::
+
+        anchoring:  P_anchor = base * rp * anchor_p * hole_pct * (1 - shadow_frac)
+        allision:   h_eff    = hole_pct * ((1 - shadow_frac) - anchor_p * anchor_frac)
+                    contrib  = base * rp * h_eff * p_nr
+        grounding:  h_eff    = hole_pct * ((1 - shadow_frac) - anchor_p * anchor_frac)
+                    contrib  = base * rp * h_eff * p_nr
+
+In this 1D toy version the "shadow" of a blocker covers 100% of any
+polygon behind it (the geometry of the obstacles isn't modelled here --
+the runtime uses quad-sweep shadows over actual polygons).  This keeps
+the scaling-law tests meaningful while matching the runtime's formula
+shape.
 
 Run with::
 
@@ -407,50 +416,55 @@ def _print_equations(
     print(f"       = {base:.6f}")
     print()
 
-    remaining = 1.0
     allision = grounding = anchoring = 0.0
     sorted_obs = sorted(obstacles, key=lambda x: x[1])
+    blocker_active = False
+    anchor_frac = 0.0
+    ap_global = next((ap for ot, _d, _h, ap in sorted_obs if ot == 'anchoring'), 0.0)
 
     for obs_type, dist, hole_pct, anchor_p in sorted_obs:
-        if remaining <= 0.0:
-            break
+        shadow_frac = 1.0 if blocker_active else 0.0
+        reach_frac = max(0.0, 1.0 - shadow_frac)
 
         if obs_type == 'anchoring':
-            c = base * rp * remaining * anchor_p * hole_pct
+            h_eff = hole_pct * reach_frac
+            c = base * rp * anchor_p * h_eff
             anchoring += c
             print(f"  [{obs_type.upper()}]  distance = {dist:.0f} m")
-            print(f"    contrib = base * rp * remaining * anchor_p * hole_pct")
-            print(f"            = {base:.6f} * {rp:.4f} * {remaining:.6f} "
-                  f"* {anchor_p:.2f} * {hole_pct:.2f}")
-            print(f"            = {c:.6e}")
-            new_remaining = remaining * (1.0 - anchor_p * hole_pct)
-            print(f"    remaining = {remaining:.6f} * (1 - {anchor_p:.2f} * {hole_pct:.2f})")
-            print(f"              = {remaining:.6f} * {1.0 - anchor_p * hole_pct:.6f}")
-            print(f"              = {new_remaining:.6f}")
-            remaining = new_remaining
+            print(f"    shadow_frac = {shadow_frac:.3f}  (rays already blocked upstream)")
+            print(f"    h_eff = hole_pct * (1 - shadow_frac)")
+            print(f"          = {hole_pct:.2f} * {reach_frac:.3f} = {h_eff:.4f}")
+            print(f"    P_anchor = base * rp * anchor_p * h_eff")
+            print(f"             = {base:.6f} * {rp:.4f} * {anchor_p:.2f} * {h_eff:.4f}")
+            print(f"             = {c:.6e}")
+            anchor_frac = min(1.0, anchor_frac + hole_pct * reach_frac)
+            print(f"    accumulated anchor_frac for downstream = {anchor_frac:.3f}")
         else:
             p_nr = get_not_repaired(repair, drift_speed_ms, dist)
-            c = base * rp * remaining * hole_pct * p_nr
             drift_time_h = (dist / drift_speed_ms) / 3600.0
+            h_reach = hole_pct * reach_frac
+            h_in_anchor = h_reach * anchor_frac
+            h_eff = max(0.0, h_reach - ap_global * h_in_anchor)
+            c = base * rp * h_eff * p_nr
             if obs_type == 'allision':
                 allision += c
             else:
                 grounding += c
 
             print(f"  [{obs_type.upper()}]  distance = {dist:.0f} m")
+            print(f"    shadow_frac = {shadow_frac:.3f},  anchor_frac = {anchor_frac:.3f}")
+            print(f"    h_reach    = hole_pct * (1 - shadow_frac) = {hole_pct:.2f} * {reach_frac:.3f} = {h_reach:.4f}")
+            print(f"    h_eff      = h_reach - anchor_p * h_reach * anchor_frac")
+            print(f"               = {h_reach:.4f} - {ap_global:.2f} * {h_reach:.4f} * {anchor_frac:.3f} = {h_eff:.4f}")
             print(f"    drift_time = {dist:.0f} / {drift_speed_ms:.1f} / 3600 "
                   f"= {drift_time_h:.4f} hours")
             print(f"    P(not repaired) = 1 - lognorm.cdf({drift_time_h:.4f}, "
                   f"s={repair['std']}, loc={repair['loc']}, scale={repair['scale']})")
             print(f"                    = {p_nr:.6f}")
-            print(f"    contrib = base * rp * remaining * hole_pct * P_nr")
-            print(f"            = {base:.6f} * {rp:.4f} * {remaining:.6f} "
-                  f"* {hole_pct:.2f} * {p_nr:.6f}")
+            print(f"    contrib = base * rp * h_eff * P_nr")
+            print(f"            = {base:.6f} * {rp:.4f} * {h_eff:.4f} * {p_nr:.6f}")
             print(f"            = {c:.6e}")
-            new_remaining = remaining * (1.0 - hole_pct)
-            print(f"    remaining = {remaining:.6f} * (1 - {hole_pct:.2f}) "
-                  f"= {new_remaining:.6f}")
-            remaining = new_remaining
+            blocker_active = True
         print()
 
     print(f"  TOTALS:  allision = {allision:.6e}")
@@ -494,15 +508,27 @@ def _cascade(
     line_length: float = LINE_LENGTH,
 ) -> dict[str, float]:
     """
-    Run the cascade for one leg / direction.
+    Run the shadow-coverage cascade for one leg / direction.
 
-    Mirrors ``_iterate_traffic_and_sum`` in ``compute/run_calculations.py``.
+    Mirrors the shape of ``_iterate_traffic_and_sum`` in
+    ``compute/drifting_model.py``.  See the module docstring for the
+    formulas.
 
     Parameters
     ----------
     obstacles : list of (obs_type, distance_m, hole_pct, anchor_p)
         ``obs_type`` in ``{'anchoring', 'allision', 'grounding'}``.
         Sorted by distance internally (closest first).
+
+        ``hole_pct`` is the fraction of the lateral distribution that would
+        hit the obstacle if nothing upstream blocked it.  ``anchor_p`` is
+        the anchoring success probability (only relevant for anchoring
+        obstacles).
+
+    In this 1D toy a blocker shadows 100% of every polygon behind it, and
+    an anchor zone covers 100% of every polygon behind it.  The runtime
+    replaces these with actual 2D shadow-coverage factors from the
+    obstacle polygons' quad-sweep shadows.
     """
     if repair is None:
         repair = REPAIR_PARAMS
@@ -511,25 +537,43 @@ def _cascade(
     hours_present = (line_length / (speed_kts * 1852.0)) * freq
     base = hours_present * blackout_per_hour
 
-    remaining = 1.0
     allision = grounding = anchoring = 0.0
+    blocker_active = False  # any closer allision/grounding -> everything behind is shadowed
+    anchor_frac = 0.0       # accumulated anchor coverage (clamped to 1.0)
 
-    for obs_type, dist, hole_pct, anchor_p in sorted(obstacles, key=lambda x: x[1]):
-        if remaining <= 0.0:
-            break
+    for obs_type, dist, hole_pct, obs_anchor_p in sorted(obstacles, key=lambda x: x[1]):
+        shadow_frac = 1.0 if blocker_active else 0.0
+        reach_frac = max(0.0, 1.0 - shadow_frac)
 
         if obs_type == 'anchoring':
-            c = base * rp * remaining * anchor_p * hole_pct
-            anchoring += c
-            remaining *= (1.0 - anchor_p * hole_pct)
+            h_eff = hole_pct * reach_frac
+            if h_eff > 0 and obs_anchor_p > 0:
+                anchoring += base * rp * obs_anchor_p * h_eff
+                # Accumulate 1D anchor-shadow coverage on downstream obstacles:
+                # the anchor polygon covers 'hole_pct' of the lateral
+                # distribution so that fraction of every downstream obstacle's
+                # rays also passes through the anchor zone.
+                anchor_frac = min(1.0, anchor_frac + hole_pct * reach_frac)
         else:
-            p_nr = get_not_repaired(repair, drift_speed_ms, dist)
-            c = base * rp * remaining * hole_pct * p_nr
-            if obs_type == 'allision':
-                allision += c
-            else:
-                grounding += c
-            remaining *= (1.0 - hole_pct)
+            h_reach = hole_pct * reach_frac
+            h_in_anchor = h_reach * anchor_frac
+            # anchor_p is a global parameter; we take it from the first
+            # anchoring obstacle encountered (if any).  Callers who want to
+            # model different anchor_p values per anchor should split the
+            # obstacle list.
+            ap_global = next(
+                (ap for ot, _d, _h, ap in obstacles if ot == 'anchoring'),
+                0.0,
+            )
+            h_eff = max(0.0, h_reach - ap_global * h_in_anchor)
+            if h_eff > 0:
+                p_nr = get_not_repaired(repair, drift_speed_ms, dist)
+                contrib = base * rp * h_eff * p_nr
+                if obs_type == 'allision':
+                    allision += contrib
+                else:
+                    grounding += contrib
+            blocker_active = True  # allision/grounding blocks everything behind
 
     return {'allision': allision, 'grounding': grounding, 'anchoring': anchoring}
 
@@ -559,11 +603,14 @@ class TestAnchoringEffect:
 
     def test_anchoring_reduces_allision(self):
         """
-        An anchor area (hole_pct=1.0, covering 100% of structure width) with
-        anchor_p=0.95 should dramatically reduce allision.
+        An anchor area covering 100% of the structure cross-drift extent
+        with anchor_p=0.95 should reduce the allision contribution by
+        roughly a factor of (1 - a_p) = 0.05.
 
-        Expected: remaining = 1 - 0.95 * 1.0 = 0.05
-        → allision drops to ~5 % of the baseline.
+        Shadow-coverage model: h_alli_eff = h_alli * (1 - a_p * cov).
+        With ANCHOR_LARGE_HOLE=1.0 the anchor covers 100% of the rays that
+        would hit the structure, so the ratio P(alli, with anchor) /
+        P(alli, no anchor) should equal (1 - a_p) = 0.05.
         """
         obs_no = [('allision', STRUCT_DIST, STRUCT_HOLE, 0.0)]
         r_no = _cascade(obs_no)
@@ -576,21 +623,20 @@ class TestAnchoringEffect:
         r_yes = _cascade(obs_yes)
 
         ratio = r_yes['allision'] / r_no['allision']
-        expected_remaining = 1.0 - anchor_p * ANCHOR_LARGE_HOLE  # 0.715
+        expected_ratio = 1.0 - anchor_p  # shadow-coverage model, 100% anchor cov
 
-        # Show full equation breakdown
         _print_equations(obs_no, label='WITHOUT anchoring')
         _print_equations(obs_yes, label='WITH anchoring (anchor_p=0.95)')
 
         print(f"\nAllision without anchoring: {r_no['allision']:.4e}")
         print(f"Allision with anchoring:    {r_yes['allision']:.4e}")
         print(f"Anchoring absorbed:         {r_yes['anchoring']:.4e}")
-        print(f"Allision ratio:             {ratio:.4f}  (expected ~{expected_remaining:.3f})")
+        print(f"Allision ratio:             {ratio:.4f}  (expected ~{expected_ratio:.3f})")
 
         assert r_yes['allision'] < r_no['allision'], \
             "Anchoring area must reduce allision probability"
-        assert abs(ratio - expected_remaining) < 0.01, \
-            f"Ratio should be ~{expected_remaining:.3f}, got {ratio:.4f}"
+        assert abs(ratio - expected_ratio) < 0.01, \
+            f"Ratio should be ~{expected_ratio:.3f}, got {ratio:.4f}"
         assert r_yes['anchoring'] > 0, \
             "Some probability must be absorbed by anchoring"
 

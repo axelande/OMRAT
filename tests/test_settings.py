@@ -96,7 +96,9 @@ def test_run(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
     ds.run()
     ds.populate_drift.assert_called_once()
     mock_dsw.show.assert_called_once()
-    mock_dsw.exec_.assert_called_once()
+    # PyQt6 renamed exec_() -> exec() (the underscore avoided the
+    # Python 2 keyword collision, which Python 3 doesn't need).
+    mock_dsw.exec.assert_called_once()
     button_box.accepted.connect.assert_called()
     button_box.rejected.connect.assert_called()
     mock_dsw.pbTestRepair.clicked.connect.assert_called_with(mock_repair.test_evaluate)
@@ -111,10 +113,17 @@ def test_commit_changes(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mo
     ds.commit_changes()
     # Check drift_values updated
     assert ds.drift_values['drift_p'] == 0.5
+    # anchor_p: UI is percentage, mock returns "0.6" so commit_changes keeps it as 0.6 (already <= 1.0).
     assert ds.drift_values['anchor_p'] == 0.6
     assert ds.drift_values['anchor_d'] == 10
+    # drift.speed is stored in knots (no m/s conversion at the GUI boundary).
     assert ds.drift_values['speed'] == 9
-    assert ds.drift_values['rose'] == {'0': 1.0, '45': 2.0, '90': 3.0, '135': 4.0, '180': 5.0, '225': 6.0, '270': 7.0, '315': 8.0}
+    # Rose values are stored as fractions; commit_changes divides the UI
+    # percentage by 100, so "1" -> 0.01 etc.
+    assert ds.drift_values['rose'] == {
+        '0': 0.01, '45': 0.02, '90': 0.03, '135': 0.04,
+        '180': 0.05, '225': 0.06, '270': 0.07, '315': 0.08,
+    }
     assert ds.drift_values['repair']['func'] == "func"
     assert ds.drift_values['repair']['std'] == 0.1
     assert ds.drift_values['repair']['loc'] == 0.2
@@ -130,32 +139,45 @@ def test_populate_drift(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mo
     mock_repair_cls.return_value = mock_repair
     ds = DriftSettings(mock_parent)
     ds.dsw = mock_dsw
+    # _ensure_blackout_table constructs a real QTableWidget; in a
+    # headless unit test with a MagicMock parent this hangs.  Patch it
+    # out -- the blackout-table plumbing is covered in the real-Qt
+    # regression tests under test_regression_gui_state.py.
+    ds._ensure_blackout_table = MagicMock(return_value=None)
+    # Rose values are stored as fractions and displayed as percentages
+    # (populate_drift multiplies by 100).  Use exactly-representable
+    # fractions (multiples of 1/8 = 0.125) so the percentage arithmetic
+    # doesn't introduce floating-point noise like 7.000000000000001.
     ds.drift_values = {
         'drift_p': 0.1,
         'anchor_p': 0.2,
         'anchor_d': 3,
         'speed': 4,
-        'rose': {'0': 1, '45': 2, '90': 3, '135': 4, '180': 5, '225': 6, '270': 7, '315': 8},
+        'rose': {str(a): 0.125 for a in (0, 45, 90, 135, 180, 225, 270, 315)},
         'repair': {'func': 'f', 'std': 0.1, 'loc': 0.2, 'scale': 0.3, 'use_lognormal': False}
     }
     ds.populate_drift()
-    mock_dsw.leDriftN.setText.assert_called_with("1")
-    mock_dsw.leDriftNE.setText.assert_called_with("2")
-    mock_dsw.leDriftE.setText.assert_called_with("3")
-    mock_dsw.leDriftSE.setText.assert_called_with("4")
-    mock_dsw.leDriftS.setText.assert_called_with("5")
-    mock_dsw.leDriftSW.setText.assert_called_with("6")
-    mock_dsw.leDriftW.setText.assert_called_with("7")
-    mock_dsw.leDriftNW.setText.assert_called_with("8")
-    mock_dsw.leDriftSpeed.setText.assert_called_with("4")
-    mock_dsw.leAnchorProb.setText.assert_called_with("0.2")
+    # Uniform rose -- every direction renders as "12.5".
+    for name in ('leDriftN', 'leDriftNE', 'leDriftE', 'leDriftSE',
+                 'leDriftS', 'leDriftSW', 'leDriftW', 'leDriftNW'):
+        getattr(mock_dsw, name).setText.assert_called_with("12.5")
+    # drift.speed is stored in knots; populate_drift displays it directly
+    # (the value is passed through float() so "4" becomes "4.0").
+    mock_dsw.leDriftSpeed.setText.assert_called_with("4.0")
+    # anchor_p 0.2 is displayed as percentage "20.0" by populate_drift
+    # (the display path converts fraction -> percent).
+    mock_dsw.leAnchorProb.setText.assert_called_with("20.0")
     mock_dsw.leAnchorMaxDepth.setText.assert_called_with("3")
     mock_dsw.leDriftProb.setText.assert_called_with("0.1")
     mock_dsw.leRepairFunc.setText.assert_called_with("f")
     mock_dsw.leRepairStd.setText.assert_called_with("0.1")
     mock_dsw.leRepairLoc.setText.assert_called_with("0.2")
     mock_dsw.leRepairScale.setText.assert_called_with("0.3")
-    mock_dsw.rbLogNormal.setChecked.assert_called_with(0)
+    # populate_drift sets BOTH radio buttons explicitly (Qt's auto-
+    # exclusive group silently ignores setChecked(False) on the only
+    # checked button -- see omrat_utils/handle_settings.py:267).
+    mock_dsw.rbLogNormal.setChecked.assert_called_with(False)
+    mock_dsw.rbUserDefined.setChecked.assert_called_with(True)
 
 @patch('omrat_utils.handle_settings.DriftSettingsWidget')
 @patch('omrat_utils.handle_settings.Repair')
