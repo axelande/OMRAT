@@ -291,25 +291,36 @@ class TestOvertakingCollisions:
         assert result == 0.0
 
     def test_overtaking_speed_differential(self):
-        """Test overtaking scales with speed difference."""
+        """Overtaking encounters scale with the speed differential, but the
+        density-based formula `N = (Q_fast/V_fast) * (Q_slow/V_slow) * V_ij
+        * P_G * L_w / seconds_per_year` mixes in V_fast's effect on
+        fast-ship density.  Going from (V_fast=6, V_slow=5) to (V_fast=10,
+        V_slow=5):
+
+            V_ij        : 1 -> 5                  (factor 5)
+            density_fast: 100/6 -> 100/10         (factor 0.6)
+            net ratio   : 5 * 0.6 = 3.0 (not 5.0)
+
+        So the ratio is exactly 3.0 when V_slow is held fixed.
+        """
         result_small_diff = get_overtaking_collision_candidates(
             Q_fast=100, Q_slow=100,
-            V_fast=6.0, V_slow=5.0,  # 1 m/s difference
+            V_fast=6.0, V_slow=5.0,  # V_ij = 1 m/s
             mu_fast=0.0, mu_slow=0.0,
             sigma_fast=50.0, sigma_slow=50.0,
             B_fast=20.0, B_slow=20.0,
-            L_w=1000.0
+            L_w=1000.0,
         )
         result_large_diff = get_overtaking_collision_candidates(
             Q_fast=100, Q_slow=100,
-            V_fast=10.0, V_slow=5.0,  # 5 m/s difference
+            V_fast=10.0, V_slow=5.0,  # V_ij = 5 m/s
             mu_fast=0.0, mu_slow=0.0,
             sigma_fast=50.0, sigma_slow=50.0,
             B_fast=20.0, B_slow=20.0,
-            L_w=1000.0
+            L_w=1000.0,
         )
-        # 5x speed difference should give 5x more candidates
-        assert isclose(result_large_diff, 5 * result_small_diff, rtol=1e-10)
+        # V_ij * density_fast factor: 5 * (6/10) = 3.0
+        assert isclose(result_large_diff, 3.0 * result_small_diff, rtol=1e-10)
 
     def test_overtaking_basic_positive(self):
         """Test basic overtaking with positive speed differential."""
@@ -378,18 +389,30 @@ class TestOvertakingCollisions:
         assert separated < centered
 
     def test_overtaking_zero_sigma(self):
-        """Test overtaking with zero variance."""
-        # Ships on same line (within beam)
+        """Overtaking with zero lateral variance -- P_G collapses to 1
+        because |mu_ij| <= B_ij.  The annual encounter rate is then the
+        density-based formula:
+
+            N = (Q_fast / V_fast) * (Q_slow / V_slow) * V_ij * 1 * L_w
+                / seconds_per_year
+
+        Written out: (100/10) * (100/5) * 5 * 1 * 1000 / 31_557_600
+                   = 200_000 / 31_557_600 ~= 6.34e-3
+
+        An earlier version of this test expected Q * Q * V_ij * L_w
+        (= 5e7) which corresponds to a formulation that doesn't apply
+        the density / time conversion the production code uses.
+        """
         result = get_overtaking_collision_candidates(
             Q_fast=100, Q_slow=100,
             V_fast=10.0, V_slow=5.0,
-            mu_fast=0.0, mu_slow=0.0,  # mu_ij = 0
+            mu_fast=0.0, mu_slow=0.0,      # mu_ij = 0
             sigma_fast=0.0, sigma_slow=0.0,
-            B_fast=20.0, B_slow=20.0,  # B_ij = 20 > 0
-            L_w=1000.0
+            B_fast=20.0, B_slow=20.0,      # B_ij = 20 > 0 -> P_G = 1
+            L_w=1000.0,
         )
-        # P_G = 1 since |mu_ij| = 0 <= B_ij
-        expected = 100 * 100 * 5.0 * 1.0 * 1000.0
+        seconds_per_year = 365.25 * 24 * 3600
+        expected = (100 / 10) * (100 / 5) * 5.0 * 1.0 * 1000.0 / seconds_per_year
         assert isclose(result, expected, rtol=1e-10)
 
     def test_overtaking_causation_factor(self):
@@ -1138,9 +1161,21 @@ class TestMathematicalProperties:
                 assert 0 <= P_G_approx <= 1
 
     def test_crossing_collision_diameter_formula(self):
-        """Verify collision diameter calculation follows expected formula."""
-        # D_ij = (L1 + L2) * |sin(theta)| + (B1 + B2) * |cos(theta)|
-        theta = pi/4
+        """Verify the crossing collision diameter D_ij and the full
+        candidate formula match the production implementation.
+
+        Production formula (Hansen Eq. 4.6 with dimensional closure):
+
+            D_ij = (L1 + L2) * |sin(theta)| + (B1 + B2) * |cos(theta)|
+            N_G  = Q1 * Q2 * D_ij / (V1 * V2 * |sin(theta)| * seconds_per_year)
+
+        An earlier version of this test compared against
+        `Q*Q * D_ij / (V_ij * sin(theta))`, which matches the literal
+        form of the Hansen equation but omits the time-conversion the
+        production code applies (and substitutes V_ij for V1*V2).  The
+        test below checks the actual production formula.
+        """
+        theta = pi / 4
         L1, L2 = 100.0, 100.0
         B1, B2 = 20.0, 20.0
         V = 5.0
@@ -1151,19 +1186,14 @@ class TestMathematicalProperties:
             V1=V, V2=V,
             L1=L1, L2=L2,
             B1=B1, B2=B2,
-            theta=theta
+            theta=theta,
         )
 
-        # Calculate expected D_ij
-        sin_theta = sqrt(2)/2  # sin(45deg)
-        cos_theta = sqrt(2)/2  # cos(45deg)
+        sin_theta = sqrt(2) / 2
+        cos_theta = sqrt(2) / 2
         D_ij_expected = (L1 + L2) * sin_theta + (B1 + B2) * cos_theta
-
-        # V_ij at 45 degrees with equal speeds
-        V_ij = sqrt(2 * V**2 * (1 - cos_theta))  # sqrt(V1^2 + V2^2 - 2*V1*V2*cos(theta))
-
-        # Expected N_G = Q1 * Q2 * D_ij / (V_ij * sin(theta))
-        expected = Q * Q * D_ij_expected / (V_ij * sin_theta)
+        seconds_per_year = 365.25 * 24 * 3600
+        expected = Q * Q * D_ij_expected / (V * V * sin_theta * seconds_per_year)
 
         assert isclose(result, expected, rtol=1e-10)
 

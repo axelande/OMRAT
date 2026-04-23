@@ -1,9 +1,10 @@
 from qgis.core import QgsVectorLayer, QgsPointXY, QgsGeometry, QgsField, QgsFeature
 from qgis.PyQt.QtCore import QVariant
-from qgis.PyQt.QtWidgets import QApplication
 
-from ..omrat import OMRAT
-from conftest import omrat
+from omrat import OMRAT
+# The `omrat` fixture is auto-discovered from tests/conftest.py -- no
+# import needed (pytest injects it by name when declared as a parameter
+# on a test function).
 
 
 def create_object(points) -> QgsVectorLayer:

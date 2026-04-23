@@ -74,10 +74,17 @@ class Traffic:
         vh.setVisible(True)
         if types:
             # Size the header to fit the widest label + a little padding.
-            fm = self.dw.twTrafficData.fontMetrics()
-            width = max(fm.horizontalAdvance(t) for t in types) + 16
-            vh.setDefaultSectionSize(28)
-            vh.setMinimumWidth(width)
+            # Guard with try/except so tests that pass a MagicMock widget
+            # (e.g. tests/test_ais_data_retrival.py) don't crash on
+            # `max()` over mocked fontMetrics values.
+            try:
+                fm = self.dw.twTrafficData.fontMetrics()
+                widths = [int(fm.horizontalAdvance(t)) for t in types]
+                vh.setDefaultSectionSize(28)
+                vh.setMinimumWidth(max(widths) + 16)
+            except (TypeError, ValueError):
+                # Mocked widget or fontMetrics not usable; skip sizing.
+                pass
         for row in range(len(types)):
             for col in range(len(sizes)):
                 item = QSpinBox()

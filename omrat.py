@@ -836,6 +836,41 @@ class OMRAT:
         if self.calc is not None:
             self.calc.run_powered_grounding_visualization(data)
 
+    # ------------------------------------------------------------------
+    # Placeholder slots for "View" buttons whose visualisation pipelines
+    # have not been implemented yet.  The buttons exist in omrat_base.ui
+    # and are wired up below so users see a clear "not implemented" message
+    # instead of a silent dead button.  Replace the body of each method
+    # with the real visualisation call when the pipeline is ready.
+    # TODO(view-buttons):
+    #   - show_drift_grounding:    drifting-grounding overlap visualisation
+    #     (the drifting counterpart to show_powered_grounding)
+    #   - show_overtaking_collision, show_head_on_collision,
+    #     show_crossing_collision, show_merging_collision:
+    #     ship-ship collision visualisations by encounter type
+    # ------------------------------------------------------------------
+    def _view_button_not_implemented(self, name: str) -> None:
+        QgsMessageLog.logMessage(
+            f"'{name}' visualisation is not implemented yet (TODO).",
+            'OMRAT',
+            Qgis.Warning,
+        )
+
+    def show_drift_grounding(self):
+        self._view_button_not_implemented('Drift grounding')
+
+    def show_overtaking_collision(self):
+        self._view_button_not_implemented('Overtaking collision')
+
+    def show_head_on_collision(self):
+        self._view_button_not_implemented('Head-on collision')
+
+    def show_crossing_collision(self):
+        self._view_button_not_implemented('Crossing collision')
+
+    def show_merging_collision(self):
+        self._view_button_not_implemented('Merging collision')
+
     def open_drift(self):
         self.drift_settings.run()
 
@@ -1106,6 +1141,14 @@ class OMRAT:
             self.main_widget.pbViewDriftingAllision.clicked.connect(self.show_drift_allision)
             self.main_widget.pbViewPoweredAllision.clicked.connect(self.show_powered_allision)
             self.main_widget.pbViewPoweredGrounding.clicked.connect(self.show_powered_grounding)
+            # TODO(view-buttons): replace the stubs below with real
+            # visualisation pipelines.  See omrat.py::show_drift_grounding
+            # et al. for the placeholders these connect to.
+            self.main_widget.pbViewDriftingGrounding.clicked.connect(self.show_drift_grounding)
+            self.main_widget.pbViewOvertakingCollision.clicked.connect(self.show_overtaking_collision)
+            self.main_widget.pbViewHeadOnCollision.clicked.connect(self.show_head_on_collision)
+            self.main_widget.pbViewCrossingCollision.clicked.connect(self.show_crossing_collision)
+            self.main_widget.pbViewMergingCollision.clicked.connect(self.show_merging_collision)
             self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
             # Optional: report path chooser if present in UI
             try:

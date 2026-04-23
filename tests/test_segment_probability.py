@@ -27,7 +27,7 @@ from compute.run_calculations import (
 
 # Set to True to show visual plots during tests (useful for debugging)
 # Can also be set via environment variable: SHOW_PLOT=1
-SHOW_PLOT = True# = os.environ.get('SHOW_PLOT', '').lower() in ('1', 'true', 'yes')
+SHOW_PLOT = os.environ.get('SHOW_PLOT', '').lower() in ('1', 'true', 'yes')
 
 
 def plot_corridor_test(leg, corridors, structure, segments, title="Drift Corridor Test"):
@@ -103,7 +103,7 @@ def plot_corridor_test(leg, corridors, structure, segments, title="Drift Corrido
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.show()
+    plt.show(block=SHOW_PLOTS)
 
 
 def plot_intersection_results(leg, structure, segments, results_by_direction, title="Intersection Results"):

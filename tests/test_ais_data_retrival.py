@@ -119,11 +119,16 @@ def test_run_sql_empty_result(mock_ais):
     
 @pytest.fixture
 def mock_table():
-    """Fixture to mock QTableWidget."""
+    """Fixture to mock QTableWidget.
+
+    Column layout must match `handle_ais.get_segment_data_from_table`:
+      0: Segment_Id   1: Route_Id     2: Leg_name
+      3: Start_Point  4: End_Point    5: Width
+    """
     table = MagicMock()
     table.rowCount.return_value = 1
     table.item.side_effect = lambda row, col: MagicMock(text=PropertyMock(return_value=[
-        '1', '1', '14.33188 55.21143', '14.52057 55.35013', 5000
+        '1', '1', 'Leg_1_1', '14.33188 55.21143', '14.52057 55.35013', '5000'
     ][col]))
     return table
 
@@ -132,14 +137,15 @@ def test_get_segment_data_from_table_valid_data(mock_ais, mock_table):
     mock_ais.omrat.main_widget.twRouteList = mock_table
     result = mock_ais.get_segment_data_from_table()
 
-    # Verify the result
+    # Verify the result.  Width is stored as a string (matches
+    # get_segment_data_from_table's dict[str, str] type signature).
     assert result == {
         '1': {
             'Route_Id': '1',
             'Leg_name': 'Leg_1_1',
             'Start_Point': '14.33188 55.21143',
             'End_Point': '14.52057 55.35013',
-            'Width': 5000.0
+            'Width': '5000',
         }
     }
 
@@ -155,19 +161,51 @@ def test_get_segment_data_from_table_missing_data(mock_ais, mock_table):
     # Verify the result is empty due to missing data
     assert result == {}
 
+def _empty_traffic_bucket(n_ship_types: int = 21, n_loa_cats: int = 14):
+    """Pre-populate the nested traffic_data structure update_legs expects."""
+    variables = [
+        'Frequency (ships/year)', 'Speed (knots)', 'Draught (meters)',
+        'Ship heights (meters)', 'Ship Beam (meters)',
+    ]
+    bucket: dict = {}
+    for var in variables:
+        if var == 'Frequency (ships/year)':
+            bucket[var] = [[0 for _ in range(n_loa_cats)] for _ in range(n_ship_types)]
+        else:
+            bucket[var] = [[[] for _ in range(n_loa_cats)] for _ in range(n_ship_types)]
+    return bucket
+
+
 def test_update_legs(mock_ais, mock_table):
     """Test update_legs with mocked segment data."""
     # Mock the QTableWidget
     mock_ais.omrat.main_widget.twRouteList = mock_table
+
+    # update_legs writes into traffic_data[leg_key][dir_][...][type][loa_cat];
+    # pre-populate the nested lists so the indexing doesn't IndexError.
+    populated = {
+        '1': {
+            'East going': _empty_traffic_bucket(),
+            'West going': _empty_traffic_bucket(),
+        }
+    }
+    mock_ais.omrat.traffic_data = populated
+    mock_ais.omrat.traffic.traffic_data = populated
+
+    # update_legs calls `traffic.create_empty_dict(leg_key, dirs)` which
+    # reads rowCount()/columnCount() off the mocked QTableWidget; those
+    # return MagicMocks that coerce to 1 under `range(...)`, so the
+    # default behaviour wipes our 21x14 fixture down to 1x1.  Replace
+    # it with a no-op so the pre-populated structure survives.
+    mock_ais.omrat.traffic.create_empty_dict = MagicMock()
 
     # Mock other dependencies
     mock_ais.omrat.qgis_geoms.leg_dirs = {'1': ['East going', 'West going']}
     mock_ais.omrat.traffic.run_update_plot = MagicMock()
     mock_ais.db.execute_and_return = MagicMock(side_effect=[
         [True, [['LINESTRING(14.435042123303658 55.24939672092081,14.372456499980117 55.276595228118936)']]],
-        ais_return,# Mock ais_data query result
+        ais_return,  # Mock ais_data query result
         [True, [[37.0]]],  # Mock leg bearing query result
-        
     ])
 
     # Call update_legs
