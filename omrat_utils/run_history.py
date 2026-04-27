@@ -41,39 +41,43 @@ logger = logging.getLogger(__name__)
 def default_db_path() -> Path:
     """Return the platform-appropriate path of ``omrat_history.sqlite``.
 
-    Uses Qt's :class:`QStandardPaths` when available, otherwise falls
-    back to ``%APPDATA%`` / ``$XDG_DATA_HOME`` / ``~/.local/share`` so
-    the module is importable for tests outside QGIS.
+    Resolves to ``<user-data>/OMRAT/omrat_history.sqlite`` where
+    ``<user-data>`` is:
 
-    If a legacy ``omrat_history.gpkg`` (or older ``omrat_runs.gpkg``)
-    is found alongside the new path it is auto-renamed in place so a
-    user upgrading from an earlier release keeps their run history.
+    * ``%APPDATA%`` on Windows
+    * ``$XDG_DATA_HOME`` (or ``~/.local/share``) on Linux
+    * ``~/Library/Application Support`` on macOS
+    * ``~`` as a final fallback.
+
+    QStandardPaths is **not** used here: inside QGIS it returns a
+    profile-namespaced path (``…/QGIS/QGIS4/…``) which would hide the
+    history under QGIS's own data folder rather than at the platform
+    root. The README and the user mental model both expect
+    ``%APPDATA%\\OMRAT`` directly.
+
+    Two legacy paths are migrated in place if found (no data loss --
+    same SQLite format):
+
+    * older ``.gpkg`` filenames in the same folder, or
+    * the QGIS-namespaced location written by an earlier build.
     """
-    base = ''
-    try:
-        from qgis.PyQt.QtCore import QStandardPaths
-        # Try Qt 5 flat enum first; fall back to Qt 6 scoped form.
-        loc = getattr(QStandardPaths, 'AppDataLocation', None)
-        if loc is None:
-            loc = QStandardPaths.StandardLocation.AppDataLocation
-        base = QStandardPaths.writableLocation(loc) or ''
-    except Exception:
-        base = ''
-    if not base:
-        if os.name == 'nt':
-            base = os.environ.get('APPDATA', '')
+    if os.name == 'nt':
+        base = os.environ.get('APPDATA', '') or str(Path.home())
+    elif os.name == 'posix':
+        import sys as _sys
+        if _sys.platform == 'darwin':
+            base = str(Path.home() / 'Library' / 'Application Support')
         else:
             base = os.environ.get(
                 'XDG_DATA_HOME', str(Path.home() / '.local' / 'share'),
             )
-        if not base:
-            base = str(Path.home())
+    else:
+        base = str(Path.home())
+
     target = Path(base) / 'OMRAT' / 'omrat_history.sqlite'
 
-    # Migrate from the older ``.gpkg`` filename if a previous
-    # release left one behind.  No data is lost -- the file format
-    # is identical, only the extension changed.
     if not target.exists():
+        # Legacy filenames in the same folder (renamed extension).
         for legacy_name in ('omrat_history.gpkg', 'omrat_runs.gpkg'):
             legacy = target.parent / legacy_name
             if legacy.exists():
@@ -83,9 +87,36 @@ def default_db_path() -> Path:
                     logger.info(
                         f"Migrated legacy run-history file {legacy} -> {target}"
                     )
-                    break
+                    return target
                 except Exception as exc:
                     logger.warning(f"Could not rename {legacy}: {exc}")
+
+        # Earlier builds wrote under the QGIS-namespaced AppDataLocation;
+        # pick that up too if present so the user keeps prior runs.
+        try:
+            from qgis.PyQt.QtCore import QStandardPaths
+            loc = getattr(QStandardPaths, 'AppDataLocation', None)
+            if loc is None:
+                loc = QStandardPaths.StandardLocation.AppDataLocation
+            qt_base = QStandardPaths.writableLocation(loc) or ''
+        except Exception:
+            qt_base = ''
+        if qt_base:
+            for legacy_name in (
+                'omrat_history.sqlite', 'omrat_history.gpkg', 'omrat_runs.gpkg',
+            ):
+                legacy = Path(qt_base) / 'OMRAT' / legacy_name
+                if legacy.exists() and legacy.resolve() != target.resolve():
+                    try:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        legacy.rename(target)
+                        logger.info(
+                            f"Migrated QGIS-namespaced run-history "
+                            f"{legacy} -> {target}"
+                        )
+                        break
+                    except Exception as exc:
+                        logger.warning(f"Could not move {legacy}: {exc}")
 
     return target
 
