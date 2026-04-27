@@ -1,8 +1,5 @@
 numpy
 pandas
-pytest
-pytest-cov
-pytest-qgis
 scipy
 shapely
 geopandas

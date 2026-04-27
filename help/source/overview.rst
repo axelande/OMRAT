@@ -1,134 +1,113 @@
 .. _overview:
 
-================
+===============
 Project Overview
+===============
+
+What OMRAT does
 ================
 
-What is OMRAT?
-==============
+OMRAT takes **three kinds of input** and produces **one kind of output**.
 
-The **Open Maritime Risk Analysis Tool** (OMRAT) is a QGIS plugin that
-provides comprehensive maritime risk assessment capabilities. It
-calculates the probability of ship accidents -- including collisions,
-groundings, and allisions (ship-to-structure impacts) -- for defined
-shipping routes in a geographic area.
+Inputs:
 
-OMRAT implements the internationally recognized IWRAP methodology
-(International Association of Marine Aids to Navigation and Lighthouse
-Authorities Waterway Risk Assessment Programme), making it possible to
-perform quantitative risk assessments for:
+#. A **shipping route** -- one or more polyline segments on a map.
+#. **Traffic** per segment -- how many ships of each type pass per
+   year, their speed, draught, beam, and height above waterline.
+#. **Obstacles** -- depth polygons (bathymetry) and structure polygons
+   (bridges, wind turbines, piers).
 
-- **Drifting risks**: Ships that lose propulsion and drift into hazards
-- **Powered risks**: Ships under power that fail to navigate correctly
-- **Ship-ship collisions**: Encounters between vessels on the same or
-  crossing routes
+Output: **expected annual frequency** for each accident type.
 
-The plugin integrates directly with QGIS, using its map canvas for
-route digitization, layer management for obstacle definition, and
-coordinate transformation services for accurate distance calculations.
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Accident type
+     - When it occurs
+   * - **Drifting grounding**
+     - A ship loses propulsion, drifts with wind/current, grounds on a
+       shallow depth polygon before the crew can restart the engine.
+   * - **Drifting allision**
+     - Same but the drifting ship hits a structure.
+   * - **Drifting anchoring**
+     - The drifting ship successfully anchors before it grounds.
+   * - **Powered grounding**
+     - A ship under power fails to turn at a bend, continues straight,
+       grounds on shallower water ahead.
+   * - **Powered allision**
+     - Same but hits a structure.
+   * - **Head-on collision**
+     - Two ships on the same leg travelling in opposite directions.
+   * - **Overtaking collision**
+     - Same leg, same direction, different speeds.
+   * - **Crossing collision**
+     - Two legs share a waypoint at a non-trivial angle.
+   * - **Bend collision**
+     - Same leg, one ship fails to turn at a bend.
 
 
-Background and Funding
+Who OMRAT is for
+=================
+
+* **Port / fairway designers** doing quantitative risk assessments.
+* **Environmental authorities** estimating baseline risk for a sea
+  area before permitting new infrastructure.
+* **Researchers** comparing IWRAP-style methodology outputs against
+  historical accident data.
+* **IWRAP users** who want an open-source alternative and can already
+  import / export XML.
+
+OMRAT is not a routing or navigation tool.  It does not simulate
+individual ship movements.  It is a **statistical** tool: for a given
+traffic pattern it returns *how often* each accident type is expected.
+
+
+The methodology in one paragraph
+================================
+
+OMRAT implements the IWRAP framework (Friis-Hansen 2008, Pedersen
+1995): every accident frequency is decomposed into a **geometric
+candidate count** (how often *could* an accident happen based only on
+geometry and traffic) multiplied by a **causation factor** (how often
+does an accident *actually* happen given a candidate encounter).
+
+.. math::
+
+   F_\mathrm{accident} = N_A \cdot P_C
+
+:math:`N_A` is derived from the route, traffic, and obstacles.
+:math:`P_C` comes from published tables (defaults: Fujii 1974, IALA
+IWRAP manual).  See :ref:`theory` for the full reference table and
+:ref:`drifting` / :ref:`collisions` / :ref:`powered` for each accident
+type's derivation.
+
+
+Background and funding
 ======================
 
 OMRAT has been developed with funding from:
 
-- **Naturvardsverket** (Swedish Environmental Protection Agency)
-- **RISE** (Research Institutes of Sweden)
+* **Naturvardsverket** -- Swedish Environmental Protection Agency.
+* **RISE** -- Research Institutes of Sweden.
+
+It is licensed under GPL v2+.  The source is at
+https://github.com/axelande/OMRAT.
 
 The mathematical foundations come from:
 
-- Pedersen, P.T. (1995). *Collision and Grounding Mechanics.* WEMT'95.
-- Friis-Hansen, P. (2008). *IWRAP MK II - Basic Modelling Principles
+* Pedersen, P.T. (1995). *Collision and Grounding Mechanics.* WEMT'95.
+* Friis-Hansen, P. (2008). *IWRAP MK II - Basic Modelling Principles
   for Prediction of Collision and Grounding Frequencies.* Technical
   University of Denmark.
-- Talavera, A. et al. (2013). *Application of Dempster-Shafer theory
-  for the quantification and propagation of the uncertainty caused by
-  the use of AIS data.*
-- Fujii, Y. et al. (1974). *Some factors affecting the frequency of
+* Fujii, Y. et al. (1974). *Some factors affecting the frequency of
   accidents in marine traffic.* Journal of Navigation, 27.
 
 
-Key Features
+What's next
 ============
 
-Route Management
-----------------
-
-- Interactive route digitization on the QGIS map canvas
-- Multi-segment routes with waypoints
-- Automatic direction labelling (North/South, East/West going)
-- Route width configuration with visual offset lines
-
-Traffic Data
-------------
-
-- Per-segment, per-direction, per-ship-type traffic frequencies
-- Ship dimensions: speed, draught, beam, height
-- Ship type classification with configurable size bins
-- AIS data integration from PostgreSQL/PostGIS databases
-
-Obstacle Management
--------------------
-
-- Depth polygons from shapefiles or GEBCO bathymetry data
-- Structure polygons (bridges, wind turbines, platforms)
-- Automatic GEBCO download via OpenTopography API
-- Consolidated depth layer with graduated symbology
-
-Drift Corridor Analysis
-------------------------
-
-- 8-direction drift corridor generation based on wind rose
-- Repair time modelling with lognormal distribution
-- Obstacle shadow calculation using quad-based sweep
-- Anchor zone identification and splitting
-- Background task execution for responsive UI
-
-Risk Calculations
------------------
-
-- Drifting grounding and allision probability
-- Powered grounding (Category I and II)
-- Ship-ship collision frequency (head-on, overtaking, crossing, bend)
-- Causation factors from IALA/Fujii/Pedersen
-- Monte Carlo probability integration with parallel execution
-
-Data Integration
------------------
-
-- IWRAP XML import and export
-- Project save/load in ``.omrat`` JSON format
-- Pydantic data validation
-- AIS database connectivity
-
-
-Technology Stack
-================
-
-.. list-table::
-   :widths: 30 70
-   :header-rows: 1
-
-   * - Component
-     - Technology
-   * - GUI Framework
-     - PyQt5/6
-   * - GIS Operations
-     - QGIS API (``qgis.core``, ``qgis.gui``)
-   * - Geometry Operations
-     - Shapely
-   * - Spatial DataFrames
-     - GeoPandas
-   * - Numerical Computing
-     - NumPy, SciPy
-   * - Visualization
-     - Matplotlib
-   * - Data Validation
-     - Pydantic
-   * - Database (optional)
-     - PostgreSQL / PostGIS (for AIS data)
-   * - HTTP Requests
-     - Requests (for GEBCO API)
-   * - Data Persistence
-     - JSON (``.omrat``), XML (IWRAP)
+* Never installed OMRAT? -> :ref:`installation`.
+* Installed and curious what a first run looks like? -> :ref:`quickstart`.
+* Want to know what a "leg" is? -> :ref:`concepts`.
+* Ready to build your own project? -> :ref:`user_guide`.

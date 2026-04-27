@@ -32,7 +32,7 @@ def create_obstacle_shadow(obstacle: Polygon, drift_angle_deg: float,
 
     Args:
         obstacle: The obstacle polygon (already intersected with corridor)
-        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E)
+        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
         corridor_bounds: (minx, miny, maxx, maxy) of the corridor
 
     Returns:
@@ -108,23 +108,34 @@ def _create_edge_quads(original_coords: list, translated_coords: list) -> list[P
         List of valid quad polygons
     """
     n = len(original_coords)
-    quads = []
+    quads: list[Polygon] = []
 
+    # We used to call ``quad.is_valid`` and ``quad.area`` on every candidate
+    # quad.  Both are shapely C-dispatch hops with ~microsecond of Python
+    # overhead each, and the end-to-end profile showed >1M calls to
+    # ``is_valid`` coming through here.  For these quads we can compute area
+    # directly via the shoelace formula (cheap arithmetic) and only build
+    # the Polygon when the area is non-degenerate.  Quads are simple convex
+    # trapezoid-shaped polygons so shapely validity is trivially satisfied
+    # once area is positive.
     for i in range(n):
         j = (i + 1) % n
-        # Quad from edge i-j of original to edge i-j of translated
-        quad = Polygon([
-            original_coords[i],
-            original_coords[j],
-            translated_coords[j],
-            translated_coords[i]
-        ])
-        if quad.is_valid and quad.area > 0:
-            quads.append(quad)
-        elif not quad.is_valid:
-            valid_quad = make_valid(quad)
-            if not valid_quad.is_empty:
-                quads.append(valid_quad)
+        ax, ay = original_coords[i]
+        bx, by = original_coords[j]
+        cx, cy = translated_coords[j]
+        dx, dy = translated_coords[i]
+        # 2 * |signed area| of the quad (a, b, c, d) via shoelace.
+        signed_2a = (
+            (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+            + (cx - ax) * (dy - ay) - (dx - ax) * (cy - ay)
+        )
+        if signed_2a == 0:
+            # Degenerate (flat) quad -- skip.  This is the same outcome as
+            # the old ``not is_valid`` / ``area == 0`` branch for
+            # zero-thickness extrusions.
+            continue
+        quad = Polygon([(ax, ay), (bx, by), (cx, cy), (dx, dy)])
+        quads.append(quad)
 
     return quads
 

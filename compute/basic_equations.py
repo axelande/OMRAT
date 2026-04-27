@@ -1,5 +1,9 @@
+import re
+
+import numpy as np
 from numpy import exp, log, sqrt, sin, cos, abs as np_abs, pi
 from scipy import stats
+from scipy.special import ndtr  # C-level ndtr == norm.cdf w/o scipy dispatch
 from scipy.stats import norm
 
 def get_Fcoll(na:float, pc:float) -> float:
@@ -27,16 +31,102 @@ def powered_na(distance, mean_time, ship_speed):
     ai = mean_time * ship_speed
     return exp(-distance / ai)
     
-def get_not_repaired(data: dict[str,str|float|bool], drift_speed:float, dist:float) -> float:
-    """Get the probability that the ship isn't repaired"""
-    drift_time = get_drift_time(dist, drift_speed) / 3600
-    if data['use_lognormal'] == 1:
-        drift = stats.lognorm(data['std'], data['loc'], data['scale'])
-        prob_not_repaired = 1 - drift.cdf(drift_time)
+# Cache of (scipy dist | compiled code) keyed by a stable signature of the
+# ``data`` repair-params dict.  The end-to-end profile showed ~8 s of
+# ``builtins.exec`` from re-parsing ``data['func']`` on every call and
+# another chunk from ``stats.lognorm(...)`` re-freezing the same
+# distribution tens of thousands of times.  Caching by signature removes
+# both without assuming the caller reuses the same dict object.
+_REPAIR_FN_CACHE: dict[tuple, "callable"] = {}
+
+
+# Recognise the two repair-function shapes that OMRAT's XML/UI writers emit.
+# Matching them lets us bypass scipy's frozen-distribution dispatch (~2 ms
+# per call) and use C-level ``ndtr`` / a direct Weibull formula.
+_NORM_FUNC_RE = re.compile(
+    r"\.norm\(loc\s*=\s*(?P<loc>-?\d+(?:\.\d+)?)\s*,\s*scale\s*=\s*(?P<scale>-?\d+(?:\.\d+)?)\s*\)\s*\.cdf\(x\)"
+)
+_WEIBULL_FUNC_RE = re.compile(
+    r"\.weibull_min\(c\s*=\s*(?P<c>-?\d+(?:\.\d+)?)\s*,\s*loc\s*=\s*(?P<loc>-?\d+(?:\.\d+)?)\s*,\s*scale\s*=\s*(?P<scale>-?\d+(?:\.\d+)?)\s*\)\s*\.cdf\(x\)"
+)
+
+
+def _repair_fn(data: dict, drift_speed: float):
+    """Return a callable ``f(distance) -> P(not repaired)`` for *data*.
+
+    Caches the compiled scalar distribution callable, so the hot per-edge /
+    per-ship call sites don't re-parse strings or re-create distribution
+    objects.  For the two dominant shapes (``norm.cdf(x)`` /
+    ``weibull_min.cdf(x)``) we bypass scipy's frozen-distribution machinery
+    and call ``scipy.special.ndtr`` or a direct Weibull formula -- scipy's
+    generic ``.cdf`` has ~2 ms of Python-level dispatch per call, and
+    ``get_not_repaired`` runs tens of thousands of times per cascade.
+    """
+    key: tuple
+    if data.get('use_lognormal') == 1:
+        key = ('lognorm', float(data['std']), float(data['loc']),
+               float(data['scale']), float(drift_speed))
     else:
-        x = drift_time # used in the eval func
-        prob_not_repaired = 1 - eval(data['func'])
-    return prob_not_repaired
+        key = ('func', str(data.get('func', '')), float(drift_speed))
+
+    fn = _REPAIR_FN_CACHE.get(key)
+    if fn is not None:
+        return fn
+
+    if data.get('use_lognormal') == 1:
+        # lognorm.cdf(x; s, loc, scale) = ndtr(log((x-loc)/scale) / s) for x>loc
+        s = float(data['std'])
+        loc = float(data['loc'])
+        scale = float(data['scale'])
+
+        def fn(distance: float, _s=s, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
+            drift_time = distance / _spd / 3600.0
+            t = drift_time - _loc
+            if t <= 0 or _scale <= 0:
+                return 1.0
+            return 1.0 - float(ndtr(log(t / _scale) / _s))
+    else:
+        func_str = str(data.get('func', ''))
+        m = _NORM_FUNC_RE.search(func_str)
+        if m is not None:
+            loc = float(m['loc'])
+            scale = float(m['scale'])
+
+            def fn(distance: float, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
+                drift_time = distance / _spd / 3600.0
+                if _scale <= 0:
+                    return 1.0
+                return 1.0 - float(ndtr((drift_time - _loc) / _scale))
+        else:
+            wm = _WEIBULL_FUNC_RE.search(func_str)
+            if wm is not None:
+                c = float(wm['c'])
+                loc = float(wm['loc'])
+                scale = float(wm['scale'])
+
+                def fn(distance: float, _c=c, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
+                    drift_time = distance / _spd / 3600.0
+                    t = drift_time - _loc
+                    if t <= 0 or _scale <= 0:
+                        return 1.0
+                    return float(exp(-((t / _scale) ** _c)))
+            else:
+                # Fallback: compile + eval the raw expression once.  Still
+                # slower than the analytical path but keeps backward
+                # compatibility with any user-crafted func strings.
+                code = compile(func_str, '<repair>', 'eval')
+
+                def fn(distance: float, _code=code, _spd=drift_speed) -> float:
+                    x = distance / _spd / 3600.0  # noqa: F841 — referenced by eval
+                    return 1.0 - float(eval(_code))
+
+    _REPAIR_FN_CACHE[key] = fn
+    return fn
+
+
+def get_not_repaired(data: dict[str, str | float | bool], drift_speed: float, dist: float) -> float:
+    """Get the probability that the ship isn't repaired."""
+    return _repair_fn(data, drift_speed)(dist)
 
 
 # Canonical ship-type names per OMRAT ship-type index (0-based row in the

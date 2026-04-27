@@ -63,6 +63,13 @@ class Calculation(
         # Ship-ship collision attributes
         self.ship_collision_prob: float = 0.0
         self.collision_report: dict[str, Any] | None = None
+        self.collision_line_layer = None
+        self.collision_point_layer = None
+        # Powered model attributes
+        self.powered_grounding_report: dict[str, Any] | None = None
+        self.powered_allision_report: dict[str, Any] | None = None
+        self.powered_grounding_layer = None
+        self.powered_allision_layer = None
         # Drifting model attributes
         self.drifting_allision_prob: float = 0.0
         self.drifting_grounding_prob: float = 0.0

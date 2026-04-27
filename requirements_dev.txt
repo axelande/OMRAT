@@ -1,0 +1,15 @@
+numpy
+pandas
+pytest
+pytest-cov
+# pytest-qgis: pinned to axelande's fork (the upstream PyPI release lags
+# behind and doesn't yet include the fixes this CI needs).  Swap the
+# ``@main`` suffix for a tag (``@v1.2.3``) or commit SHA once a stable
+# release is cut.
+pytest-qgis @ git+https://github.com/axelande/pytest-qgis.git@main
+scipy
+shapely
+geopandas
+matplotlib
+pydantic
+requests

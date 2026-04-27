@@ -182,28 +182,80 @@ def _merge_intervals_vectorized(y_lo: np.ndarray, y_hi: np.ndarray,
         y_lo: (N_edges,) lower bounds
         y_hi: (N_edges,) upper bounds
         valid: (N_edges,) boolean mask
+
+    Notes
+    -----
+    Kept for callers / tests that process one slice at a time.  The
+    per-polygon hot path in :func:`compute_probability_analytical` now uses
+    :func:`_merge_intervals_across_slices` to avoid the per-slice function
+    call and ``tolist()`` overhead.
     """
-    mask = valid
-    if not np.any(mask):
+    pairs: list[tuple[float, float]] = []
+    for lo_v, hi_v, v in zip(y_lo.tolist(), y_hi.tolist(), valid.tolist()):
+        if v:
+            pairs.append((lo_v, hi_v))
+    if not pairs:
         return []
 
-    lo = y_lo[mask]
-    hi = y_hi[mask]
-
-    # Sort by lower bound
-    order = np.argsort(lo)
-    lo = lo[order]
-    hi = hi[order]
-
-    # Merge overlapping intervals
-    merged = [(lo[0], hi[0])]
-    for i in range(1, len(lo)):
-        if lo[i] <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], hi[i]))
+    pairs.sort(key=lambda p: p[0])
+    merged: list[tuple[float, float]] = [pairs[0]]
+    for lo_v, hi_v in pairs[1:]:
+        last_lo, last_hi = merged[-1]
+        if lo_v <= last_hi:
+            if hi_v > last_hi:
+                merged[-1] = (last_lo, hi_v)
         else:
-            merged.append((lo[i], hi[i]))
-
+            merged.append((lo_v, hi_v))
     return merged
+
+
+def _merge_intervals_across_slices(
+    y_lo: np.ndarray,
+    y_hi: np.ndarray,
+    valid: np.ndarray,
+) -> tuple[list[float], list[float]]:
+    """Flat merged (los, his) lists across every slice at once.
+
+    Equivalent to calling :func:`_merge_intervals_vectorized` once per row
+    and concatenating the results, but the single-call form amortises the
+    ``tolist()`` conversion and the Python frame overhead across O(100)
+    slices, which was the dominant cost in the end-to-end drifting profile
+    (13.5 s tottime at 365k per-slice calls on proj.omrat).
+    """
+    n_slices = y_lo.shape[0]
+    if n_slices == 0:
+        return [], []
+
+    y_lo_rows = y_lo.tolist()
+    y_hi_rows = y_hi.tolist()
+    valid_rows = valid.tolist()
+
+    los: list[float] = []
+    his: list[float] = []
+    for si in range(n_slices):
+        v_row = valid_rows[si]
+        if not any(v_row):
+            continue
+        lo_row = y_lo_rows[si]
+        hi_row = y_hi_rows[si]
+        pairs: list[tuple[float, float]] = [
+            (lo_row[i], hi_row[i]) for i in range(len(v_row)) if v_row[i]
+        ]
+        if not pairs:
+            continue
+        pairs.sort(key=lambda p: p[0])
+        last_lo, last_hi = pairs[0]
+        for lo_v, hi_v in pairs[1:]:
+            if lo_v <= last_hi:
+                if hi_v > last_hi:
+                    last_hi = hi_v
+            else:
+                los.append(last_lo)
+                his.append(last_hi)
+                last_lo, last_hi = lo_v, hi_v
+        los.append(last_lo)
+        his.append(last_hi)
+    return los, his
 
 
 def compute_probability_analytical(
@@ -251,19 +303,26 @@ def compute_probability_analytical(
         edge_starts, edge_ends, lateral_range,
     )
 
-    # Pre-compute CDF arrays for efficiency
-    # Collect all unique interval boundaries, then batch-evaluate CDFs
+    # Collect every merged interval across every slice into two flat arrays
+    # so we can batch-evaluate ``dist.cdf`` ONCE per distribution instead of
+    # per-interval.  scipy's CDF has heavy per-call dispatch overhead; a
+    # single vectorised call over ~100 points is ~100x faster than the same
+    # count of scalar calls.  The merging itself is also batched across
+    # slices so we pay one tolist() + one Python frame instead of per-slice.
+    los, his = _merge_intervals_across_slices(y_lo, y_hi, valid)
+    if not los:
+        return 0.0
+
+    los_arr = np.asarray(los)
+    his_arr = np.asarray(his)
+
     total_prob = 0.0
-
-    for si in range(n_slices):
-        intervals = _merge_intervals_vectorized(y_lo[si], y_hi[si], valid[si])
-        if not intervals:
+    for weight, dist in zip(weights, dists):
+        if weight <= 0:
             continue
-
-        # Integrate PDF over merged intervals using CDF
-        for iv_lo, iv_hi in intervals:
-            for weight, dist in zip(weights, dists):
-                total_prob += weight * (dist.cdf(iv_hi) - dist.cdf(iv_lo))
+        # One vectorised CDF call per distribution handles all intervals
+        # across all slices at once.
+        total_prob += float(weight) * float((dist.cdf(his_arr) - dist.cdf(los_arr)).sum())
 
     probability = total_prob / n_slices
     return float(np.clip(probability, 0.0, 1.0))

@@ -98,6 +98,12 @@ QPushButton#PBUpdateDepthIntervals:hover {
     background: #0d6fa9;
 }
 
+QPushButton#pbRunModel:disabled {
+    background: #d0d4d9;
+    color: #6b7280;
+    border: 1px solid #b0b6bd;
+}
+
 QLineEdit,
 QComboBox,
 QSpinBox,

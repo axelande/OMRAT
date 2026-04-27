@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Tests for drift corridor generation v2 - using compass/nautical convention.
+Tests for drift corridor generation v2 - using standard nautical convention.
 
 These tests verify:
-1. Compass angle convention (0=N, 90=W, 180=S, 270=E)
-2. Shadow creation from obstacles
-3. Corridor projection in various directions
-4. Proper handling of scattered MultiPolygon obstacles
+1. Compass angle convention (0=N, 90=E, 180=S, 270=W; clockwise).
+2. Shadow creation from obstacles.
+3. Corridor projection in various directions.
+4. Proper handling of scattered MultiPolygon obstacles.
 """
 
 import pytest
@@ -16,7 +16,7 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 
 # Import the functions under test
-from geometries.drift_corridor_v2 import (
+from geometries.drift import (
     compass_to_vector,
     create_obstacle_shadow,
     clip_corridor_at_obstacles,
@@ -36,17 +36,17 @@ class TestCompassConvention:
         """North should be 0 degrees."""
         assert DIRECTIONS['N'] == 0
 
-    def test_west_is_90(self):
-        """West should be 90 degrees."""
-        assert DIRECTIONS['W'] == 90
+    def test_east_is_90(self):
+        """East should be 90 degrees."""
+        assert DIRECTIONS['E'] == 90
 
     def test_south_is_180(self):
         """South should be 180 degrees."""
         assert DIRECTIONS['S'] == 180
 
-    def test_east_is_270(self):
-        """East should be 270 degrees."""
-        assert DIRECTIONS['E'] == 270
+    def test_west_is_270(self):
+        """West should be 270 degrees."""
+        assert DIRECTIONS['W'] == 270
 
     def test_eight_directions(self):
         """Should have exactly 8 directions."""
@@ -54,7 +54,7 @@ class TestCompassConvention:
 
 
 class TestCompassToVector:
-    """Test the compass_to_vector function."""
+    """Test the compass_to_vector function (standard nautical: 0=N, 90=E)."""
 
     def test_north_vector(self):
         """North (0°) should give +Y direction."""
@@ -69,20 +69,20 @@ class TestCompassToVector:
         assert dy < -99  # Negative Y
 
     def test_east_vector(self):
-        """East (270°) should give +X direction."""
-        dx, dy = compass_to_vector(270, 100)
+        """East (90°) should give +X direction."""
+        dx, dy = compass_to_vector(90, 100)
         assert dx > 99  # Positive X
         assert abs(dy) < 0.01  # No Y movement
 
     def test_west_vector(self):
-        """West (90°) should give -X direction."""
-        dx, dy = compass_to_vector(90, 100)
+        """West (270°) should give -X direction."""
+        dx, dy = compass_to_vector(270, 100)
         assert dx < -99  # Negative X
         assert abs(dy) < 0.01  # No Y movement
 
     def test_northeast_vector(self):
-        """NorthEast (315°) should give +X, +Y direction."""
-        dx, dy = compass_to_vector(315, 100)
+        """NorthEast (45°) should give +X, +Y direction."""
+        dx, dy = compass_to_vector(45, 100)
         assert dx > 0  # Positive X
         assert dy > 0  # Positive Y
         # Both components should be roughly equal (45° diagonal)
@@ -138,7 +138,7 @@ class TestCreateObstacleShadow:
         obstacle = box(100, 200, 300, 400)
         corridor_bounds = (0, 0, 1000, 500)
 
-        shadow = create_obstacle_shadow(obstacle, 270, corridor_bounds)  # E = 270°
+        shadow = create_obstacle_shadow(obstacle, 90, corridor_bounds)  # E = 90°
 
         # Shadow should include obstacle
         assert shadow.contains(obstacle) or shadow.intersection(obstacle).area > obstacle.area * 0.99
@@ -154,7 +154,7 @@ class TestCreateObstacleShadow:
         obstacle = box(100, 200, 300, 400)
         corridor_bounds = (0, 0, 1000, 500)
 
-        shadow = create_obstacle_shadow(obstacle, 90, corridor_bounds)  # W = 90°
+        shadow = create_obstacle_shadow(obstacle, 270, corridor_bounds)  # W = 270°
 
         # Shadow should include obstacle
         assert shadow.contains(obstacle) or shadow.intersection(obstacle).area > obstacle.area * 0.99
@@ -286,7 +286,7 @@ class TestCreateProjectedCorridor:
         half_width = 50
         projection_dist = 500
 
-        corridor = create_projected_corridor(leg, half_width, 270, projection_dist)  # E = 270°
+        corridor = create_projected_corridor(leg, half_width, 90, projection_dist)  # E = 90°
 
         # Corridor should extend east (positive X beyond leg end)
         assert corridor.bounds[2] > 1400  # max_x should be > leg_end + projection
@@ -562,13 +562,13 @@ class TestCorridorReachesObstacle:
         half_width = 100
         projection_dist = 2000
 
-        corridor = create_projected_corridor(leg, half_width, 270, projection_dist)
+        corridor = create_projected_corridor(leg, half_width, 90, projection_dist)
 
         # Obstacle at x=2000-2200
         obstacle = box(2000, -50, 2200, 50)
         obstacles = [(obstacle, 5.0)]
 
-        result = clip_corridor_at_obstacles(corridor, obstacles, 270, "")
+        result = clip_corridor_at_obstacles(corridor, obstacles, 90, "")
 
         # Corridor should reach x=2000 (obstacle's west edge)
         just_before_obstacle = Point(1995, 0)
@@ -586,13 +586,13 @@ class TestCorridorReachesObstacle:
         half_width = 100
         projection_dist = 2000
 
-        corridor = create_projected_corridor(leg, half_width, 90, projection_dist)
+        corridor = create_projected_corridor(leg, half_width, 270, projection_dist)
 
         # Obstacle at x=-2200 to x=-2000
         obstacle = box(-2200, -50, -2000, 50)
         obstacles = [(obstacle, 5.0)]
 
-        result = clip_corridor_at_obstacles(corridor, obstacles, 90, "")
+        result = clip_corridor_at_obstacles(corridor, obstacles, 270, "")
 
         # Corridor should reach x=-2000 (obstacle's east edge)
         just_before_obstacle = Point(-1995, 0)
@@ -640,7 +640,7 @@ class TestShadowBlockingAllDirections:
         obstacle = box(800, 0, 1000, 1000)  # Spans full height
         obstacles = [(obstacle, 5.0)]
 
-        result = clip_corridor_at_obstacles(corridor, obstacles, 270, "")
+        result = clip_corridor_at_obstacles(corridor, obstacles, 90, "")
 
         # Nothing should exist at x > 800 (obstacle's west edge)
         east_of_obstacle = Point(1500, 500)
@@ -653,7 +653,7 @@ class TestShadowBlockingAllDirections:
         obstacle = box(-1000, 0, -800, 1000)  # Spans full height
         obstacles = [(obstacle, 5.0)]
 
-        result = clip_corridor_at_obstacles(corridor, obstacles, 90, "")
+        result = clip_corridor_at_obstacles(corridor, obstacles, 270, "")
 
         # Nothing should exist at x < -1000 (obstacle's west edge)
         west_of_obstacle = Point(-1500, 500)

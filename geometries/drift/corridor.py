@@ -62,7 +62,7 @@ def create_projected_corridor(leg: LineString, half_width: float,
     Args:
         leg: The route segment as a LineString (in UTM)
         half_width: Half the distribution width in meters
-        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E)
+        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
         projection_dist: How far to project in meters
 
     Returns:

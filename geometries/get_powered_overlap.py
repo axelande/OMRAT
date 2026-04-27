@@ -202,6 +202,63 @@ def _powered_na(distance: float, mean_time: float, ship_speed: float) -> float:
     return exp(-distance / ai)
 
 
+def _extract_edges_local(
+    geom,
+    turn_pt: np.ndarray,
+    along_dir: np.ndarray,
+    perp_dir: np.ndarray,
+) -> np.ndarray | None:
+    """Extract polygon/line edges and transform into a local (along, lateral) frame.
+
+    In the frame returned here, every ray in the Cat II sweep becomes a
+    horizontal line ``y = offset`` travelling in +x, so ray/polygon hit
+    distance reduces to edge-crossing math that vectorises cleanly over
+    (rays x edges).
+
+    Returns an ``(M, 2, 2)`` array of edge endpoints ``[[along, lateral], ...]``
+    or ``None`` if no edges were found (e.g. a Point obstacle, which a
+    zero-width ray cannot hit).
+    """
+    if geom is None or getattr(geom, 'is_empty', True):
+        return None
+
+    rings: list[np.ndarray] = []
+
+    def _collect(g):
+        gt = g.geom_type
+        if gt == 'Polygon':
+            if g.exterior is not None:
+                rings.append(np.asarray(g.exterior.coords, dtype=float))
+            for interior in g.interiors:
+                rings.append(np.asarray(interior.coords, dtype=float))
+        elif gt in ('LineString', 'LinearRing'):
+            rings.append(np.asarray(g.coords, dtype=float))
+        elif gt in ('MultiPolygon', 'MultiLineString', 'GeometryCollection'):
+            for sub in g.geoms:
+                _collect(sub)
+        # Points / MultiPoints: measure-zero; skip.
+
+    _collect(geom)
+    if not rings:
+        return None
+
+    edges_list: list[np.ndarray] = []
+    for ring in rings:
+        if ring.shape[0] < 2:
+            continue
+        # Transform into local frame: along = (p - origin) . along_dir,
+        # lateral = (p - origin) . perp_dir.
+        diff = ring - turn_pt
+        along = diff @ along_dir
+        lateral = diff @ perp_dir
+        local = np.stack([along, lateral], axis=1)
+        edges_list.append(np.stack([local[:-1], local[1:]], axis=1))
+
+    if not edges_list:
+        return None
+    return np.concatenate(edges_list, axis=0)
+
+
 def _compute_cat2_with_shadows(
     turn_pt: np.ndarray,
     ext_dir: np.ndarray,
@@ -212,10 +269,22 @@ def _compute_cat2_with_shadows(
     speed_ms: float,
     obstacles: list[tuple[dict, str]],
 ) -> tuple[dict, list, np.ndarray, np.ndarray]:
-    """Compute Cat II probabilities with shadow effects.
+    """Compute Cat II probabilities with shadow effects (vectorised).
 
-    Casts ``N_RAYS`` rays across the lateral distribution. Each ray finds the
-    FIRST obstacle it hits -- this naturally creates shadows.
+    Casts ``N_RAYS`` parallel rays across the lateral distribution.  Per ray,
+    keeps the FIRST obstacle hit -- this is what creates shadows.
+
+    Implementation
+    --------------
+    Every ray has the same ``ext_dir``, only its lateral offset differs.  In
+    the local frame ``(along, lateral)`` anchored at ``turn_pt``, each ray is
+    the line ``y = offset`` moving in +x.  For each polygon edge
+    ``(v0, v1)`` in that frame, a ray at lateral ``y`` crosses the edge iff
+    ``y`` lies strictly between ``y0`` and ``y1``, and the along-crossing is
+    ``x0 + (y - y0) / (y1 - y0) * (x1 - x0)``.  Taking the minimum positive
+    crossing per obstacle gives the ray's first-hit distance to that
+    obstacle; argmin across obstacles gives the first-hit obstacle.  Both
+    reductions are a single broadcasted numpy op.
 
     Returns
     -------
@@ -231,7 +300,52 @@ def _compute_cat2_with_shadows(
     pdf_vals = norm.pdf(offsets, mean_offset, sigma)
     masses = pdf_vals * dx
     recovery = ai * speed_ms
+    n_rays = len(offsets)
 
+    # Empty-obstacle shortcut: every ray misses.
+    if not obstacles:
+        return (
+            {},
+            [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
+            offsets,
+            pdf_vals,
+        )
+
+    # Per-obstacle first-hit distance for every ray.
+    hit_matrix = np.full((n_rays, len(obstacles)), np.inf, dtype=float)
+    ray_ys = offsets[:, None]  # (n_rays, 1)
+
+    for obs_idx, (obs, _kind) in enumerate(obstacles):
+        edges = _extract_edges_local(obs["geom"], turn_pt, ext_dir, perp)
+        if edges is None or edges.shape[0] == 0:
+            continue
+
+        # edges: (M, 2, 2)  where axis-1 is endpoint index, axis-2 is (along, lateral).
+        x0 = edges[:, 0, 0]
+        y0 = edges[:, 0, 1]
+        x1 = edges[:, 1, 0]
+        y1 = edges[:, 1, 1]
+
+        y_min = np.minimum(y0, y1)[None, :]
+        y_max = np.maximum(y0, y1)[None, :]
+        dy = (y1 - y0)[None, :]
+
+        crosses = (ray_ys >= y_min) & (ray_ys < y_max) & (dy != 0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t = (ray_ys - y0[None, :]) / dy
+            along = x0[None, :] + t * (x1 - x0)[None, :]
+
+        valid = crosses & (along > 0) & (along < MAX_RANGE)
+        along = np.where(valid, along, np.inf)
+        hit_matrix[:, obs_idx] = np.min(along, axis=1)
+
+    best_obs_idx = np.argmin(hit_matrix, axis=1)
+    best_dists = hit_matrix[np.arange(n_rays), best_obs_idx]
+    hit_mask = np.isfinite(best_dists)
+
+    # Accumulate per-obstacle summaries.  The outer loop is only N_RAYS (500)
+    # so the remaining pure-Python cost is negligible relative to the numpy
+    # reduction above.
     ray_data: list[tuple[float, float, tuple[str, Any] | None, float | None]] = []
     obs_accum: dict[tuple[str, Any], dict] = defaultdict(lambda: {
         "mass": 0.0, "weighted_dist": 0.0, "p_integral": 0.0,
@@ -239,36 +353,27 @@ def _compute_cat2_with_shadows(
         "obs": None, "kind": None,
     })
 
-    for off, m_i in zip(offsets, masses):
-        ray_origin = turn_pt + off * perp
-
-        best_d = float('inf')
-        best_key: tuple[str, Any] | None = None
-        best_obs = None
-        best_kind: str | None = None
-
-        for obs, kind in obstacles:
-            d = _ray_hit_distance(ray_origin, ext_dir, MAX_RANGE, obs["geom"])
-            if d is not None and 0 < d < best_d:
-                best_d = d
-                best_key = (kind, obs["id"])
-                best_obs = obs
-                best_kind = kind
-
-        if best_key is not None:
-            oa = obs_accum[best_key]
-            oa["mass"] += m_i
-            oa["weighted_dist"] += m_i * best_d
-            if recovery > 0:
-                oa["p_integral"] += m_i * exp(-best_d / recovery)
-            oa["n_rays"] += 1
-            oa["ray_offsets"].append(off)
-            oa["ray_dists"].append(best_d)
-            oa["obs"] = best_obs
-            oa["kind"] = best_kind
-            ray_data.append((off, m_i, best_key, best_d))
-        else:
+    for i in range(n_rays):
+        off = float(offsets[i])
+        m_i = float(masses[i])
+        if not hit_mask[i]:
             ray_data.append((off, m_i, None, None))
+            continue
+        oi = int(best_obs_idx[i])
+        obs, kind = obstacles[oi]
+        best_key = (kind, obs["id"])
+        best_d = float(best_dists[i])
+        oa = obs_accum[best_key]
+        oa["mass"] += m_i
+        oa["weighted_dist"] += m_i * best_d
+        if recovery > 0:
+            oa["p_integral"] += m_i * exp(-best_d / recovery)
+        oa["n_rays"] += 1
+        oa["ray_offsets"].append(off)
+        oa["ray_dists"].append(best_d)
+        oa["obs"] = obs
+        oa["kind"] = kind
+        ray_data.append((off, m_i, best_key, best_d))
 
     summaries: dict[tuple[str, Any], dict] = {}
     for key, oa in obs_accum.items():
@@ -292,6 +397,32 @@ def _compute_cat2_with_shadows(
 # ---------------------------------------------------------------------------
 # Data extraction helpers
 # ---------------------------------------------------------------------------
+
+def find_closest_computation_index(
+    click_xy: tuple[float, float],
+    computations: list[dict],
+    threshold: float,
+) -> int | None:
+    """Return the index of the computation whose turn-point is closest to
+    ``click_xy``, or None if none are within ``threshold`` distance.
+
+    Pure-data extract of the click-to-computation routing inside
+    ``PoweredOverlapVisualizer._on_overview_click``, so the math can be
+    tested without a Qt event.
+    """
+    best_idx: int | None = None
+    best_dist = float('inf')
+    click = np.array(click_xy)
+    for ci, comp in enumerate(computations):
+        tp = comp["turn_pt"]
+        d = float(np.linalg.norm(tp - click))
+        if d < best_dist:
+            best_dist = d
+            best_idx = ci
+    if best_idx is not None and best_dist < threshold:
+        return best_idx
+    return None
+
 
 def _build_legs_and_obstacles(
     data: dict[str, Any],
@@ -831,25 +962,16 @@ class PoweredOverlapVisualizer:
             return
         if event.xdata is None or event.ydata is None:
             return
-
-        # Find closest computation turning point
-        best_idx: int | None = None
-        best_dist = float('inf')
-        click = np.array([event.xdata, event.ydata])
-        for ci, comp in enumerate(self.computations):
-            tp = comp["turn_pt"]
-            d = float(np.linalg.norm(tp - click))
-            if d < best_dist:
-                best_dist = d
-                best_idx = ci
-
-        # Only select if click is reasonably close (within 5% of axis range)
+        # Threshold: 5% of the larger axis range.
         ax = self.axes["overview"]
         xlim = ax.get_xlim()
         ylim = ax.get_ylim()
         threshold = 0.05 * max(xlim[1] - xlim[0], ylim[1] - ylim[0])
-        if best_idx is not None and best_dist < threshold:
-            self._select_computation(best_idx)
+        idx = find_closest_computation_index(
+            (event.xdata, event.ydata), self.computations, threshold,
+        )
+        if idx is not None:
+            self._select_computation(idx)
 
     # -----------------------------------------------------------------
     # Class method: embed in dialog

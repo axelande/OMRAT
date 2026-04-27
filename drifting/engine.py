@@ -191,8 +191,12 @@ def directional_distance_m(
             coords.extend(g.exterior.coords)
     elif gt == "GeometryCollection":
         for g in target_geom.geoms:
-            if hasattr(g, "coords"):
+            try:
                 coords.extend(g.coords)
+            except (AttributeError, NotImplementedError):
+                # Sub-geom is a Polygon / MultiPolygon / MultiPoint -- no
+                # direct coords sequence.  Skip (matches historical behaviour).
+                continue
 
     if not coords:
         return None
@@ -260,8 +264,10 @@ def directional_distance_to_point_from_offset_leg(
             pts.extend(Point(c) for c in g.coords)
     elif gt == "GeometryCollection":
         for g in inter.geoms:
-            if hasattr(g, "coords"):
+            try:
                 pts.extend(Point(c) for c in g.coords)
+            except (AttributeError, NotImplementedError):
+                continue
 
     if not pts:
         p_leg, p_target = nearest_points(start_line, point)
@@ -272,6 +278,8 @@ def directional_distance_to_point_from_offset_leg(
             return None
         return float(dot)
 
+    # Each intersection point is downstream along the reverse-ray by
+    # construction -- ``dot`` is always >= 0, so the values list is never empty.
     values: list[float] = []
     for p_leg in pts:
         vx = point.x - p_leg.x
@@ -279,9 +287,6 @@ def directional_distance_to_point_from_offset_leg(
         dot = vx * ux + vy * uy
         if dot >= 0:
             values.append(float(dot))
-
-    if not values:
-        return None
     return min(values)
 
 

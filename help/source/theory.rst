@@ -1,90 +1,73 @@
 .. _theory:
 
-========================
-Mathematical Foundations
-========================
+=======================
+Theory (what is calculated)
+=======================
 
-This chapter describes the mathematical theory behind OMRAT's risk
-calculations. The methodology is based on the IWRAP framework
-(Friis-Hansen 2008), which separates maritime risk into three main
-components: drifting risks, powered risks, and ship-ship collisions.
+This is the **theory track** -- a short umbrella that tells you where
+to find each accident type's derivation and the few global
+conventions shared by all of them.  For the call-tree companion (the
+"how" track), see :ref:`code-flow`.
 
 .. contents:: In this chapter
    :local:
-   :depth: 2
+   :depth: 1
 
 
-Risk Assessment Framework
-=========================
+The IWRAP framework in one equation
+====================================
 
-The fundamental equation for maritime accident frequency is:
+Every accident frequency OMRAT reports has the form
 
 .. math::
 
-   F_{\text{accident}} = N_A \times P_C
+   F_\mathrm{accident} = N_A \cdot P_C
 
-Where:
+* :math:`N_A` is the **geometric candidate count** -- how often an
+  accident *could* happen from geometry + traffic alone.
+* :math:`P_C` is the **causation factor** -- the conditional
+  probability that a candidate becomes an actual accident (the crew
+  fails to avoid, the machinery fails, etc.).
 
-- :math:`N_A` = number of accident candidates (geometric encounters)
-- :math:`P_C` = causation probability (probability that an encounter
-  leads to an actual accident)
+The accident-type chapters derive :math:`N_A` from first principles
+and give sources for :math:`P_C`:
 
-The **accident candidates** :math:`N_A` are computed purely from
-geometry and traffic patterns -- how many ships pass close enough to
-an obstacle or another ship that a collision *could* occur if no
-evasive action is taken.
-
-The **causation probability** :math:`P_C` accounts for human and
-technical factors -- the probability that the crew fails to detect and
-avoid the danger.
-
-.. container:: source-code-ref
-
-   ``compute/basic_equations.py:5`` -- `get_Fcoll() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L5>`__
-
-
-Three Risk Categories
-=====================
-
-OMRAT models three categories of maritime risk:
-
-1. **Drifting risk** -- Ships that lose propulsion (blackout) and drift
-   under the influence of wind and current into obstacles.
-
-2. **Powered risk** -- Ships under power that fail to navigate correctly,
-   either by sailing directly into an obstacle (Category I) or failing
-   to turn at a waypoint (Category II).
-
-3. **Ship-ship collision risk** -- Encounters between vessels that could
-   result in contact, including head-on, overtaking, crossing, and bend
-   collisions.
-
-Each category is described in detail in its own chapter:
-
-- :ref:`drifting` -- Drifting risk calculations
-- :ref:`collisions` -- Ship-ship collision calculations
-- :ref:`powered` -- Powered grounding and allision calculations
-
-
-Causation Factors
-=================
-
-Causation factors represent the probability that a geometric encounter
-leads to an actual accident. These are empirically derived from
-historical accident data.
-
-.. list-table:: Default IALA Causation Factors
-   :widths: 35 20 20 25
+.. list-table::
    :header-rows: 1
+   :widths: 30 70
 
-   * - Collision Type
-     - IALA Default
+   * - Chapter
+     - Covers
+   * - :ref:`drifting`
+     - Drifting grounding / allision / anchoring.  The largest
+       chapter, with five worked examples in
+       ``drifting/debug/level_1`` ... ``level_5``.
+   * - :ref:`collisions`
+     - Head-on, overtaking, crossing, bend collisions (Hansen eq.
+       4.2-4.4, Pedersen).
+   * - :ref:`powered`
+     - IWRAP Category II powered grounding + allision
+       (:math:`N_{II} = P_c Q m \exp(-d/(a_i V))`).
+
+
+Default causation factors
+==========================
+
+OMRAT ships the IALA default table.  These are the values most
+published studies use unless there's local data.
+
+.. list-table:: Default causation factors (IALA / Fujii / Pedersen)
+   :header-rows: 1
+   :widths: 35 22 22 21
+
+   * - Accident type
+     - IALA default
      - Fujii (1974)
      - Notes
    * - Head-on collision
      - :math:`4.9 \times 10^{-5}`
      - :math:`4.9 \times 10^{-5}`
-     - Traffic separation helps
+     - TSS present helps; higher in narrow lanes.
    * - Overtaking collision
      - :math:`1.1 \times 10^{-4}`
      - :math:`1.1 \times 10^{-4}`
@@ -92,11 +75,11 @@ historical accident data.
    * - Crossing collision
      - :math:`1.3 \times 10^{-4}`
      - :math:`1.2 \times 10^{-4}`
-     - Pedersen value
+     - Pedersen value.
    * - Bend collision
      - :math:`1.3 \times 10^{-4}`
      - --
-     - Pedersen value
+     - Pedersen value.
    * - Powered grounding
      - :math:`1.6 \times 10^{-4}`
      - :math:`1.6 \times 10^{-4}`
@@ -108,154 +91,125 @@ historical accident data.
    * - Drifting
      - :math:`1.0`
      - --
-     - No avoidance (powerless)
+     - No avoidance -- the ship is powerless.
 
-**Adjustment factors** can modify the base causation probabilities:
+Local adjustment factors are typically applied on top:
 
-- **Ferry/passenger vessels**: :math:`\div 20` (two navigators, familiar
-  route)
-- **Pilot on board**: :math:`\div 3` (COWIconsult)
-- **Poor visibility (3--10%)**: :math:`\times 2`
-- **Poor visibility (10--30%)**: :math:`\times 8`
+* **Ferry / passenger vessels** -- divide by 20 (two navigators,
+  well-known route).
+* **Pilot on board** -- divide by 3 (COWIconsult).
+* **Poor visibility (3-10 %)** -- multiply by 2.
+* **Poor visibility (10-30 %)** -- multiply by 8.
 
-.. container:: source-code-ref
-
-   ``omrat_utils/causation_factors.py`` -- `CausationFactors <https://github.com/axelande/OMRAT/blob/main/omrat_utils/causation_factors.py>`__ (manages causation factor values)
-
-
-Lateral Traffic Distribution
-============================
-
-Vessel positions across a shipping lane are modelled as a mixture of
-up to three normal distributions plus one uniform distribution:
-
-.. math::
-
-   f(z) = \sum_{i=1}^{3} w_i \cdot \phi\!\left(\frac{z - \mu_i}{\sigma_i}\right)
-        + w_u \cdot U(z; a, b)
-
-Where:
-
-- :math:`z` = lateral distance from the leg centreline (metres)
-- :math:`w_i` = weight of normal component :math:`i` (all weights sum to 1)
-- :math:`\mu_i, \sigma_i` = mean and standard deviation of component :math:`i`
-- :math:`w_u` = weight of the uniform component
-- :math:`U(z; a, b)` = uniform distribution between :math:`a` and :math:`b`
-
-These distributions can be fitted automatically from AIS data or
-entered manually. The distribution parameters are stored per segment
-and per direction.
-
-.. container:: source-code-ref
-
-   ``geometries/drift/distribution.py:66`` -- `get_distribution_width() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/distribution.py#L66>`__
+Adjust these in **Settings -> Causation Factors** if your project
+needs them.
 
 
-Coordinate Systems
-==================
+Lateral traffic distribution
+==============================
 
-OMRAT uses two coordinate reference systems:
-
-- **WGS84 (EPSG:4326)** -- Geographic coordinates (longitude, latitude)
-  for storage and display
-- **UTM** -- Projected coordinates (metres) for distance calculations
-
-The appropriate UTM zone is determined automatically from the centroid
-of the study area:
+Ship positions across a lane are modelled as a **mixture** of up to
+three Gaussian components and one uniform component:
 
 .. math::
 
-   \text{zone} = \left\lfloor \frac{\text{longitude} + 180}{6} \right\rfloor + 1
+   f(z) = \sum_{i=1}^{3} w_i \; \phi\!\left(\frac{z - \mu_i}{\sigma_i}\right)
+        + w_u \; U(z; a, b)
 
-Northern hemisphere uses EPSG codes 326XX; southern hemisphere uses
-327XX, where XX is the zone number.
+where
 
-All distance-dependent calculations (drift distances, corridor widths,
-collision geometry) are performed in UTM coordinates to ensure metric
-accuracy.
+* :math:`z` is the lateral distance from the leg centreline (m),
+* :math:`w_i`, :math:`\mu_i`, :math:`\sigma_i` are the weight, mean,
+  and standard deviation of Gaussian :math:`i`,
+* :math:`w_u` is the weight of the uniform component on
+  :math:`[a, b]`,
+* weights are normalised so :math:`\sum w_i + w_u = 1`.
 
-.. container:: source-code-ref
+You can fit the mixture from AIS data or set it by hand.  Values are
+stored per segment per direction (``mean1_1``, ``std1_1``,
+``weight1_1``, ``u_min1``, ``u_max1``, ``u_p1``, etc.).
 
-   ``geometries/drift/coordinates.py:12`` -- `get_utm_crs() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L12>`__ |
-   ``geometries/drift/coordinates.py:28`` -- `transform_geometry() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L28>`__
+Implemented in
+:func:`compute.data_preparation.get_distribution`.
 
 
-Compass Angle Convention
-========================
+Coordinate systems
+===================
 
-OMRAT uses a **nautical compass convention** for wind and drift
-directions:
+* **WGS84 (EPSG:4326)** -- all stored geometry, user inputs, and the
+  ``.omrat`` JSON file.  Lon/lat.
+* **UTM** -- used internally for metric calculations.  OMRAT picks
+  the zone from the study-area centroid and projects once per run.
 
-.. image:: _static/images/wind_rose.svg
-   :width: 60%
-   :align: center
-   :alt: Wind rose showing 8 compass directions
+The drifting model lives in UTM end-to-end.  The powered model uses
+a cheaper per-project **equirectangular** projection centred on the
+first leg's start point (``SimpleProjector``), which is fine at the
+per-leg length scale where rays travel tens of kilometres.
 
-.. list-table:: Direction Angles
-   :widths: 20 20 60
+
+Compass convention
+===================
+
+OMRAT uses **standard nautical bearings** everywhere: 0 = N, 90 = E,
+180 = S, 270 = W, measured **clockwise from north**.  The wind rose,
+stored segment bearings, and drift directions all follow this
+convention.
+
+Internal math uses the standard **math** convention (0 = E,
+counter-clockwise).  The conversion is:
+
+.. math::
+
+   \theta_\mathrm{math} = (90^\circ - \theta_\mathrm{compass}) \bmod 360^\circ
+
+Canonical implementation:
+``drifting/engine.py:compass_to_math_deg``.  Callers that need an
+``(x, y)`` step-vector directly use ``geometries/drift/coordinates.py:compass_to_vector``.
+
+.. list-table:: Direction -> compass bearing
    :header-rows: 1
+   :widths: 15 15 70
 
    * - Direction
-     - Angle
-     - Description
+     - Bearing
+     - Vector (+X=East, +Y=North)
    * - N
-     - 0 deg
-     - North (+Y in UTM)
-   * - NW
-     - 45 deg
-     - NorthWest
-   * - W
-     - 90 deg
-     - West (-X in UTM)
-   * - SW
-     - 135 deg
-     - SouthWest
-   * - S
-     - 180 deg
-     - South (-Y in UTM)
-   * - SE
-     - 225 deg
-     - SouthEast
-   * - E
-     - 270 deg
-     - East (+X in UTM)
+     - 0
+     - (0, +d)
    * - NE
-     - 315 deg
-     - NorthEast
-
-To convert from compass to mathematical convention (0 deg = East, CCW):
-
-.. math::
-
-   \theta_{\text{math}} = 90^\circ + \theta_{\text{compass}}
-
-The vector components in UTM are then:
-
-.. math::
-
-   dx = \cos(\theta_{\text{math}}) \times d, \qquad
-   dy = \sin(\theta_{\text{math}}) \times d
-
-.. container:: source-code-ref
-
-   ``geometries/drift/coordinates.py:45`` -- `compass_to_vector() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/coordinates.py#L45>`__
+     - 45
+     - (+d/sqrt(2), +d/sqrt(2))
+   * - E
+     - 90
+     - (+d, 0)
+   * - SE
+     - 135
+     - (+d/sqrt(2), -d/sqrt(2))
+   * - S
+     - 180
+     - (0, -d)
+   * - SW
+     - 225
+     - (-d/sqrt(2), -d/sqrt(2))
+   * - W
+     - 270
+     - (-d, 0)
+   * - NW
+     - 315
+     - (-d/sqrt(2), +d/sqrt(2))
 
 
 References
-==========
+===========
 
-- Friis-Hansen, P. (2008). *IWRAP MK II - Basic Modelling Principles
+* Friis-Hansen, P. (2008). *IWRAP MK II - Basic Modelling Principles
   for Prediction of Collision and Grounding Frequencies.* Technical
   University of Denmark.
-
-- Pedersen, P.T. (1995). *Collision and Grounding Mechanics.* WEMT'95.
-
-- Fujii, Y. et al. (1974). *Some factors affecting the frequency of
+* Pedersen, P.T. (1995). *Collision and Grounding Mechanics.* WEMT'95.
+* Fujii, Y. et al. (1974). *Some factors affecting the frequency of
   accidents in marine traffic.* Journal of Navigation, 27.
-
-- Talavera, A. et al. (2013). *Application of Dempster-Shafer theory
+* Talavera, A. et al. (2013). *Application of Dempster-Shafer theory
   for the quantification and propagation of the uncertainty caused by
-  the use of AIS data.* Reliability Engineering and System Safety, 111,
-  95--105.
-
-- Engberg, P.C. (2017). *IWRAP Mk2 v5.3.0 Manual.* GateHouse A/S.
+  the use of AIS data.* Reliability Engineering and System Safety,
+  111, 95-105.
+* Engberg, P.C. (2017). *IWRAP Mk2 v5.3.0 Manual.* GateHouse A/S.

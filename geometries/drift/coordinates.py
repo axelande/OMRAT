@@ -44,34 +44,36 @@ def transform_geometry(geom, from_crs: CRS, to_crs: CRS):
 
 def compass_to_vector(angle_deg: float, distance: float) -> tuple[float, float]:
     """
-    Convert compass angle and distance to (dx, dy) vector.
+    Convert nautical-compass angle + distance to a (dx, dy) vector in UTM.
 
-    Uses the spec/nautical convention (counter-clockwise from North):
+    Uses the standard nautical compass convention (clockwise from North):
         0° = North = +Y
-        45° = NorthWest = -X, +Y
-        90° = West = -X
-        135° = SouthWest = -X, -Y
+        45° = NorthEast = +X, +Y
+        90° = East = +X
+        135° = SouthEast = +X, -Y
         180° = South = -Y
-        225° = SouthEast = +X, -Y
-        270° = East = +X
-        315° = NorthEast = +X, +Y
+        225° = SouthWest = -X, -Y
+        270° = West = -X
+        315° = NorthWest = -X, +Y
 
-    UTM convention: +X=East, +Y=North
+    UTM convention: +X = East, +Y = North.
+
+    Matches :func:`drifting.engine.compass_to_math_deg`
+    (``math_angle = (90 - compass_deg) % 360``), which is the canonical
+    compass/math conversion used throughout the drifting model.
 
     Args:
-        angle_deg: Compass angle in degrees (0=N, 90=W, 180=S, 270=E)
-        distance: Distance in meters
+        angle_deg: Compass angle in degrees (0=N, 90=E, 180=S, 270=W).
+        distance: Distance in metres.
 
     Returns:
-        (dx, dy) tuple in UTM coordinates
+        ``(dx, dy)`` tuple in UTM coordinates.
     """
-    # Convert spec convention to math angle:
-    # Spec 0° (N) = Math 90° (+Y)
-    # Spec 90° (W) = Math 180° (-X)
-    # Spec 180° (S) = Math 270° (-Y)
-    # Spec 270° (E) = Math 0° (+X)
-    # Formula: math_angle = 90 + angle_deg (counter-clockwise rotation)
-    math_angle = 90 + angle_deg
+    # Spec 0° (N) -> Math 90° (+Y)
+    # Spec 90° (E) -> Math 0° (+X)
+    # Spec 180° (S) -> Math 270° (-Y)
+    # Spec 270° (W) -> Math 180° (-X)
+    math_angle = 90.0 - angle_deg
     rad = np.radians(math_angle)
     dx = np.cos(rad) * distance
     dy = np.sin(rad) * distance

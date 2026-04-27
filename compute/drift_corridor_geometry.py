@@ -75,13 +75,8 @@ def _extract_obstacle_segments(geom: BaseGeometry) -> list[tuple[tuple[float, fl
     elif isinstance(geom, MultiPolygon):
         for poly in geom.geoms:
             segments.extend(_extract_obstacle_segments(poly))
-    elif hasattr(geom, 'boundary'):
-        boundary = geom.boundary
-        if hasattr(boundary, 'coords'):
-            extract_from_ring(boundary.coords)
-        elif hasattr(boundary, 'geoms'):
-            for line in boundary.geoms:
-                extract_from_ring(line.coords)
+    # Any other geometry type (Point, LineString, GeometryCollection, ...) has
+    # no useful "obstacle edge" for drift-hit detection and is ignored.
 
     return segments
 
@@ -219,11 +214,10 @@ def _segment_intersects_corridor(
     drift_angle_rad = np.radians(drift_angle)
     drift_dir = np.array([np.cos(drift_angle_rad), np.sin(drift_angle_rad)])
 
-    # Calculate segment vector and normal
+    # Calculate segment vector and normal.  Any zero-length segment would have
+    # failed the earlier ``intersection.is_empty`` check so seg_len > 0 here.
     seg_vec = np.array([p2[0] - p1[0], p2[1] - p1[1]])
     seg_len = np.linalg.norm(seg_vec)
-    if seg_len == 0:
-        return False
 
     # Outward normal for CCW polygon: rotate segment vector 90 deg clockwise
     # For segment (p1 -> p2), outward normal points to the RIGHT of the direction
@@ -268,3 +262,80 @@ def _segment_intersects_corridor(
         return False
 
     return True
+
+
+def segment_corridor_overlap_length(
+    segment: tuple[tuple[float, float], tuple[float, float]],
+    corridor: "Polygon",
+    drift_angle: float | None = None,
+    leg_centroid: tuple[float, float] | None = None,
+) -> float:
+    """Return the corridor-intersection length for a segment, or 0 if missed.
+
+    Combines the shapely work of :func:`_segment_intersects_corridor` with
+    the overlap-length measurement that immediately followed it at every
+    caller in :mod:`compute.drifting_model`.  The original pair performed
+    ``corridor.intersection(seg_line)`` twice -- once to decide "hit?" and
+    a second time to measure -- which cost ~300k duplicate shapely
+    intersections on proj.omrat.  Using this helper runs the intersection
+    exactly once.
+
+    Returns ``0.0`` for segments that don't hit, that face the wrong way,
+    or whose overlap is degenerate (point touch).  The drift-direction
+    filter runs before any shapely work so most misses (~74 % on
+    proj.omrat) never allocate a LineString.
+    """
+    p1, p2 = segment
+
+    # Drift-direction pre-filter.  Cheap arithmetic that rejects segments
+    # that can never be hit (facing away, nearly parallel, far behind the
+    # leg).  Running this before the shapely work saves ~1.4M shapely
+    # ops on proj.omrat.
+    if drift_angle is not None and leg_centroid is not None:
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        seg_len_sq = dx * dx + dy * dy
+        if seg_len_sq <= 0.0:
+            return 0.0
+        inv_len = seg_len_sq ** -0.5
+
+        # Outward normal for CCW polygon = (dy, -dx) / len
+        nx = dy * inv_len
+        ny = -dx * inv_len
+
+        drift_rad = np.radians(drift_angle)
+        drift_ux = float(np.cos(drift_rad))
+        drift_uy = float(np.sin(drift_rad))
+
+        drift_into_segment = drift_ux * nx + drift_uy * ny
+        if abs(drift_into_segment) < 0.17 or drift_into_segment > 0:
+            return 0.0
+
+        mx = 0.5 * (p1[0] + p2[0])
+        my = 0.5 * (p1[1] + p2[1])
+        vx = mx - leg_centroid[0]
+        vy = my - leg_centroid[1]
+        dist_to_segment_sq = vx * vx + vy * vy
+        if dist_to_segment_sq > 0.0:
+            distance_ahead = vx * drift_ux + vy * drift_uy
+            if distance_ahead < -0.5 * dist_to_segment_sq ** 0.5:
+                return 0.0
+
+    seg_line = LineString([p1, p2])
+
+    if not corridor.intersects(seg_line):
+        return 0.0
+    intersection = corridor.intersection(seg_line)
+    if intersection.is_empty:
+        return 0.0
+    if intersection.geom_type == 'Point':
+        t = 0.01
+        interior_p1 = (p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]))
+        interior_p2 = (p1[0] + (1 - t) * (p2[0] - p1[0]), p1[1] + (1 - t) * (p2[1] - p1[1]))
+        mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+        if not (corridor.contains(Point(interior_p1)) or
+                corridor.contains(Point(interior_p2)) or
+                corridor.contains(Point(mid))):
+            return 0.0
+
+    return float(getattr(intersection, 'length', 0.0))

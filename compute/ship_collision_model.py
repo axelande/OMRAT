@@ -371,6 +371,7 @@ class ShipCollisionModelMixin:
         leg_keys: list[str],
         pc_crossing: float,
         length_intervals: list[dict],
+        by_waypoint: dict[tuple[float, float], float] | None = None,
     ) -> float:
         """Calculate crossing collision frequency between all leg pairs.
 
@@ -378,6 +379,11 @@ class ShipCollisionModelMixin:
         and meet at a non-trivial angle.
 
         Returns the total crossing collision frequency.
+
+        If ``by_waypoint`` is provided, per-waypoint contributions are
+        accumulated into it (key = ``(lon, lat)``).  This lets the result
+        layer place a point at each shared waypoint with the summed
+        crossing probability for legs meeting there.
         """
         total_crossing = 0.0
         total_legs = len(leg_keys)
@@ -400,12 +406,16 @@ class ShipCollisionModelMixin:
                 s2_start = self._parse_point(seg2.get('Start_Point', ''))
                 s2_end = self._parse_point(seg2.get('End_Point', ''))
 
-                # Only compute crossing if the legs share a waypoint
-                shares_waypoint = (
-                    self._points_match(s1_start, s2_start) or self._points_match(s1_start, s2_end) or
-                    self._points_match(s1_end, s2_start) or self._points_match(s1_end, s2_end)
-                )
-                if not shares_waypoint:
+                # Only compute crossing if the legs share a waypoint.
+                # We also remember WHICH waypoint they share so the
+                # per-waypoint result layer can attribute the crossing
+                # contribution to the correct point.
+                shared_pt: tuple[float, float] | None = None
+                if self._points_match(s1_start, s2_start) or self._points_match(s1_start, s2_end):
+                    shared_pt = s1_start
+                elif self._points_match(s1_end, s2_start) or self._points_match(s1_end, s2_end):
+                    shared_pt = s1_end
+                if shared_pt is None:
                     crossing_pairs_processed += 1
                     continue
 
@@ -507,7 +517,10 @@ class ShipCollisionModelMixin:
                                             B1=b1, B2=b2,
                                             theta=crossing_angle_rad
                                         )
-                                        total_crossing += n_g_crossing * pc_crossing
+                                        contrib = n_g_crossing * pc_crossing
+                                        total_crossing += contrib
+                                        if by_waypoint is not None and shared_pt is not None:
+                                            by_waypoint[shared_pt] = by_waypoint.get(shared_pt, 0.0) + contrib
 
                 crossing_pairs_processed += 1
                 if total_pairs > 0:
@@ -577,6 +590,13 @@ class ShipCollisionModelMixin:
 
         self._report_progress('spatial', 0.0, "Starting ship collision calculations...")
 
+        # Per-waypoint accumulator -- crossing + bend land here so the
+        # result-layer factory can place a single point per shared
+        # waypoint with the combined probability.
+        # Keys are (lon, lat) tuples; values are dicts.
+        by_waypoint: dict[tuple[float, float], dict[str, float]] = {}
+        crossing_by_wp: dict[tuple[float, float], float] = {}
+
         # Iterate through legs for head-on, overtaking, and bend (same-leg collisions)
         for leg_key in leg_keys:
             leg_dirs = traffic_data.get(leg_key, {})
@@ -602,6 +622,18 @@ class ShipCollisionModelMixin:
                 'bend': leg_bend,
             }
 
+            # Place bend at the leg's END waypoint (where the ship would
+            # fail to turn).  Skip if the END point is unparseable or
+            # the bend is zero -- otherwise we'd litter the map with
+            # zero-value points.
+            if leg_bend > 0.0:
+                end_pt = self._parse_point(seg_info.get('End_Point', ''))
+                if end_pt is not None:
+                    rec = by_waypoint.setdefault(
+                        end_pt, {'crossing': 0.0, 'bend': 0.0}
+                    )
+                    rec['bend'] += leg_bend
+
             total_head_on += leg_head_on
             total_overtaking += leg_overtaking
             total_bend += leg_bend
@@ -613,10 +645,14 @@ class ShipCollisionModelMixin:
                 f"Processing leg {leg_key} ({processed}/{total_legs})..."
             )
 
-        # Crossing collisions between different legs
+        # Crossing collisions between different legs (per-waypoint accum).
         total_crossing = self._calc_crossing_collisions(
-            traffic_data, segment_data, leg_keys, pc_crossing, length_intervals
+            traffic_data, segment_data, leg_keys, pc_crossing, length_intervals,
+            by_waypoint=crossing_by_wp,
         )
+        for pt, contrib in crossing_by_wp.items():
+            rec = by_waypoint.setdefault(pt, {'crossing': 0.0, 'bend': 0.0})
+            rec['crossing'] += contrib
 
         # Compile results
         result['head_on'] = total_head_on
@@ -626,9 +662,16 @@ class ShipCollisionModelMixin:
         result['total'] = total_head_on + total_overtaking + total_crossing + total_bend
 
         self.ship_collision_prob = result['total']
+        # Drop the waypoint-key tuples to JSON-friendly strings; the
+        # result-layer factory parses them back.
+        by_waypoint_serialisable = {
+            f"{pt[0]:.6f} {pt[1]:.6f}": rec
+            for pt, rec in by_waypoint.items()
+        }
         self.collision_report = {
             'totals': result,
             'by_leg': by_leg,
+            'by_waypoint': by_waypoint_serialisable,
             'causation_factors': {
                 'headon': pc_headon,
                 'overtaking': pc_overtaking,
@@ -638,6 +681,20 @@ class ShipCollisionModelMixin:
         }
 
         self._report_progress('layers', 1.0, "Ship collision calculation complete")
+
+        # Build the per-leg line layer + per-waypoint point layer.
+        try:
+            from geometries.result_layers import create_collision_layers
+            self.collision_line_layer, self.collision_point_layer = (
+                create_collision_layers(
+                    self.collision_report, segment_data, add_to_project=False,
+                )
+            )
+        except Exception as e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f"Failed to create ship-collision layers: {e}"
+            )
 
         # Update UI with collision results
         try:

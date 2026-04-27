@@ -27,22 +27,26 @@ from qgis.core import (
     QgsGraduatedSymbolRenderer,
     QgsRendererRange,
     QgsLineSymbol,
+    QgsMarkerSymbol,
+    QgsFillSymbol,
+    QgsPointXY,
 )
 from qgis.PyQt.QtGui import QColor
 import logging
+import shapely.wkt as sw
 
 logger = logging.getLogger(__name__)
 
-# Drift directions used in the model (compass convention: 0=North, 90=West, etc.)
+# Drift directions used in the model (standard nautical convention: 0=N, 90=E, CW)
 DRIFT_DIRECTIONS = {
     'North': 0,
-    'NorthWest': 45,
-    'West': 90,
-    'SouthWest': 135,
+    'NorthEast': 45,
+    'East': 90,
+    'SouthEast': 135,
     'South': 180,
-    'SouthEast': 225,
-    'East': 270,
-    'NorthEast': 315,
+    'SouthWest': 225,
+    'West': 270,
+    'NorthWest': 315,
 }
 
 
@@ -50,35 +54,33 @@ def _segment_normal_angle(x1: float, y1: float, x2: float, y2: float) -> float:
     """
     Calculate the outward normal angle of a segment.
 
-    For a polygon with counter-clockwise vertices (which is the standard for
-    WGS84 GeoJSON/WKT), the outward normal points to the RIGHT of the segment
-    direction when walking along the boundary.
+    For a polygon with counter-clockwise vertices (the standard for
+    WGS84 GeoJSON/WKT), the outward normal points to the RIGHT of the
+    segment direction when walking along the boundary.
 
     Args:
-        x1, y1: Start point of segment
-        x2, y2: End point of segment
+        x1, y1: Start point of segment.
+        x2, y2: End point of segment.
 
     Returns:
-        Angle in degrees using OMRAT convention:
-        0°=North, 90°=West, 180°=South, 270°=East (CCW from North)
+        Standard nautical bearing in degrees (0°=N, 90°=E, 180°=S,
+        270°=W; clockwise from North).  Matches the compass convention
+        used by the rest of the drifting model, so the angle can be
+        compared directly with ``drift_direction`` values from
+        :func:`_parse_angle_from_key` (which are produced as
+        ``d_idx * 45`` in the same convention).
     """
-    # Segment direction vector
     dx = x2 - x1
     dy = y2 - y1
 
-    # Right perpendicular (outward normal for CCW polygon)
-    # For CCW polygon, outward = right = rotate segment direction -90°
-    # Right perpendicular of (dx, dy) is (dy, -dx)
+    # Right-perpendicular of (dx, dy) in UTM is (dy, -dx) -- the outward
+    # normal for a CCW-wound polygon.
     nx = dy
     ny = -dx
 
-    # Convert to OMRAT angle convention (0=North, 90=West, 180=South, 270=East)
-    # This is CCW from North, so we use: -atan2(nx, ny)
-    # atan2(nx, ny) gives CW from North (standard compass bearing)
-    # Negating gives CCW from North (OMRAT convention)
-    omrat_angle = (-np.degrees(np.arctan2(nx, ny))) % 360
-
-    return omrat_angle
+    # Nautical bearing of (nx, ny) in UTM (+x=East, +y=North):
+    # bearing = atan2(nx, ny) measured clockwise from +y.
+    return float(np.degrees(np.arctan2(nx, ny)) % 360)
 
 
 def _exposure_factor(segment_normal: float, drift_direction: float) -> float:
@@ -684,3 +686,357 @@ def create_result_layers(
             logger.info("Added Grounding Results layer to project")
 
     return allision_layer, grounding_layer
+
+
+# ---------------------------------------------------------------------------
+# Ship-collision result layers (lines on legs, points at waypoints)
+# ---------------------------------------------------------------------------
+
+def _color_ramp(num_classes: int = 5) -> list[QColor]:
+    """Standard green->red ramp shared by every result layer."""
+    return [
+        QColor(0, 255, 0),     # Green - lowest
+        QColor(128, 255, 0),
+        QColor(255, 255, 0),   # Yellow - medium
+        QColor(255, 128, 0),
+        QColor(255, 0, 0),     # Red - highest
+    ][:num_classes]
+
+
+def _apply_graduated(
+    layer: QgsVectorLayer,
+    attribute: str,
+    symbol_factory,  # callable: (QColor, fraction in [0,1]) -> QgsSymbol
+    num_classes: int = 5,
+) -> None:
+    """Generic graduated-symbology helper for line / point / polygon layers.
+
+    ``symbol_factory(color, frac)`` is called once per class to build the
+    range symbol; ``frac`` runs from 0 (lowest class) to 1 (highest) so
+    callers can vary line width / marker size by class.
+    """
+    if layer is None or layer.featureCount() == 0:
+        return
+    if layer.fields().indexOf(attribute) < 0:
+        logger.warning(f"Attribute {attribute} not found on {layer.name()}")
+        return
+    values = [
+        f[attribute] for f in layer.getFeatures()
+        if f[attribute] is not None and f[attribute] > 0
+    ]
+    if not values:
+        return
+    min_val, max_val = min(values), max(values)
+    if min_val >= max_val:
+        symbol = symbol_factory(QColor(255, 255, 0), 0.5)
+        from qgis.core import QgsSingleSymbolRenderer
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        layer.triggerRepaint()
+        return
+    colors = _color_ramp(num_classes)
+    step = (max_val - min_val) / num_classes
+    ranges = []
+    for i in range(num_classes):
+        lower = min_val + i * step
+        upper = min_val + (i + 1) * step
+        frac = (i / max(num_classes - 1, 1)) if num_classes > 1 else 0.0
+        symbol = symbol_factory(colors[min(i, len(colors) - 1)], frac)
+        ranges.append(QgsRendererRange(
+            lower, upper, symbol, f"{lower:.2e} - {upper:.2e}",
+        ))
+    renderer = QgsGraduatedSymbolRenderer(attribute, ranges)
+    renderer.setMode(QgsGraduatedSymbolRenderer.Custom)
+    layer.setRenderer(renderer)
+    layer.triggerRepaint()
+
+
+def _line_symbol_factory(color: QColor, frac: float) -> QgsLineSymbol:
+    """Wider line symbol with transparency, scaled by class fraction."""
+    width = 1.4 + 1.6 * frac      # 1.4mm at low-class, 3.0mm at top-class
+    rgba = f"{color.red()},{color.green()},{color.blue()},140"  # ~55% alpha
+    return QgsLineSymbol.createSimple({
+        'color': rgba,
+        'width': f'{width}',
+        'capstyle': 'round',
+    })
+
+
+def _marker_symbol_factory(color: QColor, frac: float) -> QgsMarkerSymbol:
+    """Bigger circle for higher-class points."""
+    size = 3.0 + 4.0 * frac
+    return QgsMarkerSymbol.createSimple({
+        'name': 'circle',
+        'color': color.name(),
+        'outline_color': '50,50,50,255',
+        'outline_width': '0.4',
+        'size': f'{size}',
+    })
+
+
+def create_collision_layers(
+    collision_report: dict[str, Any] | None,
+    segment_data: dict[str, Any],
+    add_to_project: bool = True,
+) -> tuple[QgsVectorLayer | None, QgsVectorLayer | None]:
+    """Build the two ship-ship collision result layers.
+
+    Returns ``(line_layer, point_layer)``:
+
+    * ``line_layer`` is a per-leg line layer with one feature per leg,
+      attributes ``head_on``, ``overtaking``, and ``combined``
+      (head-on + overtaking).
+    * ``point_layer`` is a point layer with one feature per shared
+      waypoint, attributes ``crossing``, ``bend``, ``combined``
+      (crossing + bend).
+
+    Both layers are styled graduated red->green by ``combined``.  The
+    line symbol is intentionally wider than the digitised route line
+    and semi-transparent so the underlying route stays visible.
+    """
+    if collision_report is None:
+        return None, None
+
+    by_leg = collision_report.get('by_leg', {}) or {}
+    by_waypoint = collision_report.get('by_waypoint', {}) or {}
+
+    # ----- per-leg line layer -----
+    line_layer = QgsVectorLayer(
+        'LineString?crs=EPSG:4326', 'Ship-Ship Collision (per leg)', 'memory',
+    )
+    lp = line_layer.dataProvider()
+    lp.addAttributes([
+        QgsField('leg_id', QVariant.String),
+        QgsField('head_on', QVariant.Double),
+        QgsField('overtaking', QVariant.Double),
+        QgsField('combined', QVariant.Double),
+    ])
+    line_layer.updateFields()
+    line_feats: list[QgsFeature] = []
+    for leg_id, contribs in by_leg.items():
+        seg = segment_data.get(leg_id, {})
+        sp_str = seg.get('Start_Point', '')
+        ep_str = seg.get('End_Point', '')
+        if not sp_str or not ep_str:
+            continue
+        try:
+            sp = [float(x) for x in str(sp_str).split()][:2]
+            ep = [float(x) for x in str(ep_str).split()][:2]
+        except (TypeError, ValueError):
+            continue
+        head_on = float(contribs.get('head_on', 0.0) or 0.0)
+        overtaking = float(contribs.get('overtaking', 0.0) or 0.0)
+        combined = head_on + overtaking
+        if combined <= 0.0:
+            continue
+        feat = QgsFeature(line_layer.fields())
+        feat.setGeometry(QgsGeometry.fromPolylineXY([
+            QgsPointXY(sp[0], sp[1]), QgsPointXY(ep[0], ep[1]),
+        ]))
+        feat.setAttribute('leg_id', str(leg_id))
+        feat.setAttribute('head_on', head_on)
+        feat.setAttribute('overtaking', overtaking)
+        feat.setAttribute('combined', combined)
+        line_feats.append(feat)
+    lp.addFeatures(line_feats)
+    _apply_graduated(line_layer, 'combined', _line_symbol_factory)
+
+    # ----- per-waypoint point layer -----
+    point_layer = QgsVectorLayer(
+        'Point?crs=EPSG:4326', 'Ship-Ship Collision (waypoints)', 'memory',
+    )
+    pp = point_layer.dataProvider()
+    pp.addAttributes([
+        QgsField('waypoint', QVariant.String),
+        QgsField('crossing', QVariant.Double),
+        QgsField('bend', QVariant.Double),
+        QgsField('combined', QVariant.Double),
+    ])
+    point_layer.updateFields()
+    point_feats: list[QgsFeature] = []
+    for wp_key, rec in by_waypoint.items():
+        try:
+            lon_str, lat_str = wp_key.split()
+            lon, lat = float(lon_str), float(lat_str)
+        except Exception:
+            continue
+        crossing = float(rec.get('crossing', 0.0) or 0.0)
+        bend = float(rec.get('bend', 0.0) or 0.0)
+        combined = crossing + bend
+        if combined <= 0.0:
+            continue
+        feat = QgsFeature(point_layer.fields())
+        feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
+        feat.setAttribute('waypoint', wp_key)
+        feat.setAttribute('crossing', crossing)
+        feat.setAttribute('bend', bend)
+        feat.setAttribute('combined', combined)
+        point_feats.append(feat)
+    pp.addFeatures(point_feats)
+    _apply_graduated(point_layer, 'combined', _marker_symbol_factory)
+
+    if add_to_project:
+        if line_layer.featureCount() > 0:
+            QgsProject.instance().addMapLayer(line_layer)
+            logger.info(
+                "Added Ship-Ship Collision (per leg) layer "
+                f"with {line_layer.featureCount()} features"
+            )
+        if point_layer.featureCount() > 0:
+            QgsProject.instance().addMapLayer(point_layer)
+            logger.info(
+                "Added Ship-Ship Collision (waypoints) layer "
+                f"with {point_layer.featureCount()} features"
+            )
+
+    return line_layer, point_layer
+
+
+# ---------------------------------------------------------------------------
+# Powered (Cat II) result layers (polygons graduated by per-obstacle prob)
+# ---------------------------------------------------------------------------
+
+def _polygon_symbol_factory(color: QColor, frac: float) -> QgsFillSymbol:
+    """Polygon fill scaled by class fraction; semi-transparent."""
+    rgba = f"{color.red()},{color.green()},{color.blue()},150"  # ~60% alpha
+    return QgsFillSymbol.createSimple({
+        'color': rgba,
+        'outline_color': color.darker(180).name(),
+        'outline_width': f'{0.4 + 0.4 * frac}',
+    })
+
+
+def _build_powered_layer(
+    name: str,
+    by_obstacle: dict[str, float],
+    obstacle_records: list[dict[str, Any]],
+    value_key: str,            # 'depth' or 'height'
+    add_to_project: bool,
+    by_obstacle_leg: dict[str, dict[str, float]] | None = None,
+) -> QgsVectorLayer | None:
+    """Construct a polygon layer coloured by per-obstacle powered probability.
+
+    ``obstacle_records`` is the list-of-dicts form (from
+    ``DriftingModelMixin._last_structures`` / ``_last_depths``) with keys
+    ``id``, ``wkt`` (UTM) or ``wkt_wgs84``, and either ``depth`` or
+    ``height``.  We prefer ``wkt_wgs84`` so the result layer renders in
+    WGS84 alongside the input layers.
+
+    When ``by_obstacle_leg`` is provided, one extra attribute is added
+    per leg ID encountered (``leg_<id>``) with that leg's contribution
+    to the obstacle's total powered probability.  Click-to-inspect on
+    the obstacle then shows where the risk is coming from.
+    """
+    if not by_obstacle:
+        return None
+    layer = QgsVectorLayer(
+        'MultiPolygon?crs=EPSG:4326', name, 'memory',
+    )
+    pr = layer.dataProvider()
+    fields = [
+        QgsField('obstacle_id', QVariant.String),
+        QgsField('value', QVariant.Double),
+        QgsField('total_prob', QVariant.Double),
+    ]
+    # Collect every leg id that contributed anywhere so all features
+    # share the same set of leg_X columns.
+    all_leg_ids: list[str] = []
+    leg_to_field: dict[str, str] = {}
+    if by_obstacle_leg:
+        seen: set[str] = set()
+        for legs_for_obs in by_obstacle_leg.values():
+            for leg_id in legs_for_obs:
+                if leg_id not in seen:
+                    seen.add(leg_id)
+                    all_leg_ids.append(str(leg_id))
+        all_leg_ids.sort()
+        for leg_id in all_leg_ids:
+            field_name = f'leg_{leg_id}'
+            leg_to_field[leg_id] = field_name
+            fields.append(QgsField(field_name, QVariant.Double))
+    pr.addAttributes(fields)
+    layer.updateFields()
+
+    lookup = {str(rec.get('id', '')): rec for rec in obstacle_records}
+    feats: list[QgsFeature] = []
+    for obs_id, prob in by_obstacle.items():
+        if prob <= 0.0:
+            continue
+        meta = lookup.get(str(obs_id))
+        if meta is None:
+            continue
+        geom = meta.get('wkt_wgs84') or meta.get('wkt')
+        if geom is None:
+            continue
+        try:
+            qgis_geom = QgsGeometry.fromWkt(geom.wkt if hasattr(geom, 'wkt') else str(geom))
+        except Exception:
+            continue
+        if qgis_geom is None or qgis_geom.isEmpty():
+            continue
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(qgis_geom)
+        feat.setAttribute('obstacle_id', str(obs_id))
+        try:
+            feat.setAttribute('value', float(meta.get(value_key, 0.0) or 0.0))
+        except (TypeError, ValueError):
+            feat.setAttribute('value', 0.0)
+        feat.setAttribute('total_prob', float(prob))
+        # Per-leg attributes default to 0.0; fill in those that contributed.
+        if by_obstacle_leg is not None:
+            obs_leg_contribs = by_obstacle_leg.get(str(obs_id), {})
+            for leg_id, field_name in leg_to_field.items():
+                feat.setAttribute(
+                    field_name, float(obs_leg_contribs.get(leg_id, 0.0) or 0.0),
+                )
+        feats.append(feat)
+    pr.addFeatures(feats)
+    _apply_graduated(layer, 'total_prob', _polygon_symbol_factory)
+    if add_to_project and layer.featureCount() > 0:
+        QgsProject.instance().addMapLayer(layer)
+        logger.info(f"Added {name} layer with {layer.featureCount()} features")
+    return layer
+
+
+def create_powered_grounding_layer(
+    powered_grounding_report: dict[str, Any] | None,
+    depths: list[dict[str, Any]],
+    add_to_project: bool = True,
+) -> QgsVectorLayer | None:
+    """One polygon per depth contour, coloured by powered-grounding probability.
+
+    Adds one ``leg_<id>`` attribute per leg that contributed, so the
+    user can inspect which leg dominates each grounding hotspot.
+    """
+    if not powered_grounding_report:
+        return None
+    by_obstacle = powered_grounding_report.get('by_obstacle', {}) or {}
+    if not by_obstacle:
+        return None
+    by_obstacle_leg = powered_grounding_report.get('by_obstacle_leg', {}) or {}
+    return _build_powered_layer(
+        'Powered Grounding Results',
+        by_obstacle, depths, 'depth', add_to_project,
+        by_obstacle_leg=by_obstacle_leg,
+    )
+
+
+def create_powered_allision_layer(
+    powered_allision_report: dict[str, Any] | None,
+    structures: list[dict[str, Any]],
+    add_to_project: bool = True,
+) -> QgsVectorLayer | None:
+    """One polygon per structure, coloured by powered-allision probability.
+
+    Adds one ``leg_<id>`` attribute per leg that contributed.
+    """
+    if not powered_allision_report:
+        return None
+    by_obstacle = powered_allision_report.get('by_obstacle', {}) or {}
+    if not by_obstacle:
+        return None
+    by_obstacle_leg = powered_allision_report.get('by_obstacle_leg', {}) or {}
+    return _build_powered_layer(
+        'Powered Allision Results',
+        by_obstacle, structures, 'height', add_to_project,
+        by_obstacle_leg=by_obstacle_leg,
+    )

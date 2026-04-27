@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+title: OMRAT -- Open Maritime Risk Analysis Tool
+message: >-
+  If you use OMRAT in a publication, please cite it using
+  the metadata below.  Additionally cite the underlying IWRAP
+  methodology references (Friis-Hansen 2008, Pedersen 1995).
+type: software
+authors:
+  - family-names: Horteborn
+    given-names: Axel
+    email: axel.horteborn@ri.se
+    affiliation: RISE Research Institutes of Sweden
+repository-code: https://github.com/axelande/OMRAT
+url: https://axelande.github.io/OMRAT/index.html
+abstract: >-
+  OMRAT is a QGIS plugin that calculates the probability of
+  maritime accidents -- collisions, groundings, and allisions --
+  for defined shipping routes.  It implements the IWRAP
+  methodology (Friis-Hansen 2008, Pedersen 1995) as an
+  open-source QGIS plugin funded by Naturvardsverket
+  (Swedish Environmental Protection Agency) and
+  RISE Research Institutes of Sweden.
+keywords:
+  - maritime risk assessment
+  - IWRAP
+  - QGIS plugin
+  - ship collision
+  - grounding
+  - allision
+  - drifting risk
+license: GPL-2.0-or-later
+references:
+  - type: article
+    authors:
+      - family-names: Pedersen
+        given-names: Preben Terndrup
+    year: 1995
+    title: Collision and Grounding Mechanics
+    conference:
+      name: WEMT'95 Proceedings
+  - type: report
+    authors:
+      - family-names: Friis-Hansen
+        given-names: Peter
+    year: 2008
+    title: >-
+      IWRAP MK II - Basic Modelling Principles for Prediction of
+      Collision and Grounding Frequencies
+    institution:
+      name: Technical University of Denmark

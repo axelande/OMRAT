@@ -32,7 +32,7 @@ def clip_corridor_at_obstacles(corridor: Polygon, obstacles: list,
     Args:
         corridor: The corridor polygon (in UTM)
         obstacles: List of (polygon, value) tuples
-        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E)
+        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
         log_prefix: Prefix for log messages (empty string to disable logging)
 
     Returns:
@@ -146,7 +146,7 @@ def split_corridor_by_anchor_zone(
         clipped: The corridor polygon after obstacle clipping (UTM).
         anchor_zone: Union of all depth cells where anchoring is
             possible (depth < anchor_threshold), in the same CRS.
-        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E).
+        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W).
         corridor_bounds: (minx, miny, maxx, maxy) of the *original*
             (unclipped) corridor – used to size shadows.
 
@@ -211,7 +211,7 @@ def keep_reachable_part(clipped: Polygon, original_corridor: Polygon,
     Args:
         clipped: The corridor after subtracting obstacles
         original_corridor: The original corridor before clipping
-        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E)
+        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
         log_prefix: Prefix for log messages (empty string to disable logging)
 
     Returns:
@@ -264,7 +264,7 @@ def _get_upwind_edge(bounds: tuple[float, float, float, float],
 
     Args:
         bounds: (minx, miny, maxx, maxy) of the corridor
-        drift_angle_deg: Compass angle (0=N, 90=W, 180=S, 270=E)
+        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
 
     Returns:
         Thin box polygon along the upwind edge

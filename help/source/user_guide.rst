@@ -1,299 +1,616 @@
 .. _user_guide:
 
-==========
+============
 User Guide
-==========
+============
 
-This chapter provides step-by-step instructions for using OMRAT to
-perform a maritime risk assessment.
+This chapter walks through the plugin **tab by tab**, explaining what
+every button and field does.  It assumes you've already installed
+OMRAT (:ref:`installation`) and opened the dock widget (:ref:`quickstart`).
+
+Need a term defined?  See :ref:`concepts`.  Need a specific workflow
+("I have AIS data, how do I ...")?  See :ref:`workflows`.
 
 .. contents:: In this chapter
    :local:
    :depth: 2
 
 
-Quick Start
-===========
+The dock widget
+=================
 
-A typical OMRAT workflow consists of five steps:
+OMRAT's entire UI lives in one dockable widget.  The top of the widget
+has a **menu bar** (File, Settings, View) and the main area has a
+stack of **tabs**:
 
-1. **Define routes** -- Digitise shipping lanes on the map
-2. **Add traffic data** -- Enter ship frequencies and dimensions
-3. **Define obstacles** -- Add depth and structure polygons
-4. **Configure parameters** -- Set drift settings and causation factors
-5. **Run calculations** -- Execute the risk assessment
+.. figure:: _static/screenshots/ui_dock_tabs_annotated.png
+   :width: 100%
+   :alt: Annotated OMRAT dock widget showing menu and tabs
 
-Each step is described in detail below.
+   The dock widget.  Menu at top, tabs in the middle, progress and
+   messages at the bottom.
 
-
-Step 1: Defining Routes
-========================
-
-Opening the Plugin
--------------------
-
-Click the OMRAT icon in the QGIS toolbar, or go to **Plugins** > **Open
-Maritime Risk Analysis Tool** > **Omrat**. The OMRAT dock widget opens
-on the right side of the QGIS window.
-
-Digitising a Route
---------------------
-
-1. Go to the **Route** tab in the OMRAT widget.
-2. Click **Add Route** to start digitising.
-3. Click on the map to set the first waypoint. A point marker appears.
-4. Click again to create a leg segment between the first and second
-   points. A blue line appears on the map.
-5. Continue clicking to add more segments to the route. Each click
-   creates a new segment from the previous point.
-6. Click **Stop Route** when the route is complete.
-
-Each segment is automatically assigned:
-
-- A **Segment ID** and **Route ID**
-- **Direction labels** (e.g., "North going" / "South going") based on
-  the segment orientation
-- A default **width** of 5000 m (editable in the route table)
-
-Route Width
------------
-
-The route width is shown as a perpendicular line at the midpoint of each
-segment. To change the width:
-
-1. Edit the **Width** column in the route table
-2. The visual offset line updates automatically
-
-Editing Existing Segments
--------------------------
-
-You can edit an existing route leg directly on the map (vertex/line
-editing in QGIS). When geometry changes:
-
-- The route table ``Start_Point`` / ``End_Point`` values are updated
-- Segment direction labels are recalculated
-- Segment ``line_length`` is recalculated in metres
-
-These updates are persisted to project save/export (including IWRAP
-export), so edited map geometry and exported model geometry stay in
-sync.
+The workflow is to fill tabs left-to-right, then press **Run Model**
+on the Results tab.  You can come back and tweak any tab and rerun.
 
 
-Step 2: Traffic Data
-=====================
+Route tab
+=========
 
-Selecting a Segment
---------------------
+.. figure:: _static/screenshots/ui_tab_route.png
+   :width: 90%
+   :alt: The Route tab showing the segment table
 
-1. Go to the **Traffic** tab.
-2. Select a segment from the **Segment** dropdown.
-3. Select a direction from the **Direction** dropdown.
-4. Select a data variable (Frequency, Speed, Draught, Height, Beam).
+   The Route tab lists every leg of the shipping route.
 
-Entering Data
---------------
+A **route** is a polyline split into one or more **segments** (legs).
+Each segment has:
 
-The traffic table has rows for each ship type and columns for each ship
-size category. Enter:
+* **Start_Point** / **End_Point** -- lon/lat of the two endpoints.
+* **Width** -- the lateral extent (metres) used to draw the corridor
+  marker on the map.  This is *visualisation only*; the actual lateral
+  spread used in the calculation comes from the Distributions tab.
+* **Dirs** -- the two direction labels auto-derived from the segment's
+  compass bearing (``"North going"`` / ``"South going"``, etc.).
+* **bearing** -- stored compass bearing in degrees.
+* **ai1**, **ai2** -- IWRAP "position check interval" in seconds for
+  directions 1 and 2.  Used by the powered-grounding / allision
+  calculations (:math:`N_{II} = P_c Q \cdot m \cdot \exp(-d/(a_i V))`).
 
-- **Frequency** (ships/year): Integer count of vessels per year
-- **Speed** (knots): Average speed for the ship type/size
-- **Draught** (metres): Average draught
-- **Height** (metres): Average height above waterline
-- **Beam** (metres): Average beam (width)
+Digitising a route
+------------------
+
+#. Click **Add Route** to start digitising.
+#. Click on the map to set the first waypoint.
+#. Click again to create a leg; each subsequent click adds a segment.
+#. Click **Stop Route** when done.
+
+Segments are automatically assigned an ID (``1``, ``2``, ...) and a
+default width of 5000 m.
+
+Editing a segment
+-----------------
+
+Select a segment in the route table and edit its geometry directly on
+the map using QGIS's standard vertex-editing tools.  OMRAT listens to
+the geometry-change signal and:
+
+* Updates the Start_Point / End_Point values in the table,
+* Recomputes direction labels and stored ``bearing``,
+* Recomputes ``line_length`` (metres) via UTM projection.
+
+The recomputed values are included in project save and in IWRAP XML
+export, so map geometry and exported model stay in sync.
+
+What flows downstream
+----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Used by
+   * - ``Start_Point`` / ``End_Point``
+     - Every accident type (leg geometry).
+   * - ``line_length``
+     - Drifting base exposure, ship-ship collision candidate count.
+   * - ``ai1``, ``ai2``
+     - Powered grounding + allision (:math:`\exp(-d/(a_i V))`).
+   * - ``bearing``
+     - Crossing-collision geometry to detect leg pairs that share a
+       waypoint.
+
+
+Traffic tab
+============
+
+.. figure:: _static/screenshots/ui_tab_traffic.png
+   :width: 90%
+   :alt: The Traffic tab showing the traffic matrix
+
+   The Traffic tab.  Matrix rows are ship types, columns are LOA
+   (length) bins.
+
+Every segment, in every direction, has its own traffic matrix.  Select
+a segment and direction using the dropdowns at the top, then pick a
+variable (Frequency, Speed, Draught, Height, Beam) to edit.
+
+Matrix shape
+------------
+
+* **Rows** -- ship types (configurable under **Settings -> Ship
+  Categories**; defaults to the 21 IMO types used by IWRAP).
+* **Columns** -- LOA bins (also configurable; defaults to 15 bins
+  from <50 m to >350 m).
+
+Variables
+---------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 35 40
+
+   * - Variable
+     - Units
+     - Used by
+   * - Frequency (ships/year)
+     - ships/year
+     - Every accident type (exposure).
+   * - Speed (knots)
+     - knots
+     - Powered grounding/allision, head-on + overtaking + crossing
+       collisions, drifting exposure.
+   * - Draught (meters)
+     - m
+     - Powered grounding depth binning, drifting grounding filter.
+   * - Ship heights (meters)
+     - m
+     - Powered allision (clearance check: short ships pass under
+       high structures).
+   * - Ship Beam (meters)
+     - m
+     - Ship-ship collision geometry.
 
 Importing from AIS
--------------------
+------------------
 
 If you have access to an AIS database:
 
-1. Go to **Settings** > **AIS connection settings**
-2. Enter the database connection parameters
-3. Click **Update AIS** next to a segment in the route table
-4. OMRAT queries the database for vessel passages and populates the
-   traffic table automatically
+#. **Settings -> AIS connection settings** -- enter host, port,
+   database, schema, user, password.
+#. Select a segment in the route table.
+#. Click **Update AIS**.  The plugin queries the database for every
+   vessel passage that crossed the segment's buffer and populates the
+   traffic table automatically.
 
-Ship Categories
-----------------
-
-To customise ship type and size classifications:
-
-1. Go to **Settings** > **Ship Categories**
-2. Edit the type names and size bin boundaries
-3. The traffic table dimensions will update accordingly
+The query time is shown in the QGIS log panel.
 
 
-Step 3: Defining Obstacles
-===========================
+Depths tab
+===========
 
-Depth Polygons
---------------
+.. figure:: _static/screenshots/ui_tab_depths.png
+   :width: 90%
+   :alt: The Depths tab listing depth polygons
 
-Depths represent bathymetry (water depth) areas. Ships can ground in
-shallow areas.
+   The Depths tab.  One row per depth polygon.
 
-**Manual entry:**
+Each row has:
 
-1. Go to the **Depths** tab
-2. Click **Add Simple Depth**
-3. Enter a depth value and draw a polygon on the map
+* **id** -- a short label (auto-generated ``d1`` ... or user-set).
+* **depth** -- the water depth at this polygon (metres below chart
+  datum).
+* **Polygon** -- the WKT geometry, in lon/lat (EPSG:4326).
 
-**Loading from shapefile:**
+Adding depths
+-------------
 
-1. Click **Load Depth**
-2. Select a shapefile containing depth polygons
+Three ways:
 
-**GEBCO download:**
+* **Add Simple Depth** -- enter a depth value, draw a polygon on the
+  map.
+* **Load Depth** -- pick a shapefile; OMRAT imports every polygon and
+  uses the ``depth`` attribute (or the first numeric attribute) as the
+  depth value.
+* **Get GEBCO Depths** -- requires an OpenTopography API key in
+  Settings.  The plugin downloads GEBCO bathymetry for the project
+  bbox + padding and vectorises it into depth polygons at the depths
+  you specify.
 
-1. Enter your OpenTopography API key
-2. Set the bounding box extension (%)
-3. Click **Get GEBCO Depths**
-4. The plugin downloads and vectorises bathymetry data automatically
+How depths drive the calculation
+--------------------------------
 
-Structure Polygons
--------------------
-
-Structures are physical objects (bridges, wind turbines, platforms) that
-ships can collide with.
-
-1. Go to the **Objects** tab
-2. Click **Add Simple Object** or **Load Object**
-3. Enter a height value for the structure
-
-
-Step 4: Configuration
-======================
-
-Drift Settings
----------------
-
-Go to **Settings** > **Drift settings** to configure:
-
-- **Drift probability**: Blackout frequency
-- **Anchor probability**: Likelihood of successful anchoring
-- **Max anchor depth**: Maximum depth for anchoring (metres)
-- **Drift speed**: Speed of drifting ship (m/s)
-- **Wind rose**: Probability of wind from each of 8 directions
-  (must sum to 100%)
-- **Repair time**: Lognormal distribution parameters or custom function
-
-Causation Factors
-------------------
-
-Go to **Settings** > **Causation Factors** to configure:
-
-- Powered grounding causation factor (default: :math:`1.6 \times 10^{-4}`)
-- Drifting causation factor (default: 1.0)
-- Ship-ship collision factors (head-on, overtaking, crossing, bend)
-
-Lateral Distributions
------------------------
-
-Click on a segment in the route table to view and edit its lateral
-traffic distribution on the **Distributions** tab:
-
-- Up to 3 normal distributions with mean, std, and weight
-- 1 uniform distribution with min, max, and probability
-- Weights are normalised to sum to 100%
-- A plot shows the combined distribution
+* **Drifting grounding:** a polygon's depth is compared against each
+  ship's draught.  Only polygons shallower than the ship's draught
+  are grounding hazards for that ship.
+* **Drifting anchoring:** a polygon is an anchoring zone if its depth
+  is less than ``anchor_d * draught`` (configurable under Drift
+  settings).
+* **Powered grounding:** the shallowest depth encountered along a
+  ray cast from the leg's bend gives the grounding contribution
+  (:math:`N_{II} = P_c Q m \exp(-d/(a_i V))`).
 
 
-Step 5: Running Calculations
-=============================
+Objects tab
+===========
 
-Full Risk Assessment
----------------------
+.. figure:: _static/screenshots/ui_tab_objects.png
+   :width: 90%
+   :alt: The Objects tab listing structure polygons
 
-1. Go to the **Results** tab
-2. Optionally enter a model name
-3. Click **Run Model**
-4. The calculation runs in the background (check the QGIS Task Manager
-   for progress)
-5. Results appear in the results fields:
+   The Objects tab.  One row per structure.
 
-   - **Drift Allision**: Probability of drifting into structures
-   - **Powered Allision**: Probability of powered collision with structures
-   - **Drift Grounding**: Probability of drifting onto shallow water
-   - **Powered Grounding**: Probability of powered grounding
-   - **Overtaking Collision**: Overtaking collision frequency
-   - **Head-On Collision**: Head-on collision frequency
-   - **Crossing Collision**: Crossing collision frequency
-   - **Merging Collision**: Merging collision frequency
+Structures are bridges, wind-turbine foundations, platforms, piers.
+Each row has:
 
-Drift Corridor Analysis
--------------------------
+* **id** -- label.
+* **height** -- height of the structure above waterline (metres).
+  Ships shorter than this pass under without colliding.
+* **Polygon** -- the WKT footprint.
 
-For a visual analysis of drift corridors:
+Adding structures
+-----------------
 
-1. Go to the **Drift Analysis** tab
-2. Set depth and height thresholds
-3. Click **Run Drift Analysis**
-4. Coloured polygon layers appear on the map, one per leg, showing the
-   8-directional drift corridors
+* **Add Simple Object** -- enter a height, draw a polygon on the map.
+* **Load Object** -- pick a shapefile with a ``height`` attribute.
 
-Viewing Detailed Results
--------------------------
+How objects drive the calculation
+---------------------------------
 
-Click the **View** buttons next to each result to see detailed
-breakdowns by segment and obstacle.
+* **Drifting allision:** any ship that drifts into the polygon
+  contributes, regardless of height.  No clearance check -- a drifting
+  ship has no way to recover.
+* **Powered allision:** ``ship_height < object_height`` passes under
+  (no collision).  Otherwise the standard Cat II probability formula
+  applies.
 
 
-Saving and Loading Projects
-============================
+Distributions tab
+=================
 
-Saving
+.. figure:: _static/screenshots/ui_tab_distributions.png
+   :width: 90%
+   :alt: The Distributions tab showing the combined PDF plot
+
+   The Distributions tab.  Two directions per segment; each direction
+   can have up to three Gaussians plus a uniform component.
+
+Per segment, per direction, you can define the **lateral traffic
+distribution** -- the PDF of where ships are positioned relative to
+the leg centerline.
+
+Fields
 ------
 
-Go to **File** > **Save** and choose a location for the ``.omrat`` file.
-All routes, traffic data, obstacles, settings, and results are saved.
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
 
-Loading
--------
+   * - Control
+     - Meaning
+   * - ``mean{d}_{i}``
+     - Mean of normal component ``i`` (direction ``d``), metres.
+   * - ``std{d}_{i}``
+     - Standard deviation of normal component ``i``.
+   * - ``weight{d}_{i}``
+     - Weight of normal component ``i`` (weights normalised to 1).
+   * - ``u_min{d}`` / ``u_max{d}``
+     - Uniform component bounds, metres.
+   * - ``u_p{d}``
+     - Weight of the uniform component.
 
-Go to **File** > **Load** and select an ``.omrat`` file. You can choose
-to:
+The plot at the bottom of the tab shows the combined PDF with the
+sum of (up to 3) normals + 1 uniform.
 
-- **Clear & Load**: Replace the current model completely
-- **Merge**: Add the loaded data to the existing model
+Why this matters
+----------------
 
-IWRAP Import/Export
---------------------
+The lateral distribution enters the calculations in three places:
 
-- **Export**: **File** > **Export to IWRAP XML** -- saves the current
-  model in IWRAP-compatible XML format
-- **Import**: **File** > **Import from IWRAP XML** -- loads an IWRAP XML
-  file into OMRAT
+#. **Powered grounding / allision** -- defines the "lateral spread" of
+   rays cast across the leg (:math:`N_\mathrm{rays} = 500` rays at
+   ``mean +/- 4 std``).
+#. **Ship-ship collisions** -- defines :math:`(\mu, \sigma)` of each
+   direction for the Gaussian-overlap probability.
+#. **Drifting** -- defines the corridor width (``5 * sigma``) and
+   feeds the analytical probability-hole integral.
 
-
-Interpreting Results
-====================
-
-Result values are **annual accident frequencies** -- the expected number
-of accidents per year for each type.
-
-- Values in the range :math:`10^{-3}` to :math:`10^{-2}` indicate a
-  relatively frequent accident type
-- Values in the range :math:`10^{-5}` to :math:`10^{-4}` are typical for
-  well-managed waterways
-- Values below :math:`10^{-6}` are very rare events
-
-Results can be compared against:
-
-- IALA risk acceptance criteria
-- Historical accident data for the area
-- Results from IWRAP Mk2 for cross-validation
+A segment with zero weights produces zero ship-ship collisions on that
+direction pair, and a zero-width corridor for drifting -- both silent
+failures.  Always check the plot.
 
 
-Tips and Best Practices
-========================
+Drift Analysis tab
+==================
 
-- Always check that **lateral distributions** are correctly configured
-  for each segment -- these have a large impact on results
-- Verify that **depth polygons** cover the relevant shallow areas --
-  missing depth data leads to underestimated grounding risk
-- Use the **drift corridor visualisation** to sanity-check that
-  corridors reach the correct obstacles
-- Start with **default causation factors** and adjust only if local
-  data supports different values
-- For large study areas, consider running calculations overnight as
-  the Monte Carlo integration can be time-consuming
+.. figure:: _static/screenshots/ui_tab_drift_analysis.png
+   :width: 90%
+   :alt: The Drift Analysis tab showing controls
+
+   The Drift Analysis tab produces a visual drift-corridor layer.
+
+This tab does **not** compute the risk -- it draws drift corridors
+for visual inspection.  Use it to sanity-check whether the corridors
+actually reach the obstacles you expect them to hit.
+
+Fields
+------
+
+* **Depth threshold** -- hide depth polygons shallower than this (so
+  the corridor isn't cluttered by the near-shore bathymetry).
+* **Height threshold** -- same for structures.
+* **Run Drift Analysis** -- kicks off
+  :class:`~geometries.drift_corridor_task_v2.DriftCorridorTask` in a
+  background thread.
+
+Output
+------
+
+Per leg, per wind-rose direction, a polygon layer is added to the
+map showing where a drifting ship from that leg in that direction
+could reach, minus the footprints of any obstacles it would ground
+or collide on.
+
+.. figure:: _static/screenshots/ui_drift_corridor.png
+   :width: 90%
+   :alt: Map canvas showing 8-directional drift corridors per leg
+
+   Drift corridors around a leg, coloured by direction.  The darker
+   regions are where the ship has already grounded on a shallower
+   polygon closer to the leg.
+
+
+Results tab
+===========
+
+.. figure:: _static/screenshots/ui_tab_results.png
+   :width: 90%
+   :alt: The Results tab with Run Model button and result fields
+
+   The Results tab.
+
+Clicking **Run Model** kicks off a
+:class:`~compute.calculation_task.CalculationTask` that runs all four
+risk models in sequence.  The task runs in the background so QGIS
+stays responsive.
+
+Result fields
+-------------
+
+All values are **annual accident frequencies** (expected events per
+year).  They appear in scientific notation (``1.148e-01`` means 0.1148
+events/year or roughly one event every 9 years).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Field
+     - Meaning
+   * - **LEPDriftAllision**
+     - Drifting + hitting a structure.
+   * - **LEPDriftingGrounding**
+     - Drifting + running aground on a depth polygon.
+   * - **LEPPoweredGrounding**
+     - Under power, failing to turn, hitting a depth polygon.
+   * - **LEPPoweredAllision**
+     - Under power, failing to turn, hitting a structure.
+   * - **LEPHeadOnCollision**
+     - Two ships on the same leg in opposite directions.
+   * - **LEPOvertakingCollision**
+     - Same leg, same direction, different speeds.
+   * - **LEPCrossingCollision**
+     - Two legs that share a waypoint at a non-trivial angle.
+   * - **LEPMergingCollision**
+     - Ship fails to turn at a bend on the same leg.
+
+The **View** button next to each field opens a drill-down dialog with
+per-segment and per-obstacle contributions.  These are useful for
+locating the single obstacle that dominates the total risk.
+
+
+Settings menu
+=============
+
+Settings are split across four sub-dialogs accessed from the
+**Settings** menu.
+
+Drift settings
+--------------
+
+.. figure:: _static/screenshots/ui_settings_drift.png
+   :width: 70%
+   :alt: Drift settings dialog
+
+   Drift settings dialog.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Field
+     - Meaning
+   * - ``drift_p``
+     - Blackout rate per ship-year (default 1.0).  Multiplied by a
+       per-type override from ``blackout_by_ship_type`` -- e.g. RoRo =
+       0.1.
+   * - ``anchor_p``
+     - Probability of a successful anchor given the ship is in an
+       anchoring-depth region (default 0.7).
+   * - ``anchor_d``
+     - Anchor-depth factor.  A ship with draught :math:`T` can anchor
+       in water shallower than :math:`\mathrm{anchor\_d} \cdot T`.
+   * - ``speed``
+     - Drift speed in knots.
+   * - Wind **rose**
+     - Probability per compass direction.  Eight values that must sum
+       to 1.
+   * - **Repair time**
+     - Lognormal / Weibull / Normal CDF parameters for the
+       time-to-repair distribution used to compute :math:`P_{NR}`.
+
+Causation factors
+-----------------
+
+.. figure:: _static/screenshots/ui_settings_causation.png
+   :width: 70%
+   :alt: Causation Factors dialog
+
+   Default values come from Fujii (1974), Pedersen (1995), and the
+   IALA IWRAP manual.  See :ref:`theory` for the reference table.
+
+Ship Categories
+---------------
+
+.. figure:: _static/screenshots/ui_settings_ship_categories.png
+   :width: 70%
+   :alt: Ship Categories dialog
+
+   Edit the type names (rows of the traffic matrix) and the LOA bins
+   (columns).  Changing these rebuilds the Traffic tab matrix.
+
+AIS connection
+--------------
+
+.. figure:: _static/screenshots/ui_settings_ais.png
+   :width: 70%
+   :alt: AIS connection settings dialog
+
+   Connection parameters for an AIS PostgreSQL/PostGIS database.
+   Values are stored in the project file; the password is stored in
+   plain text, so treat ``.omrat`` files as sensitive if you fill
+   this in.
+
+
+File menu
+=========
+
+* **Save** / **Load** -- writes / reads the project as a single JSON
+  file with extension ``.omrat``.  Every tab's contents is included.
+  See :ref:`reference-data-format` for the full schema.
+* **Export to IWRAP XML** / **Import from IWRAP XML** -- exchange with
+  the IALA IWRAP reference tool.  Useful for cross-validating OMRAT
+  results against IWRAP on the same project.
+
+
+Run history (Previous runs)
+============================
+
+OMRAT keeps a history of every Run Model invocation in two places:
+
+* one **per-run GeoPackage** in the output folder you select, named
+  ``<model_name>_<YYYYMMDD_HHMMSS>.gpkg``, holding the actual
+  spatial result layers for that run.
+* one **lightweight metadata row** in the master history database
+  (``omrat_history.sqlite`` under the user app-data folder) holding the
+  run name, timestamp, elapsed duration, every total probability,
+  and a pointer (``output_dir`` + ``output_filename``) to the per-run
+  file.
+
+This split keeps the master DB small even after many runs, and gives
+you one easy-to-archive ``.gpkg`` per run.
+
+The master database location:
+
+* **Windows**: ``%APPDATA%\\OMRAT\\omrat_history.sqlite``.
+* **Linux**: ``~/.local/share/OMRAT/omrat_history.sqlite``.
+* **macOS**: ``~/Library/Application Support/OMRAT/omrat_history.sqlite``.
+
+Output folder + Run Model gating
+--------------------------------
+
+Run Model is **disabled** until you select an output folder.  Use the
+**File path** ``...`` button on the Run Analysis tab to pick one --
+the chosen path is remembered between sessions.  Once a valid folder
+is selected, Run Model becomes available.
+
+Naming a run
+------------
+
+The **Name of the model** field on the Run Analysis tab becomes the
+run's name AND the per-run GeoPackage's filename prefix.  Leave it
+blank and OMRAT auto-names the run ``run_<YYYYMMDD>_<HHMMSS>`` based
+on the start time.
+
+Note: result layers are no longer auto-added to the QGIS canvas at
+the end of a run.  Use **Add selected run results to map** (see
+below) when you want to look at them.
+
+The Previous runs table
+------------------------
+
+The **Previous runs** table on the Run Analysis tab shows three
+columns: **Name**, **Date**, **Duration** -- enough to pick a run
+without scrolling.  Click a row (or several rows) and the result
+fields below the table fill in:
+
+* **Single selection** -- each result LineEdit shows that run's
+  total probability, e.g. ``1.140e-01``.
+* **Multi-selection** -- the LineEdits become side-by-side
+  comparisons of the form
+  ``1.140e-01 | 1.252e-01 (Δ+9.8%) | 0.992e-01 (Δ-13.0%)``.
+  The first selected run is the baseline; each subsequent run
+  carries its relative difference (``Δ`` percentage) to that
+  baseline.
+
+Below the table is an **Add selected run results to map** button.
+Click it with a single row selected to load that run's per-run
+GeoPackage as new layers in the QGIS Layers panel, styled
+graduated red->green like the live-run output.  Multiple selection
+disables this button -- pick one run at a time when loading on the
+canvas.
+
+The right-click context menu on the table provides:
+
+* **Add results to map** -- same as the button (single selection
+  only).
+* **Delete from history** -- removes only the row from the master
+  DB; the per-run ``.gpkg`` file stays on disk so you can keep
+  archived results around if you want.
+* **Delete from history + remove .gpkg file** -- removes both.
+  Asks for confirmation.
+
+You can also reach the table via **File -> Manage previous runs...**,
+which switches to the Run Analysis tab and refreshes the table.
+
+Result-layer attributes
+-----------------------
+
+After a run finishes, six new layers (when applicable) appear on the
+canvas:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 15 50
+
+   * - Layer
+     - Geometry
+     - Key attributes
+   * - Drifting Allision Results
+     - Polygon
+     - ``obstacle_id``, ``total_prob``, plus per-segment columns and
+       a ``leg_<id>`` column per leg that contributed.
+   * - Drifting Grounding Results
+     - Polygon
+     - same shape as Allision.
+   * - Powered Allision Results
+     - Polygon
+     - ``obstacle_id``, ``value`` (height), ``total_prob`` and one
+       ``leg_<id>`` column per leg that contributed.
+   * - Powered Grounding Results
+     - Polygon
+     - ``obstacle_id``, ``value`` (depth), ``total_prob`` and one
+       ``leg_<id>`` column per leg.
+   * - Ship-Ship Collision (per leg)
+     - Line
+     - ``leg_id``, ``head_on``, ``overtaking``, ``combined``.
+   * - Ship-Ship Collision (waypoints)
+     - Point
+     - ``waypoint``, ``crossing``, ``bend``, ``combined``.
+
+All layers are graduated red->green by ``total_prob`` /
+``combined``.  The line layer is rendered semi-transparent and ~3 mm
+wide so the underlying route stays visible.
+
+
+Tips and best practices
+==========================
+
+* **Start with default causation factors.**  Only adjust if you have
+  local accident data to support different values.
+* **Check the distribution plot** on every segment before you trust
+  a result.  A zero-weight distribution silently zeroes that
+  segment's contribution for some accident types.
+* **Use Drift Analysis** before Run Model on a new project -- if
+  corridors don't reach the obstacles you care about, your result
+  will be near zero and you'll waste time investigating why.
+* **Result layers colour-code by contribution.**  Red polygons are
+  your "risk hotspots" and usually the right place to look if the
+  total seems implausibly high.
+* **Keep your repair-time distribution realistic.**  If it says
+  90 % of blackouts are repaired in 10 minutes, grounding risk will
+  be near zero regardless of traffic.
+* **Save often.**  The full result (including the debug-trace
+  breakdown per obstacle, if enabled) is serialised with **File ->
+  Save**, so a finished run is reproducible.
