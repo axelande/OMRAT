@@ -210,9 +210,13 @@ class GatherData:
         if 'ship_categories' in data and data['ship_categories']:
             self.populate_ship_categories(data['ship_categories'])
 
-        # Load causation factors
-        if 'pc' in data:
-            self.p.causation_f.data = data['pc']
+        # Load causation factors -- merge over the defaults rather
+        # than replacing the dict, because legacy ``.omrat`` files only
+        # persisted ``p_pc`` / ``d_pc`` and would otherwise wipe the
+        # collision keys (``headon``, ``overtaking``, ...) and break
+        # later ``set_values`` lookups.
+        if 'pc' in data and isinstance(data['pc'], dict):
+            self.p.causation_f.data.update(data['pc'])
 
         self.p.traffic_data = data['traffic_data']
         # The Traffic instance captures its own reference to the dict at

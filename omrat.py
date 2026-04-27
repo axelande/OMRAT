@@ -413,8 +413,11 @@ class OMRAT:
         self.drift_values = default_drift
         self.drift_settings.drift_values = default_drift
 
-        # Reset causation factors to defaults
-        self.causation_f.data = {'p_pc': 1.6E-4, 'd_pc': 1}
+        # Reset causation factors to defaults.  Use the full default
+        # set defined in ``CausationFactors.__init__`` so collision
+        # keys (``headon``, ``overtaking``, ...) survive Clear.
+        from omrat_utils.causation_factors import CausationFactors
+        self.causation_f.data = CausationFactors(self).data
         self.causation_values = self.causation_f.data
 
         # Reset distributions tracking
@@ -839,6 +842,9 @@ class OMRAT:
                 calc_object, gpkg_path,
                 structures=getattr(calc_object, '_last_structures', None),
                 depths=getattr(calc_object, '_last_depths', None),
+                depths_original=getattr(
+                    calc_object, '_last_depths_original', None,
+                ),
                 segment_data=self.segment_data,
             )
         except Exception as exc:

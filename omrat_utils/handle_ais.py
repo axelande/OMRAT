@@ -120,7 +120,8 @@ class AIS:
     def run(self):
         self.acw.show()
         self.acw.accepted.connect(self.update_ais_settings)
-        self.acw.exec_()
+        # PyQt6 (QGIS 4) dropped ``exec_``; ``exec`` exists in both.
+        self.acw.exec()
     
     def set_start_ais_settings(self):
         db_host: str = self.settings.value("omrat/db_host", "")

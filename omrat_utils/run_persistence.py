@@ -39,6 +39,7 @@ def _build_memory_layers(
     structures: list[dict[str, Any]] | None,
     depths: list[dict[str, Any]] | None,
     segment_data: dict[str, Any] | None,
+    depths_original: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the existing factory functions but with ``add_to_project=False``.
 
@@ -46,6 +47,16 @@ def _build_memory_layers(
     Empty / missing layers become ``None`` and are filtered out
     later.  Reuses the layer factories already in
     ``geometries.result_layers``.
+
+    ``depths`` is what the **drifting** report's ``by_object`` keys
+    reference -- the merged-meta list when threshold merging is on,
+    the split list otherwise.
+
+    ``depths_original`` is the per-original-data-depth list (with
+    ids like ``"1"`` / ``"2"`` and a WGS84 geometry) needed by
+    **powered grounding**, whose ``by_obstacle`` keys are the
+    original data ids straight from ``data['depths']``.  Falls back
+    to ``depths`` when the calc didn't provide it (older runs).
     """
     from geometries.result_layers import (
         create_result_layers,
@@ -82,8 +93,9 @@ def _build_memory_layers(
     pg_report = getattr(calc, 'powered_grounding_report', None)
     if pg_report is not None:
         try:
+            powered_depths = depths_original or depths or []
             layers['powered_grounding'] = create_powered_grounding_layer(
-                pg_report, depths or [], add_to_project=False,
+                pg_report, powered_depths, add_to_project=False,
             )
         except Exception as exc:
             logger.warning(f"powered-grounding layer build failed: {exc}")
@@ -106,6 +118,7 @@ def write_run_results(
     *,
     structures: list[dict[str, Any]] | None = None,
     depths: list[dict[str, Any]] | None = None,
+    depths_original: list[dict[str, Any]] | None = None,
     segment_data: dict[str, Any] | None = None,
 ) -> list[str]:
     """Write every non-empty result layer to ``output_path`` as a
@@ -113,6 +126,10 @@ def write_run_results(
 
     Returns the list of layer names that were written (subset of
     :data:`_LAYER_NAMES`).  Existing files are overwritten.
+
+    ``depths`` is the drifting report's keying (merged-or-split, i.e.
+    ``calc._last_depths``); ``depths_original`` is the per-original-id
+    list used by powered grounding (``calc._last_depths_original``).
     """
     from qgis.core import (
         QgsVectorFileWriter,
@@ -126,7 +143,10 @@ def write_run_results(
         except Exception as exc:
             logger.warning(f"Couldn't remove existing {out}: {exc}")
 
-    layers = _build_memory_layers(calc, structures, depths, segment_data)
+    layers = _build_memory_layers(
+        calc, structures, depths, segment_data,
+        depths_original=depths_original,
+    )
     written: list[str] = []
     transform_ctx = QgsCoordinateTransformContext()
     first_write = True

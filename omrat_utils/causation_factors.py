@@ -58,4 +58,5 @@ class CausationFactors:
         self.buttonBox: QDialogButtonBox | None = self.cfw.findChild(QDialogButtonBox, 'buttonBox')
         if isinstance(self.buttonBox, QDialogButtonBox):
             self.buttonBox.accepted.connect(self.commit_changes)
-        self.cfw.exec_()
+        # PyQt6 (QGIS 4) dropped ``exec_``; ``exec`` exists in both.
+        self.cfw.exec()

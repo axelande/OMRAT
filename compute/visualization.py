@@ -74,7 +74,7 @@ class VisualizationMixin:
             data = data,
             distance=longest_length * 3.0
         )
-        dialog.exec_()
+        dialog.exec()  # ``exec_`` was dropped in PyQt6 (QGIS 4).
 
     def run_powered_allision_visualization(self, data: dict[str, Any]) -> None:
         """Show an interactive Cat II powered allision visualisation dialog.

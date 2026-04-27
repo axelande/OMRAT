@@ -1935,9 +1935,46 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         self.drifting_grounding_prob = float(total_grounding * grounding_rf)
         self.drifting_report = report
 
-        # Store structures and depths for result layer generation
+        # Store structures and depths for result layer generation.
+        #
+        # ``effective_depths_meta`` is what the report's ``by_object``
+        # keys reference -- when threshold merging is on, those keys
+        # look like "Depth - merged_depth_le_5.0" and only match the
+        # merged metas, not the per-input split list.  Drifting result
+        # layers therefore have to use the merged list.
+        #
+        # Powered grounding's ``by_obstacle`` keys are the *original*
+        # data depth ids ("1", "2", ...) -- they come from
+        # ``data['depths'][i][0]`` in ``_build_legs_and_obstacles``,
+        # before the MultiPolygon split.  Build a parallel list keyed
+        # by original ids so the powered result layer can resolve them.
         self._last_structures = structures
-        self._last_depths = depths
+        self._last_depths = effective_depths_meta
+        try:
+            from shapely import wkt as _sw
+            original_depths_meta: list[dict[str, Any]] = []
+            for row in data.get('depths', []) or []:
+                try:
+                    did, depth_val, wkt_str = row
+                except Exception:
+                    continue
+                try:
+                    geom = _sw.loads(wkt_str) if isinstance(wkt_str, str) else wkt_str
+                except Exception:
+                    continue
+                try:
+                    dval = float(depth_val)
+                except Exception:
+                    dval = 0.0
+                original_depths_meta.append({
+                    'id': str(did),
+                    'depth': dval,
+                    'wkt': geom,        # WGS84 already, like the data dict
+                    'wkt_wgs84': geom,
+                })
+            self._last_depths_original = original_depths_meta
+        except Exception:
+            self._last_depths_original = []
 
         self.p.main_widget.LEPDriftAllision.setText(f"{self.drifting_allision_prob:.3e}")
         try:

@@ -225,11 +225,18 @@ class PoweredModelMixin:
             'causation_factor': pc_grounding,
         }
 
-        # Build the polygon result layer if we have geometry from the
-        # earlier drifting phase (which transforms + stores ``wkt_wgs84``).
+        # Build the polygon result layer.  Use ``_last_depths_original``
+        # (one entry per original data depth, keyed by original id like
+        # "1", "2") because powered's ``by_obstacle`` keys are
+        # original-data ids -- not the split ids in ``_last_depths``
+        # nor the merged ids used by drifting.
         try:
             from geometries.result_layers import create_powered_grounding_layer
-            depths_meta = getattr(self, '_last_depths', None) or []
+            depths_meta = (
+                getattr(self, '_last_depths_original', None)
+                or getattr(self, '_last_depths', None)
+                or []
+            )
             self.powered_grounding_layer = create_powered_grounding_layer(
                 self.powered_grounding_report, depths_meta, add_to_project=False,
             )

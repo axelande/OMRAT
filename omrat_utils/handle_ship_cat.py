@@ -15,12 +15,12 @@ class ShipCategories:
         
     def run(self):
         self.scw.show()
-        # Get the button box
         self.buttonBox = self.scw.findChild(QDialogButtonBox, 'buttonBox')
-
-        # Connect the accepted signal to your custom slot
-        self.buttonBox.ok.connect(self.commit_changes)
-
-        # Optionally, connect the rejected signal to a different slot
-        self.buttonBox.cancel.connect(self.discard_changes)
-        self.scw.exec_()
+        if self.buttonBox is not None:
+            # ``QDialogButtonBox`` exposes ``accepted`` / ``rejected`` --
+            # there are no ``ok`` / ``cancel`` signals.
+            self.buttonBox.accepted.connect(self.commit_changes)
+            self.buttonBox.rejected.connect(self.discard_changes)
+        # ``exec_`` exists in PyQt5 but was dropped in PyQt6 (QGIS 4).
+        # ``exec`` is present in both, so prefer that.
+        self.scw.exec()

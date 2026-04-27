@@ -144,19 +144,62 @@ numbers (expected accidents per year).
 5. Inspect the map result layers
 ===================================
 
-Two new layers appear in the QGIS Layers panel:
+After a run, OMRAT writes a per-run GeoPackage to your output folder
+and lists the run on the Run Analysis tab.  Click **Add results to
+map** on that row to overlay every non-empty result layer on the
+canvas:
 
-* **Drifting allision results** -- structure polygons coloured by
-  their contribution to the total drifting-allision probability.
-* **Drifting grounding results** -- depth polygons coloured the same
-  way.
+.. list-table::
+   :header-rows: 1
+   :widths: 30 15 55
 
-.. figure:: _static/screenshots/ui_result_layers.png
+   * - Layer
+     - Geometry
+     - What it shows
+   * - **Drifting Allision Results**
+     - Polygon
+     - Each structure polygon, coloured by its share of the total
+       drifting-allision probability.
+   * - **Drifting Grounding Results**
+     - Polygon
+     - Each depth polygon (or merged depth band), coloured by its
+       share of the total drifting-grounding probability.
+   * - **Powered Allision Results**
+     - Polygon
+     - Each structure, coloured by its share of the powered Cat II
+       allision probability (failure-to-turn-at-bend hits).
+   * - **Powered Grounding Results**
+     - Polygon
+     - Each depth polygon, coloured by its share of the powered Cat
+       II grounding probability.
+   * - **Ship-Ship Collision (per leg)**
+     - Line
+     - One line per route leg, coloured by the head-on + overtaking
+       collision probability for that leg.
+   * - **Ship-Ship Collision (waypoints)**
+     - Point
+     - One point at every shared waypoint, coloured by the crossing
+       + bend collision probability there.
+
+All layers share the same green -> yellow -> red graduated ramp:
+**green = lowest contributor, red = the hotspots that dominate the
+total**.  A layer only appears when the corresponding probability
+total is non-zero, so a clean canvas means a clean risk picture for
+that accident type.
+
+.. figure:: _static/screenshots/ui_result_example_map.png
    :width: 90%
-   :alt: Map canvas showing coloured result layers
+   :alt: Result map showing drifting, powered and collision layers
 
-   Red = highest contributor, green = lowest.  Click any feature to
-   see its per-leg-direction contribution in the attribute table.
+   A finished run with several layer types visible at once: red
+   structure polygons (high drifting-allision contribution), red /
+   yellow line segments along the legs (head-on + overtaking
+   collisions), a red waypoint (crossing/bend collision hotspot),
+   and green polygons / points where the contribution is small.
+
+Click any feature to open the attribute table -- every result layer
+carries a per-leg breakdown (``leg_1``, ``leg_2``, ...) so you can
+trace which leg drove the colour.
 
 
 6. Where to read next
