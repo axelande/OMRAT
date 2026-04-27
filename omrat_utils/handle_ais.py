@@ -286,29 +286,48 @@ class AIS:
                 raise ValueError(f"Invalid AIS month value: {m!r}")
             months.append(mi)
 
-        sql = "with segments as ("
+        # Build the per-table fragments that will be UNION'd together.
+        # ``schema`` is a validated SQL identifier and ``year`` / ``month``
+        # are ints, so f-string interpolation is safe.  ``pl`` is bound
+        # via the ``%(pl)s`` parameter placeholder, never inlined.
+        select_template = (
+            "select ss.mmsi, segment, cog, sog, draught, type_and_cargo, "
+            "date1, dim_a, dim_b, dim_c, dim_d "
+            "FROM {tbl} ss "
+            "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
+            "JOIN {schema}.statics_{year} si on si.rowid=st.static_id "
+            "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
+        )
         if months:
-            for month in months:
-                sql += f"""select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
-                FROM {schema}.segments_{year}_{month} ss
-                JOIN {schema}.states_{year} st on st.rowid=ss.state_id
-                JOIN {schema}.statics_{year} si on si.rowid=st.static_id
-                WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))
-                UNION """  # nosec B608 - schema/year/month are validated above; pl bound via params
+            tables = [f"{schema}.segments_{year}_{month}" for month in months]
         else:
-            sql += f"""select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
-                                FROM {schema}.segments_{year} ss
-                                JOIN {schema}.states_{year} st on st.rowid=ss.state_id
-                                JOIN {schema}.statics_{year} si on si.rowid=st.static_id
-                                WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))
-            """  # nosec B608 - schema/year validated above; pl bound via params
+            tables = [f"{schema}.segments_{year}"]
+        union_block = " UNION ".join(
+            select_template.format(tbl=tbl, schema=schema, year=year)
+            for tbl in tables
+        )
 
-        sql = sql[:-6] + """), get_vessel_info as(select mmsi, ship_type, loa, breadth_moulded as beam, height as air_draught
-        FROM vessels.seaweb_data)
-        SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 then loa else dim_a + dim_b end as loa, case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 then loa else dim_c + dim_d end as beam, type_and_cargo, draught, ship_type, date1, sog, air_draught, st_distance(st_intersection(segment, st_geomfromtext(%(pl)s,4326))::geography, st_startpoint(st_geomfromtext(%(pl)s, 4326))::geography)-st_length(st_geomfromtext(%(pl)s, 4326)::geography)/2 as dist_from_start, cog
-        FROM segments ss
-        left outer JOIN get_vessel_info sd on ss.mmsi=sd.mmsi
-        """
+        # nosec B608 - schema/year/month identifiers are validated above
+        # (regex + int coerce); ``pl`` is bound through the ``%(pl)s``
+        # placeholder, never inlined into the query string.
+        sql = (
+            "with segments as (" + union_block + "), "  # nosec B608
+            "get_vessel_info as("
+            "select mmsi, ship_type, loa, breadth_moulded as beam, "
+            "height as air_draught FROM vessels.seaweb_data) "
+            "SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 "
+            "then loa else dim_a + dim_b end as loa, "
+            "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
+            "then loa else dim_c + dim_d end as beam, "
+            "type_and_cargo, draught, ship_type, date1, sog, air_draught, "
+            "st_distance("
+            "st_intersection(segment, st_geomfromtext(%(pl)s,4326))::geography, "
+            "st_startpoint(st_geomfromtext(%(pl)s, 4326))::geography"
+            ") - st_length(st_geomfromtext(%(pl)s, 4326)::geography) / 2 "
+            "as dist_from_start, cog "
+            "FROM segments ss "
+            "left outer JOIN get_vessel_info sd on ss.mmsi=sd.mmsi"
+        )
         ok, ais_data = cast(
             tuple[bool, list[list[Any]]],
             self.db.execute_and_return(sql, return_error=True, params={"pl": pl}),

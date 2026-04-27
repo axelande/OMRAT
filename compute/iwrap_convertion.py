@@ -23,7 +23,7 @@ import math
 import os
 import re
 import uuid
-import xml.etree.ElementTree as ET  # noqa: S405 - kept for ET.Element / ET.tostring (write path); parsing is delegated to defusedxml
+import xml.etree.ElementTree as ET  # nosec B405 - parsing is delegated to defusedxml; this import is only used to build trees (ET.Element / ET.SubElement / ET.tostring)
 from typing import Dict, List, Optional, Tuple
 
 # defusedxml protects against XML attacks (XXE, billion laughs, etc.) when

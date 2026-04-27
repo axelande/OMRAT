@@ -300,10 +300,13 @@ class RunHistory:
         ids = list(run_ids)
         if not ids:
             return []
+        # ``placeholders`` is built from a fixed ``?`` token per id; only the
+        # number of placeholders varies.  All values are bound through the
+        # ``ids`` parameter list, so no user data is interpolated into SQL.
         placeholders = ','.join('?' for _ in ids)
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM omrat_runs WHERE run_id IN ({placeholders})",
+                f"SELECT * FROM omrat_runs WHERE run_id IN ({placeholders})",  # nosec B608
                 ids,
             ).fetchall()
         by_id = {int(r['run_id']): RunMeta(**dict(r)) for r in rows}
