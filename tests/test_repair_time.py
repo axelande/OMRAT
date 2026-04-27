@@ -63,13 +63,25 @@ class TestGetRepairProb:
         assert r.get_repair_prob(3.0) == 6.0
 
     def test_user_defined_with_scipy_call(self):
+        # The repair-function expression has access to the ``stats`` and
+        # ``norm`` names exposed by basic_equations._SAFE_EVAL_GLOBALS.
+        # Direct ``__import__``/``open``/etc. are intentionally blocked.
         r = _make_repair(
             user_defined=True,
-            func_text="__import__('scipy.stats', fromlist=['norm']).norm(loc=0, scale=1).cdf(x)",
+            func_text="stats.norm(loc=0, scale=1).cdf(x)",
         )
         got = r.get_repair_prob(1.0)
         expected = float(stats.norm(0, 1).cdf(1.0))
         assert got == pytest.approx(expected, abs=1e-12)
+
+    def test_user_defined_blocks_dunder_imports(self):
+        """The hardened evaluator must reject __import__ etc."""
+        r = _make_repair(
+            user_defined=True,
+            func_text="__import__('os').system('echo pwn')",
+        )
+        with pytest.raises((NameError, ValueError)):
+            r.get_repair_prob(1.0)
 
 
 class TestTestEvaluate:

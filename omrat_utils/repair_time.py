@@ -7,6 +7,8 @@ from matplotlib.backends.backend_qt5agg import (
 from numpy import exp, log, linspace
 from scipy import stats
 
+from compute.basic_equations import _safe_compile, _safe_eval
+
 
 if TYPE_CHECKING:
     from omrat_utils.handle_settings import DriftSettings
@@ -25,20 +27,32 @@ class Repair:
 
     def test_evaluate(self):
         xs = linspace(0, 4, 20)
-        ys = []
+        ys: list[float] = []
         self.ax.clear()
+        try:
+            code = _safe_compile(self.sett.dsw.leRepairFunc.toPlainText())
+        except Exception as e:
+            # Mirror the per-x failure path: an unparseable / disallowed
+            # expression draws 20 zeros so the user sees a flat line and
+            # the printed exception explains why.
+            print(e)
+            ys = [0] * len(xs)
+            self.ax.plot(xs, ys)
+            self.canvas.draw()
+            return
         for x in xs:
             try:
-                ys.append(eval(self.sett.dsw.leRepairFunc.toPlainText()))
+                ys.append(_safe_eval(code, x))
             except Exception as e:
                 ys.append(0)
                 print(e)
         self.ax.plot(xs, ys)
         self.canvas.draw()
-        
+
     def get_repair_prob(self, x):
         if self.sett.dsw.rbUserDefined.isChecked() == 1:
-            return eval(self.sett.dsw.leRepairFunc.toPlainText())
+            code = _safe_compile(self.sett.dsw.leRepairFunc.toPlainText())
+            return _safe_eval(code, x)
         else:
             std = float(self.sett.dsw.leRepairStd.text())
             loc = float(self.sett.dsw.leRepairLoc.text())

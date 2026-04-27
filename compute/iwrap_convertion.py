@@ -22,10 +22,16 @@ import json
 import math
 import os
 import re
-import xml.etree.ElementTree as ET
 import uuid
-from xml.dom import minidom
+import xml.etree.ElementTree as ET  # noqa: S405 - kept for ET.Element / ET.tostring (write path); parsing is delegated to defusedxml
 from typing import Dict, List, Optional, Tuple
+
+# defusedxml protects against XML attacks (XXE, billion laughs, etc.) when
+# we read XML files from disk.  We still use the stdlib ``ElementTree`` for
+# *building* trees (ET.Element / ET.SubElement / ET.tostring) since those
+# don't parse external input.
+from defusedxml import ElementTree as DefusedET
+from defusedxml import minidom as defused_minidom
 
 # Geometry fixing utilities
 try:
@@ -70,7 +76,7 @@ def new_guid() -> str:
 
 def prettify_xml(elem: ET.Element) -> str:
     rough_string = ET.tostring(elem, encoding='utf-8')
-    reparsed = minidom.parseString(rough_string)
+    reparsed = defused_minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="  ")
 
 def build_drifting(parent: ET.Element, drift: dict):
@@ -1084,7 +1090,7 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
     Returns:
         Dictionary in .omrat JSON format
     """
-    tree = ET.parse(xml_path)
+    tree = DefusedET.parse(xml_path)
     root = tree.getroot()
 
     # Load Ship Type Codes lookup table for deriving dimensions when IWRAP

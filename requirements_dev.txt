@@ -13,3 +13,4 @@ geopandas
 matplotlib
 pydantic
 requests
+defusedxml

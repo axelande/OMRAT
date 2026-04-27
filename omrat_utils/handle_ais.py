@@ -1,5 +1,6 @@
 from _collections_abc import dict_items
 import os
+import re
 from typing import Any, cast, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from omrat import OMRAT
@@ -14,6 +15,21 @@ from shapely.geometry.base import BaseGeometry
 
 from compute.database import DB
 from ui.ais_connection_widget import AISConnectionWidget
+
+
+_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_sql_identifier(name: str) -> str:
+    """Reject anything that isn't a plain SQL identifier.
+
+    Used so that the AIS schema name (which the user types in the GUI) can be
+    safely interpolated into table references — table/schema names cannot be
+    bound as query parameters, so we whitelist instead.
+    """
+    if not isinstance(name, str) or not _SQL_IDENT_RE.match(name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
 
 def update_ais_settings_file(db_host:str, db_user:str, db_pass:str, db_name:str):
     ais_settings_path = os.path.join(os.path.dirname(__file__), '..', 'ui', 'ais_settings.py')
@@ -249,35 +265,54 @@ class AIS:
         self.omrat.segment_data[key]['ai1'] = 180
         self.omrat.segment_data[key]['ai2'] = 180
     
-    def run_sql(self, pl:str) -> list[list[Any]]:
-        """Runs the SQL query to get the passages"""
+    def run_sql(self, pl: str) -> list[list[Any]]:
+        """Runs the SQL query to get the passages.
+
+        The schema name (a SQL identifier — cannot be bound as a parameter)
+        is checked against a strict identifier regex; year/month are coerced
+        to int; the polygon WKT is bound via the ``%(pl)s`` placeholder so it
+        is never inlined into the query string.
+        """
         if self.db is None:
             # Should not occur
             raise RuntimeError(self.omrat.tr("No database connection was found"))
+
+        schema = _validate_sql_identifier(str(self.schema))
+        year = int(self.year)
+        months: list[int] = []
+        for m in self.months:
+            mi = int(m)
+            if not 1 <= mi <= 12:
+                raise ValueError(f"Invalid AIS month value: {m!r}")
+            months.append(mi)
+
         sql = "with segments as ("
-        if len(self.months) > 0:
-            for month in self.months:
+        if months:
+            for month in months:
                 sql += f"""select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
-                FROM {self.schema}.segments_{self.year}_{month} ss
-                JOIN {self.schema}.states_{self.year} st on st.rowid=ss.state_id
-                JOIN {self.schema}.statics_{self.year} si on si.rowid=st.static_id
-                WHERE ST_intersects(segment, ST_geomfromtext('{pl}', 4326))
-                UNION """
+                FROM {schema}.segments_{year}_{month} ss
+                JOIN {schema}.states_{year} st on st.rowid=ss.state_id
+                JOIN {schema}.statics_{year} si on si.rowid=st.static_id
+                WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))
+                UNION """  # nosec B608 - schema/year/month are validated above; pl bound via params
         else:
             sql += f"""select ss.mmsi, segment, cog, sog, draught, type_and_cargo, date1, dim_a, dim_b, dim_c, dim_d
-                                FROM {self.schema}.segments_{self.year} ss
-                                JOIN {self.schema}.states_{self.year} st on st.rowid=ss.state_id
-                                JOIN {self.schema}.statics_{self.year} si on si.rowid=st.static_id
-                                WHERE ST_intersects(segment, ST_geomfromtext('{pl}', 4326))
-            """
+                                FROM {schema}.segments_{year} ss
+                                JOIN {schema}.states_{year} st on st.rowid=ss.state_id
+                                JOIN {schema}.statics_{year} si on si.rowid=st.static_id
+                                WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))
+            """  # nosec B608 - schema/year validated above; pl bound via params
 
-        sql = sql[:-6] + f"""), get_vessel_info as(select mmsi, ship_type, loa, breadth_moulded as beam, height as air_draught
+        sql = sql[:-6] + """), get_vessel_info as(select mmsi, ship_type, loa, breadth_moulded as beam, height as air_draught
         FROM vessels.seaweb_data)
-        SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 then loa else dim_a + dim_b end as loa, case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 then loa else dim_c + dim_d end as beam, type_and_cargo, draught, ship_type, date1, sog, air_draught, st_distance(st_intersection(segment, st_geomfromtext('{pl}',4326))::geography, st_startpoint(st_geomfromtext('{pl}', 4326))::geography)-st_length(st_geomfromtext('{pl}', 4326)::geography)/2 as dist_from_start, cog
+        SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 then loa else dim_a + dim_b end as loa, case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 then loa else dim_c + dim_d end as beam, type_and_cargo, draught, ship_type, date1, sog, air_draught, st_distance(st_intersection(segment, st_geomfromtext(%(pl)s,4326))::geography, st_startpoint(st_geomfromtext(%(pl)s, 4326))::geography)-st_length(st_geomfromtext(%(pl)s, 4326)::geography)/2 as dist_from_start, cog
         FROM segments ss
         left outer JOIN get_vessel_info sd on ss.mmsi=sd.mmsi
         """
-        ok, ais_data = cast(tuple[bool, list[list[Any]]], self.db.execute_and_return(sql, return_error=True))
+        ok, ais_data = cast(
+            tuple[bool, list[list[Any]]],
+            self.db.execute_and_return(sql, return_error=True, params={"pl": pl}),
+        )
         if ok:
             return ais_data
         else:

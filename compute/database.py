@@ -84,28 +84,30 @@ class DB:
             else:
                 return [False]
 
-    def execute_and_return(self, sql: str, return_error: bool = False) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
+    def execute_and_return(self, sql, return_error: bool = False, params: tuple | list | dict | None = None) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
         """Execute the query and returns the result as a list of list
         Parameters
         ----------
-        sql: str
-            Your query
+        sql: str | psycopg2.sql.Composable
+            Your query (can be a plain string or a psycopg2 SQL composable)
         return_error: bool
             If True the function returns [bool, data/error_message]
             else it just return data/False
+        params: tuple | list | dict | None
+            Parameters to bind to the query (use ``%s`` placeholders).  Pass
+            user-controlled values via this argument rather than embedding
+            them in *sql* to prevent SQL injection.
         Returns
         -------
         list
             the list is organised as follow: [row][column]
         Examples
         --------
-        >>> execute_and_return('''SELECT 
-                               FROM 
-                               WHERE ''')
+        >>> execute_and_return("SELECT * FROM t WHERE id = %s", params=(123,))
         """
         c = self.conn.cursor()
         try:
-            c.execute(sql)
+            c.execute(sql, params)
             data: list[list[Any]] = c.fetchall()
             if return_error:
                 return True, data

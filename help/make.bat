@@ -42,6 +42,9 @@ if "%1" == "clean" (
 
 if "%1" == "html" (
 	%SPHINXBUILD% -b html %ALLSPHINXOPTS% %BUILDDIR%/html
+	REM Drop hidden Sphinx artifacts so the QGIS plugin upload check
+	REM (which flags hidden files / high-entropy hashes) does not reject the package.
+	if exist %BUILDDIR%\html\.buildinfo del /q %BUILDDIR%\html\.buildinfo
 	echo.
 	echo.Build finished. The HTML pages are in %BUILDDIR%/html.
 	goto end

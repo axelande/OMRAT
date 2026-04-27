@@ -1,3 +1,4 @@
+import ast
 import re
 
 import numpy as np
@@ -5,6 +6,63 @@ from numpy import exp, log, sqrt, sin, cos, abs as np_abs, pi
 from scipy import stats
 from scipy.special import ndtr  # C-level ndtr == norm.cdf w/o scipy dispatch
 from scipy.stats import norm
+
+
+# Restricted namespace for user-supplied repair-time expressions.  Only the
+# math / distribution names actually used by the OMRAT GUI (and IWRAP-style
+# func strings such as ``1 - stats.norm(loc=2, scale=1).cdf(x)``) are
+# exposed; ``__builtins__`` is wiped so ``open``, ``__import__`` etc. are
+# unavailable.  Combined with the AST whitelist below this stops the
+# repair-function input from being a code-execution vector.
+_SAFE_EVAL_GLOBALS = {
+    "__builtins__": {},
+    "np": np,
+    "numpy": np,
+    "stats": stats,
+    "norm": norm,
+    "exp": exp,
+    "log": log,
+    "sqrt": sqrt,
+    "sin": sin,
+    "cos": cos,
+    "abs": np_abs,
+    "pi": pi,
+}
+
+_SAFE_AST_NODES: tuple[type, ...] = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
+    ast.Constant,
+    ast.Name, ast.Load,
+    ast.Call, ast.Attribute, ast.keyword,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+    ast.USub, ast.UAdd, ast.FloorDiv,
+    ast.And, ast.Or, ast.Not,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.Tuple, ast.List,
+)
+
+
+def _validate_safe_expression(code_str: str) -> None:
+    """Reject repair-time expressions that contain disallowed AST nodes."""
+    tree = ast.parse(code_str, mode="eval")
+    for node in ast.walk(tree):
+        if not isinstance(node, _SAFE_AST_NODES):
+            raise ValueError(
+                f"Disallowed expression element in repair function: {type(node).__name__}"
+            )
+
+
+def _safe_compile(code_str: str):
+    """Validate and compile a repair-time expression (raises on disallowed input)."""
+    _validate_safe_expression(code_str)
+    return compile(code_str, "<repair>", "eval")
+
+
+def _safe_eval(code_obj, x: float) -> float:
+    """Evaluate a previously :func:`_safe_compile`'d repair-time expression."""
+    # Restricted namespace + AST whitelist make this eval safe.
+    return eval(code_obj, _SAFE_EVAL_GLOBALS, {"x": x})  # nosec B307
+
 
 def get_Fcoll(na:float, pc:float) -> float:
     """Get the accident frequncy """
@@ -24,7 +82,7 @@ def repairtime_function(data, x) -> float:
         drift = stats.lognorm(data["std"], data["loc"], data["scale"])
         repaired = drift.cdf(x)
     else:
-        repaired = eval(data["func"])
+        repaired = _safe_eval(_safe_compile(data["func"]), x)
     return repaired
 
 def powered_na(distance, mean_time, ship_speed):
@@ -111,14 +169,14 @@ def _repair_fn(data: dict, drift_speed: float):
                         return 1.0
                     return float(exp(-((t / _scale) ** _c)))
             else:
-                # Fallback: compile + eval the raw expression once.  Still
-                # slower than the analytical path but keeps backward
-                # compatibility with any user-crafted func strings.
-                code = compile(func_str, '<repair>', 'eval')
+                # Fallback: validate, compile + safe-eval the raw expression
+                # once.  Still slower than the analytical path but keeps
+                # backward compatibility with any user-crafted func strings.
+                code = _safe_compile(func_str)
 
                 def fn(distance: float, _code=code, _spd=drift_speed) -> float:
-                    x = distance / _spd / 3600.0  # noqa: F841 — referenced by eval
-                    return 1.0 - float(eval(_code))
+                    x = distance / _spd / 3600.0
+                    return 1.0 - float(_safe_eval(_code, x))
 
     _REPAIR_FN_CACHE[key] = fn
     return fn

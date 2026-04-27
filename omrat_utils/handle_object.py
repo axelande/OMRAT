@@ -78,12 +78,15 @@ def build_gebco_url(min_lat: float, max_lat: float, min_lon: float, max_lon: flo
         f"&outputFormat=GTiff&API_Key={api_key}"
     )
 
-def download_geotiff(url: str, save_path: str = "gebco_download.tif") -> str:
+def download_geotiff(url: str, save_path: str = "gebco_download.tif", timeout: float = 60.0) -> str:
     """
     Download a GeoTIFF file from the given URL and save it to disk.
     Returns the path to the saved file.
+
+    A connect/read timeout (default 60s) is enforced so a stalled GEBCO
+    response can't hang the QGIS UI thread indefinitely.
     """
-    response = requests.get(url, stream=True)
+    response = requests.get(url, stream=True, timeout=timeout)
     response.raise_for_status()  # Raises an error for bad responses
 
     with open(save_path, "wb") as f:

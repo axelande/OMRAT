@@ -62,6 +62,14 @@ ais_return = [True, [(87.0, 12.0, 79, 5.7, 'General Cargo Ship', dt, 8.6, 23.0, 
 ]]
 
 
+def _get_run_sql_call(mock_db) -> tuple[str, dict]:
+    """Return (query, params_dict) from the most recent execute_and_return call."""
+    call = mock_db.execute_and_return.call_args
+    query = call.args[0]
+    params = call.kwargs.get("params", {}) or {}
+    return query, params
+
+
 def test_run_sql_no_months(mock_ais: AIS):
     """Test run_sql when no months are selected."""
     mock_ais.months = []
@@ -73,9 +81,10 @@ def test_run_sql_no_months(mock_ais: AIS):
 
     # Verify the SQL query structure
     mock_ais.db.execute_and_return.assert_called_once()
-    query = mock_ais.db.execute_and_return.call_args[0][0]
+    query, params = _get_run_sql_call(mock_ais.db)
     assert "FROM test_schema.segments_2023" in query
-    assert "ST_intersects(segment, ST_geomfromtext('LINESTRING(10 20, 30 40)', 4326))" in query
+    assert "ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))" in query
+    assert params == {"pl": pl}
 
     # Verify the returned data
     assert result == [
@@ -93,10 +102,11 @@ def test_run_sql_with_months(mock_ais):
 
     # Verify the SQL query structure
     mock_ais.db.execute_and_return.assert_called_once()
-    query = mock_ais.db.execute_and_return.call_args[0][0]
+    query, params = _get_run_sql_call(mock_ais.db)
     assert "FROM test_schema.segments_2023_1" in query
     assert "FROM test_schema.segments_2023_2" in query
-    assert "ST_intersects(segment, ST_geomfromtext('LINESTRING(50 60, 70 80)', 4326))" in query
+    assert "ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))" in query
+    assert params == {"pl": pl}
 
     # Verify the returned data
     assert result == [
@@ -111,8 +121,9 @@ def test_run_sql_empty_result(mock_ais):
 
     # Verify the SQL query structure
     mock_ais.db.execute_and_return.assert_called_once()
-    query = mock_ais.db.execute_and_return.call_args[0][0]
-    assert "ST_intersects(segment, ST_geomfromtext('LINESTRING(0 0, 10 10)', 4326))" in query
+    query, params = _get_run_sql_call(mock_ais.db)
+    assert "ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))" in query
+    assert params == {"pl": pl}
 
     # Verify the returned data
     assert result == []
