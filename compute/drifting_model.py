@@ -383,6 +383,101 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
     # ------------------------------------------------------------------
     # Shadow + edge-geometry precompute (ship-independent)
     # ------------------------------------------------------------------
+    @staticmethod
+    def _compute_global_shadow_bounds(
+        transformed_lines: list[LineString],
+        structures: list[dict[str, Any]],
+        depths: list[dict[str, Any]],
+        reach_distance: float,
+    ) -> tuple[float, float, float, float] | None:
+        """Union of all leg + obstacle bboxes, padded by ``reach_distance``.
+
+        Used as a uniform extrude bound so the shadow memo
+        (keyed by ``(polygon, compass_angle)``) hits across legs.
+        Returns ``None`` when nothing has a finite bounding box.
+        """
+        xs: list[float] = []
+        ys: list[float] = []
+        for line in transformed_lines:
+            try:
+                b = line.bounds
+                xs.extend([b[0], b[2]])
+                ys.extend([b[1], b[3]])
+            except Exception:
+                pass
+        for source in (structures, depths):
+            for item in source:
+                g = item.get('wkt')
+                if g is None or g.is_empty:
+                    continue
+                b = g.bounds
+                xs.extend([b[0], b[2]])
+                ys.extend([b[1], b[3]])
+        if not (xs and ys):
+            return None
+        reach_pad = max(1000.0, float(reach_distance))
+        return (
+            min(xs) - reach_pad, min(ys) - reach_pad,
+            max(xs) + reach_pad, max(ys) + reach_pad,
+        )
+
+    @staticmethod
+    def _precompute_leg_lateral_params(
+        transformed_lines: list[LineString],
+        distributions: list[list[Any]],
+        weights: list[list[float]],
+    ) -> list[dict[str, Any]]:
+        """Per-leg lateral-distribution scalars + ``LegState`` for each leg.
+
+        Computed once so every ``(leg, direction)`` worker shares the
+        same lateral-distribution parameters; the result is consumed
+        by ``_shadow_task`` inside ``_precompute_shadow_layer``.
+        """
+        out: list[dict[str, Any]] = []
+        for leg_idx, line in enumerate(transformed_lines):
+            try:
+                dists_dir = (
+                    distributions[leg_idx]
+                    if leg_idx < len(distributions) else []
+                )
+                wgts = weights[leg_idx] if leg_idx < len(weights) else []
+                w_dir: np.ndarray | None = None
+                lateral_spread = 0.0
+                if dists_dir and wgts:
+                    w_dir = np.array(wgts)
+                    if w_dir.sum() > 0:
+                        w_dir = w_dir / w_dir.sum()
+                        weighted_std = float(np.sqrt(sum(
+                            wt * (dist.std() ** 2)
+                            for dist, wt in zip(dists_dir, w_dir) if wt > 0
+                        )))
+                        lateral_spread = 5.0 * weighted_std
+            except Exception:
+                dists_dir = []
+                w_dir = None
+                lateral_spread = 0.0
+            try:
+                coords = list(line.coords)
+                if len(coords) >= 2:
+                    leg_state = LegState(
+                        leg_id=str(leg_idx),
+                        line=line,
+                        mean_offset_m=0.0,
+                        lateral_sigma_m=max(1.0, lateral_spread / 5.0),
+                    )
+                else:
+                    leg_state = None
+            except Exception:
+                leg_state = None
+            out.append({
+                'dists_dir': dists_dir,
+                'w_dir': w_dir,
+                'lateral_spread': lateral_spread,
+                'leg_state': leg_state,
+                'line': line,
+            })
+        return out
+
     def _precompute_shadow_layer(
             self,
             transformed_lines: list[LineString],
@@ -430,87 +525,16 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             # Shared shadow memo for the whole precompute.  The shadow shape
             # depends only on (polygon, compass_angle) given a fixed extrude
             # bound -- we pass a single ``global_shadow_bounds`` to every call
-            # so this cache hits across legs and directions.  The profile on
-            # proj.omrat showed 26,545 calls to ``create_obstacle_shadow``
-            # totalling ~234 s; every leg re-shadowed the same obstacles.
+            # so this cache hits across legs and directions.  Cumulative
+            # profile on proj.omrat showed 26,545 ``create_obstacle_shadow``
+            # calls (~234 s) before this cache.
             shadow_memo: dict[tuple[int, float], BaseGeometry] = {}
-
-            # Global "big enough" bounds: the union of all leg + obstacle
-            # bboxes, expanded by reach_distance and a safety pad.  Using this
-            # for every shadow keeps the extrude distance uniform so cached
-            # shadows remain valid across corridors of different sizes.
-            _xs: list[float] = []
-            _ys: list[float] = []
-            for line in transformed_lines:
-                try:
-                    b = line.bounds
-                    _xs.extend([b[0], b[2]])
-                    _ys.extend([b[1], b[3]])
-                except Exception:
-                    pass
-            for s in structures:
-                g = s.get('wkt')
-                if g is not None and not g.is_empty:
-                    b = g.bounds
-                    _xs.extend([b[0], b[2]])
-                    _ys.extend([b[1], b[3]])
-            for d in depths:
-                g = d.get('wkt')
-                if g is not None and not g.is_empty:
-                    b = g.bounds
-                    _xs.extend([b[0], b[2]])
-                    _ys.extend([b[1], b[3]])
-            if _xs and _ys:
-                reach_pad = max(1000.0, float(reach_distance))
-                global_shadow_bounds: tuple[float, float, float, float] | None = (
-                    min(_xs) - reach_pad, min(_ys) - reach_pad,
-                    max(_xs) + reach_pad, max(_ys) + reach_pad,
-                )
-            else:
-                global_shadow_bounds = None
-
-            # Precompute per-leg scalars once so every (leg, direction) worker
-            # shares the same lateral-distribution parameters.
-            leg_precomputed: list[dict[str, Any]] = []
-            for leg_idx, line in enumerate(transformed_lines):
-                try:
-                    dists_dir = distributions[leg_idx] if leg_idx < len(distributions) else []
-                    wgts = weights[leg_idx] if leg_idx < len(weights) else []
-                    w_dir: np.ndarray | None = None
-                    lateral_spread = 0.0
-                    if dists_dir and wgts:
-                        w_dir = np.array(wgts)
-                        if w_dir.sum() > 0:
-                            w_dir = w_dir / w_dir.sum()
-                            weighted_std = float(np.sqrt(sum(
-                                wt * (dist.std() ** 2)
-                                for dist, wt in zip(dists_dir, w_dir) if wt > 0
-                            )))
-                            lateral_spread = 5.0 * weighted_std
-                except Exception:
-                    dists_dir = []
-                    w_dir = None
-                    lateral_spread = 0.0
-                try:
-                    coords = list(line.coords)
-                    if len(coords) >= 2:
-                        leg_state = LegState(
-                            leg_id=str(leg_idx),
-                            line=line,
-                            mean_offset_m=0.0,
-                            lateral_sigma_m=max(1.0, lateral_spread / 5.0),
-                        )
-                    else:
-                        leg_state = None
-                except Exception:
-                    leg_state = None
-                leg_precomputed.append({
-                    'dists_dir': dists_dir,
-                    'w_dir': w_dir,
-                    'lateral_spread': lateral_spread,
-                    'leg_state': leg_state,
-                    'line': line,
-                })
+            global_shadow_bounds = self._compute_global_shadow_bounds(
+                transformed_lines, structures, depths, reach_distance,
+            )
+            leg_precomputed = self._precompute_leg_lateral_params(
+                transformed_lines, distributions, weights,
+            )
 
             def _shadow_task(leg_idx: int, d_idx: int) -> tuple[tuple[int, int], dict[str, Any]]:
                 """Build corridor, shadows, and edge geometry for one (leg, dir)."""
@@ -691,67 +715,95 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 }
                 return (leg_idx, d_idx), entry
 
-            # Parallelise across (leg, direction) tuples.  Shapely and numpy
-            # release the GIL during geometry / linear-algebra operations so
-            # Python threads give real parallelism here.  The progress bar
-            # and cancellation keep working because the main thread owns the
-            # callback and checks the return value.
-            max_workers = max(1, min(8, cpu_count() - 1))
-            completed = 0
-            cancelled = False
+            return self._run_shadow_pool(
+                _shadow_task, cache, n_legs, total_units,
+                progress_base, progress_span,
+            )
 
-            def _report(msg: str) -> bool:
-                phase_progress = completed / total_units
-                overall = progress_base + progress_span * min(1.0, phase_progress)
-                return self._report_progress('shadow', overall, msg)
+    def _run_shadow_pool(
+        self,
+        shadow_task: Callable[[int, int], tuple[tuple[int, int], dict[str, Any]]],
+        cache: dict[tuple[int, int], dict[str, Any]],
+        n_legs: int,
+        total_units: int,
+        progress_base: float,
+        progress_span: float,
+    ) -> dict[tuple[int, int], dict[str, Any]]:
+        """Dispatch ``shadow_task`` across (leg, direction) tuples.
 
-            # Skip-pool for tiny / degenerate inputs
-            if n_legs <= 1 or max_workers <= 1:
-                for leg_idx in range(n_legs):
-                    for d_idx in range(8):
-                        (key, entry) = _shadow_task(leg_idx, d_idx)
-                        cache[key] = entry
-                        completed += 1
-                        if completed % max(1, total_units // 20) == 0 or completed == total_units:
-                            if not _report(f"Drifting - shadows ({completed}/{total_units})"):
-                                cache['__cancelled__'] = True  # type: ignore[index]
-                                return cache
-                _report("Drifting - shadows done")
-                return cache
+        Parallelises with :class:`ThreadPoolExecutor` when there's
+        enough work; falls back to a sequential loop for tiny /
+        degenerate inputs.  Reports progress every 5% and propagates
+        cancellation by stamping ``cache['__cancelled__']`` and
+        returning early.
+        """
+        max_workers = max(1, min(8, cpu_count() - 1))
+        completed = 0
+        cancelled = False
 
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = {
-                    pool.submit(_shadow_task, leg_idx, d_idx): (leg_idx, d_idx)
-                    for leg_idx in range(n_legs)
-                    for d_idx in range(8)
-                }
-                try:
-                    for fut in as_completed(futures):
-                        try:
-                            (key, entry) = fut.result()
-                            cache[key] = entry
-                        except Exception:
-                            # Swallow per-task failures -- an empty cache
-                            # entry simply falls back to precomputed h_X in
-                            # the cascade.
-                            pass
-                        completed += 1
-                        if completed % max(1, total_units // 20) == 0 or completed == total_units:
-                            if not _report(
-                                f"Drifting - shadows ({completed}/{total_units})"
-                            ):
-                                cancelled = True
-                                for f in futures:
-                                    f.cancel()
-                                break
-                except Exception:
-                    pass
-            if cancelled:
-                cache['__cancelled__'] = True  # type: ignore[index]
-                return cache
+        def _report(msg: str) -> bool:
+            phase_progress = completed / total_units
+            overall = progress_base + progress_span * min(1.0, phase_progress)
+            return self._report_progress('shadow', overall, msg)
 
+        report_step = max(1, total_units // 20)
+
+        if n_legs <= 1 or max_workers <= 1:
+            for leg_idx in range(n_legs):
+                for d_idx in range(8):
+                    (key, entry) = shadow_task(leg_idx, d_idx)
+                    cache[key] = entry
+                    completed += 1
+                    if (
+                        completed % report_step == 0
+                        or completed == total_units
+                    ):
+                        if not _report(
+                            f"Drifting - shadows ({completed}/{total_units})"
+                        ):
+                            cache['__cancelled__'] = True  # type: ignore[index]
+                            return cache
             _report("Drifting - shadows done")
             return cache
+
+        # Shapely + numpy release the GIL during geometry / linear-algebra
+        # operations, so Python threads give real parallelism here.
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(shadow_task, leg_idx, d_idx): (leg_idx, d_idx)
+                for leg_idx in range(n_legs)
+                for d_idx in range(8)
+            }
+            try:
+                for fut in as_completed(futures):
+                    try:
+                        (key, entry) = fut.result()
+                        cache[key] = entry
+                    except Exception:
+                        # Swallow per-task failures -- an empty cache
+                        # entry simply falls back to precomputed h_X in
+                        # the cascade.
+                        pass
+                    completed += 1
+                    if (
+                        completed % report_step == 0
+                        or completed == total_units
+                    ):
+                        if not _report(
+                            f"Drifting - shadows ({completed}/{total_units})"
+                        ):
+                            cancelled = True
+                            for f in futures:
+                                f.cancel()
+                            break
+            except Exception:
+                pass
+        if cancelled:
+            cache['__cancelled__'] = True  # type: ignore[index]
+            return cache
+
+        _report("Drifting - shadows done")
+        return cache
 
 
     def _precompute_bucket_memo(
@@ -1733,13 +1785,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         """Auto-generate the drifting Markdown report to disk.
 
         Path resolution priority:
-        - If the UI field LEReportPath has a value, write to that path
-        - Otherwise, write to '<cwd>/drifting_report.md'
+        - If ``LEReportPath`` points to a folder (the post-Quick-Start
+          convention) skip — the combined report is written by the
+          run-history path with the model name baked into the filename.
+        - If ``LEReportPath`` points to a file, write to that path.
+        - Otherwise, write to '<cwd>/drifting_report.md'.
 
         Returns the written content on success, else None.
         """
         try:
-            # Prefer UI-provided path if present
             ui_path = None
             try:
                 if hasattr(self.p.main_widget, 'LEReportPath') and self.p.main_widget.LEReportPath is not None:
@@ -1749,12 +1803,111 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             except Exception:
                 ui_path = None
 
+            if ui_path and Path(ui_path).is_dir():
+                # The folder path is owned by the run-history /
+                # _auto_save_run flow which writes the combined report.
+                return None
+
             path = ui_path or str(Path(os.getcwd()) / 'drifting_report.md')
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             return self.write_drifting_report_markdown(path, data)
         except Exception:
             # Silent failure: do not interrupt calculations/UI/tests
             return None
+
+    def _merge_depths_by_threshold(
+        self,
+        data: dict[str, Any],
+        depths: list[dict[str, Any]],
+        drift: dict[str, Any],
+    ) -> tuple[
+        bool,
+        list[gpd.GeoDataFrame],
+        list[dict[str, Any]],
+        dict[float, int],
+    ]:
+        """Merge depth polygons by unique depth value, when worthwhile.
+
+        With many depth polygons but few unique depth VALUES, several
+        thresholds (draughts) map to the same merged polygon -- e.g.
+        depth values ``[0, 3, 6, 9, 12]`` mean any threshold in
+        ``(6, 9]`` includes the same set of polygons (those with
+        ``depth <= 6``).  Merging once and indexing by threshold keeps
+        the cascade arithmetic.
+
+        Returns ``(use_merged, merged_gdfs, merged_meta, threshold_to_idx)``.
+        ``use_merged`` is ``False`` when the projection wouldn't reduce
+        the work, in which case the other three are empty placeholders.
+        """
+        unique_depth_vals = (
+            sorted(set(d['depth'] for d in depths)) if depths else []
+        )
+        use_merged = (
+            len(depths) > len(unique_depth_vals) + 1
+            and len(unique_depth_vals) > 0
+        )
+        merged_depths_gdfs: list[gpd.GeoDataFrame] = []
+        merged_depths_meta: list[dict[str, Any]] = []
+        threshold_to_idx: dict[float, int] = {}
+
+        if not (use_merged and depths):
+            return use_merged, merged_depths_gdfs, merged_depths_meta, threshold_to_idx
+
+        # ``_build_transformed`` stashes a UTM->WGS84 transformer on
+        # ``self`` so we can attach a WGS84 copy of the merged geometry.
+        # Without it, ``create_result_layers`` falls back to the UTM
+        # geometry on a WGS84 layer and the features land on the
+        # equator off the coast of Africa.
+        _to_wgs84 = getattr(self, '_segment_utm_to_wgs84', None)
+        cumulative_geoms: list[tuple[float, int]] = []
+        for boundary in unique_depth_vals:
+            qualifying = [d['wkt'] for d in depths if d['depth'] <= boundary]
+            if not qualifying:
+                continue
+            merged_geom = unary_union(qualifying)
+            merged_geom_wgs84 = merged_geom
+            if _to_wgs84 is not None:
+                try:
+                    merged_geom_wgs84 = _to_wgs84(merged_geom)
+                except Exception:
+                    merged_geom_wgs84 = merged_geom
+            idx = len(merged_depths_gdfs)
+            merged_depths_gdfs.append(
+                gpd.GeoDataFrame(geometry=[merged_geom]),
+            )
+            merged_depths_meta.append({
+                'id': f'merged_depth_le_{boundary}',
+                'depth': boundary,
+                'wkt': merged_geom,
+                'wkt_wgs84': merged_geom_wgs84,
+            })
+            cumulative_geoms.append((boundary, idx))
+
+        # Collect all thresholds from traffic draughts and anchor draughts.
+        draughts: set[float] = set()
+        for _, _, _, leg_traffic, _ in clean_traffic(data):
+            for cell in leg_traffic:
+                d = float(cell.get('draught', 0.0))
+                if d > 0:
+                    draughts.add(round(d, 2))
+        anchor_d_val = float(drift.get('anchor_d', 0.0))
+        all_thresholds: set[float] = set()
+        for d in draughts:
+            all_thresholds.add(d)
+            if anchor_d_val > 0:
+                all_thresholds.add(round(anchor_d_val * d, 2))
+
+        # For threshold T, the merged polygon includes all depths
+        # strictly less than T.  Pick the highest boundary < T.
+        for threshold in all_thresholds:
+            best_idx = None
+            for boundary, idx in cumulative_geoms:
+                if boundary < threshold:
+                    best_idx = idx
+            if best_idx is not None:
+                threshold_to_idx[round(threshold, 2)] = best_idx
+
+        return use_merged, merged_depths_gdfs, merged_depths_meta, threshold_to_idx
 
     def run_drifting_model(self, data: dict[str, Any]) -> tuple[float, float]:
         """Compute drifting allision and grounding, and store a breakdown report."""
@@ -1790,83 +1943,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         reach_distance = self._compute_reach_distance(data, longest_length)
         drift = data.get('drift', {})
 
-        # --- Optionally merge depth polygons by depth level for performance ---
-        # When there are many depth polygons, merge them by unique depth value.
-        # Many thresholds (draughts) map to the same merged polygon because
-        # only the unique depth VALUES determine which polygons are included.
-        # E.g., with depth values [0, 3, 6, 9, 12], any threshold in (6, 9]
-        # includes the same set of polygons (those with depth <= 6).
-        from shapely.ops import unary_union
+        # Optionally merge depth polygons by depth level for performance --
+        # see ``_merge_depths_by_threshold`` for the rationale.
+        (
+            use_merged,
+            merged_depths_gdfs,
+            merged_depths_meta,
+            threshold_to_idx,
+        ) = self._merge_depths_by_threshold(data, depths, drift)
 
-        # Get unique depth values (boundaries) from the depth polygons
-        unique_depth_vals = sorted(set(d['depth'] for d in depths)) if depths else []
-
-        # Only merge when it reduces work (more depth polygons than unique levels)
-        use_merged = len(depths) > len(unique_depth_vals) + 1 and len(unique_depth_vals) > 0
-
-        merged_depths_gdfs: list[gpd.GeoDataFrame] = []
-        merged_depths_meta: list[dict[str, Any]] = []
-        # Map any threshold to the correct merged polygon index
-        # For threshold T, the merged polygon includes all depths with depth < T
-        # which is the same as "all depths <= max_depth_val where max_depth_val < T"
-        threshold_to_idx: dict[float, int] = {}
-
-        if use_merged and depths:
-            # Build one merged polygon per unique depth boundary
-            # boundary_merged[i] = union of all depth polygons with depth <= unique_depth_vals[i]
-            cumulative_geoms: list = []
-            # ``_build_transformed`` stashes a UTM->WGS84 transformer on
-            # ``self`` so we can attach a WGS84 copy of the merged
-            # geometry.  Without it, ``create_result_layers`` falls back
-            # to the UTM geometry on a WGS84 layer and the features land
-            # on the equator off the coast of Africa.
-            _to_wgs84 = getattr(self, '_segment_utm_to_wgs84', None)
-            for boundary in unique_depth_vals:
-                qualifying = [d['wkt'] for d in depths if d['depth'] <= boundary]
-                if qualifying:
-                    merged_geom = unary_union(qualifying)
-                    merged_geom_wgs84 = merged_geom
-                    if _to_wgs84 is not None:
-                        try:
-                            merged_geom_wgs84 = _to_wgs84(merged_geom)
-                        except Exception:
-                            merged_geom_wgs84 = merged_geom
-                    idx = len(merged_depths_gdfs)
-                    merged_depths_gdfs.append(gpd.GeoDataFrame(geometry=[merged_geom]))
-                    merged_depths_meta.append({
-                        'id': f'merged_depth_le_{boundary}',
-                        'depth': boundary,
-                        'wkt': merged_geom,
-                        'wkt_wgs84': merged_geom_wgs84,
-                    })
-                    cumulative_geoms.append((boundary, idx))
-
-            # Build threshold_to_idx: for any threshold T, find the largest
-            # depth boundary that is strictly less than T
-            # Collect all thresholds from traffic draughts and anchor thresholds
-            draughts: set[float] = set()
-            for _, _, _, leg_traffic, _ in clean_traffic(data):
-                for cell in leg_traffic:
-                    d = float(cell.get('draught', 0.0))
-                    if d > 0:
-                        draughts.add(round(d, 2))
-            anchor_d_val = float(drift.get('anchor_d', 0.0))
-            all_thresholds: set[float] = set()
-            for d in draughts:
-                all_thresholds.add(d)
-                if anchor_d_val > 0:
-                    all_thresholds.add(round(anchor_d_val * d, 2))
-
-            for threshold in all_thresholds:
-                # Find the highest boundary < threshold
-                best_idx = None
-                for boundary, idx in cumulative_geoms:
-                    if boundary < threshold:
-                        best_idx = idx
-                if best_idx is not None:
-                    threshold_to_idx[round(threshold, 2)] = best_idx
-
-        # Use merged or original depths for spatial precomputation
         effective_depths_gdfs = merged_depths_gdfs if use_merged else depths_gdfs
         effective_depths_meta = merged_depths_meta if use_merged else depths
 

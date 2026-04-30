@@ -110,7 +110,11 @@ class Distributions:
         if new_id == '' or new_id is None:
             return
         l_id = self.last_id
-        if self.dw.leNormMean1_1.text() != '':
+        # last_id defaults to '1', but the user may have no segment with that id
+        # (no route yet, or the segment was deleted). Skip the flush in that case.
+        if l_id not in self.omrat.segment_data:
+            l_id = None
+        if l_id is not None and self.dw.leNormMean1_1.text() != '':
             # Update segment data for the last segment
             self.omrat.segment_data[l_id]['mean1_1'] = float(self.dw.leNormMean1_1.text())
             self.omrat.segment_data[l_id]['mean1_2'] = float(self.dw.leNormMean1_2.text())
@@ -138,6 +142,10 @@ class Distributions:
             self.omrat.segment_data[l_id]['u_max2'] = float(self.dw.leUniformMax2.text())
             self.omrat.segment_data[l_id]['u_p2'] = self.dw.sbUniformP2.value()
             self.omrat.segment_data[l_id]['ai2'] = float(self.dw.LEMeanTimeSeconds2.text())
+        if new_id not in self.omrat.segment_data:
+            # The combo box still pointed at a segment that no longer exists;
+            # nothing to populate the widgets from.
+            return
         if 'mean1_1' not in self.omrat.segment_data[new_id]:
             self.omrat.segment_data[new_id].update({
                 'mean1_1': 0,'mean2_1': 0, 'weight1_1': 100,

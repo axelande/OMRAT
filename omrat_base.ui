@@ -1557,315 +1557,36 @@ QToolTip {
              </item>
              <item>
               <widget class="QTableWidget" name="TWPreviousRuns">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>140</height>
+                </size>
+               </property>
                <property name="maximumSize">
                 <size>
                  <width>16777215</width>
-                 <height>100</height>
+                 <height>180</height>
                 </size>
                </property>
               </widget>
              </item>
              <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_4">
-               <item>
-                <widget class="QLabel" name="label">
-                 <property name="text">
-                  <string>Probability of drifting allision:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPDriftAllision">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewDriftingAllision">
-                 <property name="minimumSize">
-                  <size>
-                   <width>50</width>
-                   <height>0</height>
-                  </size>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
+              <widget class="QLabel" name="lblAccidentResults">
+               <property name="text">
+                <string>Accident probabilities</string>
+               </property>
+              </widget>
              </item>
              <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_5">
-               <item>
-                <widget class="QLabel" name="label_35">
-                 <property name="text">
-                  <string>Probability of powered allision:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPPoweredAllision">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewPoweredAllision">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_6">
-               <item>
-                <widget class="QLabel" name="label_36">
-                 <property name="text">
-                  <string>Probability of drifting grounding:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPDriftingGrounding">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewDriftingGrounding">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_7">
-               <item>
-                <widget class="QLabel" name="label_37">
-                 <property name="text">
-                  <string>Probability of powered grounding:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPPoweredGrounding">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewPoweredGrounding">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_10">
-               <item>
-                <widget class="QLabel" name="label_41">
-                 <property name="text">
-                  <string>Probability of overtaking collision:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPOvertakingCollision">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewOvertakingCollision">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_9">
-               <item>
-                <widget class="QLabel" name="label_40">
-                 <property name="text">
-                  <string>Probability of head-on collision:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPHeadOnCollision">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewHeadOnCollision">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_11">
-               <item>
-                <widget class="QLabel" name="label_42">
-                 <property name="text">
-                  <string>Probability of crossing collision:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPCrossingCollision">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewCrossingCollision">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_8">
-               <item>
-                <widget class="QLabel" name="label_39">
-                 <property name="text">
-                  <string>Probability of merging collision:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="LEPMergingCollision">
-                 <property name="enabled">
-                  <bool>false</bool>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>300</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pbViewMergingCollision">
-                 <property name="maximumSize">
-                  <size>
-                   <width>100</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>View</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
+              <widget class="QTableWidget" name="TWAccidentResults">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>240</height>
+                </size>
+               </property>
+              </widget>
              </item>
              <item>
               <spacer name="verticalSpacer">
@@ -1986,6 +1707,131 @@ shadows/holes created by shallow depths and low structures.</string>
              </size>
             </property>
            </spacer>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="compare_tab">
+         <attribute name="title">
+          <string>Compare</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="compare_layout">
+          <item>
+           <widget class="QLabel" name="lblCompareTitle">
+            <property name="text">
+             <string>Compare two OMRAT runs</string>
+            </property>
+            <property name="font">
+             <font>
+              <pointsize>11</pointsize>
+              <weight>75</weight>
+              <bold>true</bold>
+             </font>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <layout class="QGridLayout" name="compareGrid">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblCompareA">
+              <property name="text">
+               <string>Run A (.omrat):</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QLineEdit" name="LECompareA"/>
+            </item>
+            <item row="0" column="2">
+             <widget class="QPushButton" name="pbCompareABrowse">
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>30</width>
+                <height>16777215</height>
+               </size>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblCompareB">
+              <property name="text">
+               <string>Run B (.omrat):</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QLineEdit" name="LECompareB"/>
+            </item>
+            <item row="1" column="2">
+             <widget class="QPushButton" name="pbCompareBBrowse">
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>30</width>
+                <height>16777215</height>
+               </size>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pbRunCompare">
+            <property name="text">
+             <string>Compare</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="lblCompareSummary">
+            <property name="text">
+             <string>Pick two .omrat snapshots, then click Compare.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="lblCompareAccidents">
+            <property name="text">
+             <string>Accident probabilities</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTableWidget" name="TWCompareAccidents"/>
+          </item>
+          <item>
+           <widget class="QLabel" name="lblCompareSettings">
+            <property name="text">
+             <string>Settings differences</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTableWidget" name="TWCompareSettings"/>
+          </item>
+          <item>
+           <widget class="QLabel" name="lblCompareLegs">
+            <property name="text">
+             <string>Route distance per leg</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTableWidget" name="TWCompareLegs"/>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pbAddCompareLayers">
+            <property name="text">
+             <string>Add both runs as map layers (red + blue)</string>
+            </property>
+           </widget>
           </item>
          </layout>
         </widget>

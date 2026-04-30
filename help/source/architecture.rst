@@ -18,7 +18,7 @@ Directory Structure
 ::
 
    OMRAT/
-   ├── omrat.py                    # Main plugin class (entry point)
+   ├── omrat.py                    # Main plugin class (entry point, slim facade)
    ├── omrat_widget.py             # Main UI dock widget
    ├── __init__.py                 # Plugin initialisation (classFactory)
    │
@@ -26,6 +26,7 @@ Directory Structure
    │   ├── basic_equations.py      # Core mathematical formulas
    │   ├── run_calculations.py     # Calculation orchestration
    │   ├── calculation_task.py     # QgsTask wrapper for background exec
+   │   ├── drifting_model.py       # Drifting cascade (mixin onto Calculation)
    │   ├── database.py             # PostgreSQL/PostGIS connector
    │   └── iwrap_convertion.py     # IWRAP XML import/export
    │
@@ -34,7 +35,10 @@ Directory Structure
    │   ├── route.py                # Route processing utilities
    │   ├── drift_corridor_v2.py    # Drift corridor API (re-exports)
    │   ├── drift_corridor_task_v2.py  # Background corridor generation
-   │   ├── get_drifting_overlap.py # Overlap visualisation
+   │   ├── get_drifting_overlap.py # Overlap dialog facade + visualizer class
+   │   ├── drift_overlap_geometry.py  # Pure geometry/distance helpers
+   │   ├── drift_overlap_plot.py   # Bottom PDF panel matplotlib helper
+   │   ├── drift_overlap_sidebar.py   # Sortable QTableWidget sidebar builder
    │   ├── calculate_probability_holes.py  # Monte Carlo integration
    │   ├── result_layers.py        # Result QGIS layer creation
    │   └── drift/                  # Refactored drift submodule
@@ -47,7 +51,7 @@ Directory Structure
    │       ├── generator.py        # Main corridor generator (~800 lines)
    │       └── probability_integration.py  # Probability hole integration
    │
-   ├── omrat_utils/                # Data management utilities
+   ├── omrat_utils/                # Data management + UI mixins
    │   ├── handle_traffic.py       # Traffic table management
    │   ├── handle_object.py        # Depth & structure management
    │   ├── handle_ais.py           # AIS database integration
@@ -59,7 +63,12 @@ Directory Structure
    │   ├── storage.py              # Project file I/O (.omrat JSON)
    │   ├── validate_data.py        # Pydantic validation schemas
    │   ├── repair_time.py          # Repair time distribution
-   │   └── units.py                # Unit conversion utilities
+   │   ├── units.py                # Unit conversion utilities
+   │   ├── iwrap_io_mixin.py       # OMRAT IWRAP import/export slots
+   │   ├── compare_mixin.py        # Compare-Models tab logic
+   │   ├── drift_analysis_mixin.py # Drift-corridor analysis runner + layers
+   │   ├── run_history_mixin.py    # Auto-save flow + Previous-runs table
+   │   └── accident_results_mixin.py  # TWAccidentResults + per-row View dispatcher
    │
    ├── ui/                         # User interface widgets
    │   ├── drift_settings_widget.py
@@ -111,8 +120,17 @@ Key Classes
 OMRAT (omrat.py)
 -----------------
 
-The main plugin class. It owns all other components and orchestrates
-the plugin lifecycle:
+The main plugin class. It owns the manager components and orchestrates
+the plugin lifecycle, but most slot-handling logic now lives in
+focused mixins under ``omrat_utils/``.  The class declaration is::
+
+   class OMRAT(
+       IwrapIOMixin, CompareMixin, DriftAnalysisMixin, RunHistoryMixin,
+       AccidentResultsMixin,
+   ):
+       ...
+
+What ``omrat.py`` itself still owns:
 
 - **Initialisation**: Creates instances of all manager classes (Traffic,
   OObject, DriftSettings, etc.)
@@ -121,9 +139,28 @@ the plugin lifecycle:
   ``DriftCorridorTask`` instances for background execution
 - **Menu/toolbar**: Registers QGIS menu items and toolbar buttons
 
+What the mixins own:
+
+- ``IwrapIOMixin`` -- IWRAP XML import / export menu actions
+- ``CompareMixin`` -- the *Compare Models* tab (snapshot pickers,
+  diff tables, layer overlays)
+- ``DriftAnalysisMixin`` -- *Run Drift Analysis* slot, per-leg
+  categorised polygon layers
+- ``RunHistoryMixin`` -- auto-save flow (``.omrat`` snapshot,
+  ``.gpkg``, ``.collision.json`` and ``.drifting.json`` sidecars,
+  ``_results_<timestamp>.md``) plus the *Previous runs* table
+- ``AccidentResultsMixin`` -- the ``TWAccidentResults`` table with
+  per-row **View** buttons that dispatch to the interactive
+  visualiser of the selected previous run
+
 .. container:: source-code-ref
 
-   ``omrat.py`` -- `OMRAT <https://github.com/axelande/OMRAT/blob/main/omrat.py>`__ (main plugin entry point)
+   ``omrat.py`` -- `OMRAT <https://github.com/axelande/OMRAT/blob/main/omrat.py>`__ (main plugin entry point) |
+   `IwrapIOMixin <https://github.com/axelande/OMRAT/blob/main/omrat_utils/iwrap_io_mixin.py>`__,
+   `CompareMixin <https://github.com/axelande/OMRAT/blob/main/omrat_utils/compare_mixin.py>`__,
+   `DriftAnalysisMixin <https://github.com/axelande/OMRAT/blob/main/omrat_utils/drift_analysis_mixin.py>`__,
+   `RunHistoryMixin <https://github.com/axelande/OMRAT/blob/main/omrat_utils/run_history_mixin.py>`__,
+   `AccidentResultsMixin <https://github.com/axelande/OMRAT/blob/main/omrat_utils/accident_results_mixin.py>`__
 
 OMRATMainWidget (omrat_widget.py)
 -----------------------------------

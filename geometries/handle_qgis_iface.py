@@ -306,11 +306,18 @@ class HandleQGISIface:
             end_pointXY = QgsPointXY(end_point_.x(), end_point_.y())
         else:
             raise TypeError("Unknown data point")
-        
+
         assert isinstance(start_point, QgsPoint)
         assert isinstance(end_point, QgsPoint)
         # Update the start and end points in the table
         assert(self.omrat.main_widget is not None)
+
+        # Capture the OLD endpoints of this leg before we overwrite them
+        # so the shared-vertex propagation (below) can match siblings.
+        old_seg = self.omrat.segment_data.get(str(fid)) or {}
+        old_start = self._parse_wkt_xy(old_seg.get('Start_Point'))
+        old_end = self._parse_wkt_xy(old_seg.get('End_Point'))
+
         for row in range(self.omrat.main_widget.twRouteList.rowCount()):
             if int(self.omrat.main_widget.twRouteList.item(row, 0).text()) == fid:
                 self.omrat.main_widget.twRouteList.item(row, 3).setText(self.format_wkt(start_point))
@@ -329,7 +336,10 @@ class HandleQGISIface:
                     self.omrat.segment_data[seg_key]['End_Point'] = self.format_wkt(end_point)
 
                     # Recompute heading-based direction labels and line length in meters.
-                    degrees: float = (start_point.azimuth(end_pointXY) + 360) % 360
+                    # Use the matching QgsPointXY overload of azimuth — passing a
+                    # QgsPointXY to QgsPoint.azimuth raises a type-mismatch error
+                    # in QGIS 4 / Qt 6.
+                    degrees: float = (start_pointXY.azimuth(end_pointXY) + 360) % 360
                     if degrees > 315 or degrees <= 45:
                         dirs = ['North going', 'South going']
                     elif degrees > 45 and degrees <= 135:
@@ -355,6 +365,17 @@ class HandleQGISIface:
                     start_utm = transform_to_utm.transform(start_pointXY)
                     end_utm = transform_to_utm.transform(end_pointXY)
                     self.omrat.segment_data[seg_key]['line_length'] = start_utm.distance(end_utm)
+
+                # Propagate the move to any other leg that shared the
+                # endpoint that just moved (so curved routes stay
+                # connected when the user drags a junction vertex).
+                self._propagate_shared_vertex_move(
+                    moved_fid=fid,
+                    old_start=old_start,
+                    old_end=old_end,
+                    new_start=(start_pointXY.x(), start_pointXY.y()),
+                    new_end=(end_pointXY.x(), end_pointXY.y()),
+                )
 
                 # Stop processing once the correct row is updated
                 return
@@ -580,6 +601,143 @@ class HandleQGISIface:
     def format_wkt(self, point:QgsPoint):
         """Formats a point as a WKT string with six decimal places."""
         return f'{point.x():.6f} {point.y():.6f}'
+
+    @staticmethod
+    def _parse_wkt_xy(text: str | None) -> tuple[float, float] | None:
+        """Parse the OMRAT segment-table point format ``"lon lat"``.
+
+        Tolerant of leading/trailing whitespace and of comma-separated
+        forms.  Returns ``None`` for missing / malformed input.
+        """
+        if not isinstance(text, str):
+            return None
+        parts = text.replace(',', ' ').split()
+        if len(parts) < 2:
+            return None
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+
+    def _propagate_shared_vertex_move(
+        self,
+        *,
+        moved_fid: int,
+        old_start: tuple[float, float] | None,
+        old_end: tuple[float, float] | None,
+        new_start: tuple[float, float],
+        new_end: tuple[float, float],
+    ) -> None:
+        """Move sibling legs that shared the endpoint just dragged.
+
+        For every other leg whose start or end point matched ``old_start``
+        or ``old_end`` (within :data:`_SHARED_VERTEX_TOL` degrees),
+        update the stored endpoint to the matching ``new_*`` and rewrite
+        the matching row of ``twRouteList``.
+
+        A re-entrancy flag suppresses the propagation triggered by the
+        QGIS ``geometryChanged`` signals fired by our own writes — those
+        signals would otherwise cause a chain of moves that drift away
+        from the user's original drag.
+        """
+        if getattr(self, '_propagating_vertex_move', False):
+            return
+
+        # Only propagate when the endpoint actually moved.
+        moved: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        if old_start is not None and not self._xy_close(old_start, new_start):
+            moved.append((old_start, new_start))
+        if old_end is not None and not self._xy_close(old_end, new_end):
+            moved.append((old_end, new_end))
+        if not moved:
+            return
+
+        self._propagating_vertex_move = True
+        try:
+            for old_xy, new_xy in moved:
+                self._move_matching_endpoints(
+                    skip_fid=moved_fid, old_xy=old_xy, new_xy=new_xy,
+                )
+        finally:
+            self._propagating_vertex_move = False
+
+    @staticmethod
+    def _xy_close(
+        a: tuple[float, float],
+        b: tuple[float, float],
+        tol: float = 1e-7,
+    ) -> bool:
+        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
+
+    def _move_matching_endpoints(
+        self,
+        *,
+        skip_fid: int,
+        old_xy: tuple[float, float],
+        new_xy: tuple[float, float],
+    ) -> None:
+        """For every leg != ``skip_fid`` whose start or end equals
+        ``old_xy``, update that endpoint to ``new_xy``.
+
+        Updates ``segment_data`` and the ``twRouteList`` row in step,
+        and rewrites the offset / leg layer features so the canvas
+        catches up without waiting for the next edit-buffer commit.
+        """
+        widget = self.omrat.main_widget
+        if widget is None:
+            return
+        tol = 1e-7
+        for row in range(widget.twRouteList.rowCount()):
+            try:
+                fid = int(widget.twRouteList.item(row, 0).text())
+            except (AttributeError, ValueError):
+                continue
+            if fid == skip_fid:
+                continue
+
+            seg_key = str(fid)
+            seg = self.omrat.segment_data.get(seg_key)
+            if seg is None:
+                continue
+
+            sp = self._parse_wkt_xy(seg.get('Start_Point'))
+            ep = self._parse_wkt_xy(seg.get('End_Point'))
+            if sp is None or ep is None:
+                continue
+
+            updated = False
+            if abs(sp[0] - old_xy[0]) <= tol and abs(sp[1] - old_xy[1]) <= tol:
+                sp = new_xy
+                updated = True
+            if abs(ep[0] - old_xy[0]) <= tol and abs(ep[1] - old_xy[1]) <= tol:
+                ep = new_xy
+                updated = True
+            if not updated:
+                continue
+
+            new_start_pt = QgsPoint(sp[0], sp[1])
+            new_end_pt = QgsPoint(ep[0], ep[1])
+            new_start_xy = QgsPointXY(sp[0], sp[1])
+            new_end_xy = QgsPointXY(ep[0], ep[1])
+
+            seg['Start_Point'] = self.format_wkt(new_start_pt)
+            seg['End_Point'] = self.format_wkt(new_end_pt)
+            try:
+                widget.twRouteList.item(row, 3).setText(seg['Start_Point'])
+                widget.twRouteList.item(row, 4).setText(seg['End_Point'])
+            except Exception:
+                pass
+
+            try:
+                width = float(widget.twRouteList.item(row, 5).text())
+            except (AttributeError, TypeError, ValueError):
+                width = 0.0
+            try:
+                self.create_offset_lines(
+                    new_start_xy, new_end_xy, width / 2 if width else 0.0, fid,
+                )
+            except Exception:
+                pass
 
     def on_geometry_changed_wrapper(self, segment_id:int, fid:int, geom:QgsGeometry):
         """Wrapper for the geometryChanged signal to pass the segment ID."""

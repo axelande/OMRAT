@@ -84,6 +84,7 @@ Contents
    overview
    installation
    quickstart
+   quickstart_from_scratch
 
 .. toctree::
    :maxdepth: 2

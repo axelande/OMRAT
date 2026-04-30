@@ -96,6 +96,7 @@ def _build_memory_layers(
             powered_depths = depths_original or depths or []
             layers['powered_grounding'] = create_powered_grounding_layer(
                 pg_report, powered_depths, add_to_project=False,
+                segment_data=segment_data,
             )
         except Exception as exc:
             logger.warning(f"powered-grounding layer build failed: {exc}")
@@ -105,6 +106,7 @@ def _build_memory_layers(
         try:
             layers['powered_allision'] = create_powered_allision_layer(
                 pa_report, structures or [], add_to_project=False,
+                segment_data=segment_data,
             )
         except Exception as exc:
             logger.warning(f"powered-allision layer build failed: {exc}")
@@ -216,13 +218,88 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
     except Exception:
         return
     if layer_name in ('drifting_allision', 'drifting_grounding'):
-        apply_graduated_symbology(qgis_layer)
+        # Prefer the new field name; fall back to the old ``total_prob`` for
+        # GeoPackages written by versions before the rename.
+        attr = (
+            'total_edge_probability'
+            if qgis_layer.fields().indexOf('total_edge_probability') >= 0
+            else 'total_prob'
+        )
+        apply_graduated_symbology(qgis_layer, attribute=attr)
+        try:
+            from geometries.result_layers import _enable_fid_labels
+            _enable_fid_labels(qgis_layer, 'obstacle_id')
+        except Exception:
+            pass
     elif layer_name in ('powered_grounding', 'powered_allision'):
-        _apply_graduated(qgis_layer, 'total_prob', _polygon_symbol_factory)
+        attr = (
+            'total_edge_probability'
+            if qgis_layer.fields().indexOf('total_edge_probability') >= 0
+            else 'total_prob'
+        )
+        # New per-leg powered layers are LineString; legacy gpkgs are polygons.
+        try:
+            from qgis.core import Qgis as _Qgis
+            is_line = qgis_layer.geometryType() == _Qgis.GeometryType.Line
+        except Exception:
+            is_line = False
+        symbol_factory = _line_symbol_factory if is_line else _polygon_symbol_factory
+        _apply_graduated(qgis_layer, attr, symbol_factory)
+        # Re-apply edge-fid labelling on the loaded layer too.
+        try:
+            from geometries.result_layers import _enable_fid_labels
+            label_field = 'segment_id' if qgis_layer.fields().indexOf('segment_id') >= 0 else 'obstacle_id'
+            _enable_fid_labels(qgis_layer, label_field)
+        except Exception:
+            pass
     elif layer_name == 'collision_lines':
         _apply_graduated(qgis_layer, 'combined', _line_symbol_factory)
     elif layer_name == 'collision_points':
         _apply_graduated(qgis_layer, 'combined', _marker_symbol_factory)
+    # Apply field aliases on layers loaded from GeoPackages too, so the
+    # human-readable names show up in the attribute table.
+    try:
+        from geometries.result_layers import _set_result_field_aliases
+        _set_result_field_aliases(qgis_layer)
+    except Exception:
+        pass
+
+
+def load_single_run_layer_to_map(
+    gpkg_path: str | Path,
+    layer_name: str,
+    run_label: str,
+) -> Any | None:
+    """Load just ``layer_name`` from a per-run GeoPackage onto the canvas.
+
+    Used by the per-row View buttons on the Run Analysis tab: when a
+    previous run is selected, clicking View can't recreate the
+    interactive visualiser (the in-memory calc state is gone) but it
+    can show the saved result layer for that accident type.
+
+    Returns the created ``QgsVectorLayer`` or ``None`` if the layer is
+    missing / empty.
+    """
+    from qgis.core import QgsVectorLayer, QgsProject
+
+    gpkg = Path(gpkg_path)
+    if not gpkg.is_file():
+        logger.warning(f"Per-run GeoPackage not found: {gpkg}")
+        return None
+    if layer_name not in _LAYER_NAMES:
+        logger.warning(
+            f"Unknown layer '{layer_name}'.  Expected one of {_LAYER_NAMES}."
+        )
+        return None
+
+    uri = f"{gpkg}|layername={layer_name}"
+    display = _human_layer_name(layer_name, run_label)
+    layer = QgsVectorLayer(uri, display, 'ogr')
+    if not layer.isValid() or layer.featureCount() == 0:
+        return None
+    _apply_default_styling(layer_name, layer)
+    QgsProject.instance().addMapLayer(layer)
+    return layer
 
 
 def load_run_results_to_map(

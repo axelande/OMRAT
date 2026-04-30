@@ -398,6 +398,21 @@ def _compute_cat2_with_shadows(
 # Data extraction helpers
 # ---------------------------------------------------------------------------
 
+def _total_p_for_comp(comp: dict) -> float:
+    """Sum the per-obstacle ``p_approx`` values for a computation.
+
+    Used to rank the sidebar list so the highest-probability
+    (Leg, Direction) pairs float to the top.
+    """
+    total = 0.0
+    for s in (comp.get("summaries") or {}).values():
+        try:
+            total += float(s.get("p_approx", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def find_closest_computation_index(
     click_xy: tuple[float, float],
     computations: list[dict],
@@ -712,7 +727,10 @@ class PoweredOverlapVisualizer:
                     ax.plot([origin[0], end_pt[0]], [origin[1], end_pt[1]],
                             ":", color=dc, alpha=0.08, linewidth=0.3)
 
-        # Mark computations as clickable circles
+        # Mark computations as clickable circles -- we keep the
+        # selected computation's marker around for ``_highlight_selected``
+        # to override its style when the user clicks elsewhere.
+        self._comp_markers: list[Any] = []
         for ci, comp in enumerate(self.computations):
             tp = comp["turn_pt"]
             marker_style = "D" if ci == 0 else "o"
@@ -770,8 +788,9 @@ class PoweredOverlapVisualizer:
         ax.set_title(
             f"LEG {comp['seg_id']} {d_info['name']}   "
             f"mean={d_info['mean']:+.0f}m  std={d_info['std']:.0f}m  "
-            f"recovery={recovery:.0f}m",
-            fontsize=9, fontweight="bold",
+            f"recovery={recovery:.0f}m\n"
+            "Local frame: leg rotated so along-track = +x, perpendicular = y",
+            fontsize=8, fontweight="bold",
         )
 
         # Project obstacles to local coordinates
@@ -818,28 +837,80 @@ class PoweredOverlapVisualizer:
             ax.fill(shadow_x, shadow_y, color=c, alpha=0.06,
                     hatch="//", edgecolor=c, linewidth=0)
 
-        # Annotate obstacles
-        for key, s in sorted(summaries.items(), key=lambda x: x[1]["mean_dist"]):
-            kind, obs_id = key
-            tag = f"D#{obs_id}" if kind == "depth" else f"O#{obs_id}"
-            c = self.obs_color_map[key]
-            ray_offs = s["ray_offsets"]
-            mid_lat = (min(ray_offs) + max(ray_offs)) / 2
-            ax.annotate(
-                f"{tag}\nmass={s['mass']:.4f}\nd={s['mean_dist'] / 1000:.1f} km\n"
-                f"P={s['p_approx']:.2e}",
-                xy=(s["mean_dist"], mid_lat),
-                fontsize=6, color=c, fontweight="bold", ha="center", va="center",
-                bbox=dict(fc="white", alpha=0.9, ec=c, pad=2,
-                          boxstyle="round,pad=0.3"),
+        # Annotate obstacles -- evenly distribute the labels along the
+        # full y-axis range so two boxes never overlap regardless of
+        # font / DPI.  Sorted by along-track distance so the visual
+        # order matches the curve to the right.
+        sorted_obs_for_labels = sorted(
+            summaries.items(), key=lambda x: x[1]["mean_dist"],
+        )
+        if sorted_obs_for_labels:
+            max_obs_dist_for_labels = max(
+                s["mean_dist"] for _, s in sorted_obs_for_labels
             )
+            label_x = max_obs_dist_for_labels + MAX_RANGE * 0.04
+            n = len(sorted_obs_for_labels)
+            y_top = offsets[-1] - (offsets[-1] - offsets[0]) * 0.05
+            y_bot = offsets[0] + (offsets[-1] - offsets[0]) * 0.05
+            if n == 1:
+                ys = [(y_top + y_bot) / 2]
+            else:
+                # Evenly spaced positions from top to bottom; with 2
+                # labels they land at 5 % and 95 % of the y-range.
+                ys = [
+                    y_top + (y_bot - y_top) * (i / (n - 1))
+                    for i in range(n)
+                ]
+            for li, (key, s) in enumerate(sorted_obs_for_labels):
+                kind, obs_id = key
+                tag = f"D#{obs_id}" if kind == "depth" else f"O#{obs_id}"
+                c = self.obs_color_map[key]
+                ray_offs = s["ray_offsets"]
+                mid_lat = (min(ray_offs) + max(ray_offs)) / 2
+                ax.annotate(
+                    f"{tag}\nmass={s['mass']:.4f}\n"
+                    f"d={s['mean_dist'] / 1000:.1f} km\n"
+                    f"P={s['p_approx']:.2e}",
+                    xy=(s["mean_dist"], mid_lat),
+                    xytext=(label_x, ys[li]),
+                    fontsize=6, color=c, fontweight="bold",
+                    ha="left", va="center",
+                    arrowprops=dict(
+                        arrowstyle="-", color=c, alpha=0.6,
+                        connectionstyle="arc3,rad=0.0",
+                    ),
+                    bbox=dict(fc="white", alpha=0.95, ec=c, pad=2,
+                              boxstyle="round,pad=0.3"),
+                )
 
         ax.axhline(d_info["mean"], color="red", linewidth=0.6,
                     linestyle="--", alpha=0.5, label="dist. mean")
+        # Indicate the leg direction in the local frame: a thick black
+        # arrow from x=0 toward +x at lateral offset 0 makes it
+        # immediately obvious that "along-track" goes left -> right
+        # regardless of the leg's actual orientation in the top map.
+        try:
+            arrow_len = MAX_RANGE * 0.04
+            ax.annotate(
+                "", xy=(arrow_len, 0), xytext=(0, 0),
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color="black", lw=1.5,
+                    shrinkA=0, shrinkB=0,
+                ),
+                annotation_clip=False,
+            )
+            ax.text(
+                arrow_len * 1.05, 0, " leg direction",
+                fontsize=6, color="black", va="center",
+            )
+        except Exception:
+            pass
         ax.set_xlabel("Along-track distance from turning point (m)", fontsize=7)
         ax.set_ylabel("Lateral offset from centreline (m)", fontsize=7)
         max_obs_dist = max((s["mean_dist"] for s in summaries.values()), default=10000)
-        ax.set_xlim(-MAX_RANGE * 0.06, max(30000, max_obs_dist * 1.2))
+        # Extra room on the right so the staggered labels fit.
+        ax.set_xlim(-MAX_RANGE * 0.06, max(30000, max_obs_dist * 1.4))
         ax.grid(True, alpha=0.2)
         ax.tick_params(labelsize=6)
 
@@ -848,96 +919,79 @@ class PoweredOverlapVisualizer:
     # -----------------------------------------------------------------
 
     def _draw_waterfall(self, comp: dict) -> None:
+        """Probability decay vs distance.
+
+        x-axis: along-track distance from the turning point.
+        y-axis: probability that the ship is still off-course (has not
+                recovered yet) -- the IWRAP Cat II ``exp(-d / (ai*V))``
+                survival curve.
+
+        For each obstacle a marker is plotted at
+        ``(d_mean, mass × exp(-d_mean / recovery))`` so the user can see
+        the per-obstacle probability contribution dropping with distance.
+        """
         ax = self.axes["waterfall"]
         ax.clear()
 
         d_info = comp["dir_info"]
-        offsets = comp["offsets"]
-        pdf_vals = comp["pdf_vals"]
         summaries = comp["summaries"]
-        dx = offsets[1] - offsets[0]
+        recovery = max(d_info["ai"] * d_info["speed_ms"], 1.0)
 
         ax.set_title(
-            f"Distribution evolution: LEG {comp['seg_id']} {d_info['name']}\n"
-            "Mass lost at each obstacle (shadow effect)",
+            f"Probability vs distance: LEG {comp['seg_id']} {d_info['name']}\n"
+            f"Survival curve  exp(-d / {recovery:.0f} m)",
             fontsize=9,
         )
 
         sorted_obs = sorted(summaries.items(), key=lambda x: x[1]["mean_dist"])
-        remaining = pdf_vals.copy() * dx
-
-        # Scale factor for visibility
-        scale_factor = 3000
-        orig_curve = pdf_vals * dx * scale_factor
-        ax.fill_betweenx(offsets, 0, -orig_curve, color="gray", alpha=0.2,
-                         label="Original distribution")
-        ax.plot(-orig_curve, offsets, "k-", linewidth=1.5)
-
-        for obs_idx, (key, s) in enumerate(sorted_obs):
-            kind, obs_id = key
-            tag = f"D#{obs_id}" if kind == "depth" else f"O#{obs_id}"
-            d_mean = s["mean_dist"]
-            c = self.obs_color_map[key]
-
-            rem_curve = remaining * scale_factor
-            ax.fill_betweenx(offsets, d_mean, d_mean - rem_curve, color=c, alpha=0.15)
-            ax.plot(d_mean - rem_curve, offsets, color=c, linewidth=1.0)
-
-            # Highlight consumed portion
-            hit_offsets_set = set(s["ray_offsets"])
-            consumed = np.zeros_like(remaining)
-            for i, off in enumerate(offsets):
-                if off in hit_offsets_set:
-                    consumed[i] = remaining[i]
-            consumed_curve = consumed * scale_factor
-            ax.fill_betweenx(offsets, d_mean, d_mean - consumed_curve, color=c, alpha=0.5)
-
-            ax.axvline(d_mean, color=c, linewidth=0.8, linestyle="--", alpha=0.5)
-            ax.text(
-                d_mean, offsets[-1] + (offsets[-1] - offsets[0]) * 0.03,
-                f"{tag}\nd={d_mean / 1000:.1f}km\nmass={s['mass']:.4f}\n"
-                f"P={s['p_approx']:.2e}",
-                fontsize=6, color=c, ha="center", va="bottom", fontweight="bold",
-                bbox=dict(fc="white", alpha=0.9, ec=c, pad=2),
-            )
-
-            # Remove consumed rays
-            for off in s["ray_offsets"]:
-                i = int(np.argmin(np.abs(offsets - off)))
-                remaining[i] = 0.0
-
-        # Final remaining
         if sorted_obs:
-            final_x = max(s["mean_dist"] for _, s in sorted_obs) * 1.15
+            max_d = max(s["mean_dist"] for _, s in sorted_obs) * 1.4
         else:
-            final_x = 10000
-        rem_curve = remaining * scale_factor
-        ax.fill_betweenx(offsets, final_x, final_x - rem_curve,
-                         color="gray", alpha=0.15)
-        ax.plot(final_x - rem_curve, offsets, "k--", linewidth=0.8, alpha=0.5)
-        remaining_mass = remaining.sum()
-        ax.text(
-            final_x, offsets[0] - (offsets[-1] - offsets[0]) * 0.05,
-            f"Remaining mass:\n{remaining_mass:.4f}",
-            fontsize=7, ha="center", va="top",
-            bbox=dict(fc="white", ec="gray", pad=3),
-        )
+            max_d = max(recovery * 5, 10000.0)
+        max_d = max(max_d, recovery * 2)
 
-        ax.set_xlabel("Along-track distance from turning point (m)", fontsize=7)
-        ax.set_ylabel("Lateral offset from centreline (m)", fontsize=7)
-        ax.axhline(d_info["mean"], color="red", linewidth=0.6,
-                    linestyle="--", alpha=0.4)
-        ax.grid(True, alpha=0.2)
-        ax.tick_params(labelsize=6)
+        # Survival curve: probability the ship hasn't recovered by d.
+        d_grid = np.linspace(0, max_d, 400)
+        survival = np.exp(-d_grid / recovery)
+        ax.plot(d_grid, survival, color="black", linewidth=1.5,
+                label="Survival exp(-d / recovery)")
+        ax.fill_between(d_grid, 0, survival, color="black", alpha=0.05)
 
-        # Legend
-        legend_h = [Patch(fc="gray", alpha=0.2, label="Original dist.")]
+        # Per-obstacle probability contribution.
+        max_p = 0.0
         for key, s in sorted_obs:
             kind, obs_id = key
             tag = f"D#{obs_id}" if kind == "depth" else f"O#{obs_id}"
             c = self.obs_color_map[key]
-            legend_h.append(Patch(fc=c, alpha=0.5, label=f"{tag} consumed"))
-        ax.legend(handles=legend_h, fontsize=6, loc="upper right")
+            d_mean = s["mean_dist"]
+            mass = float(s.get("mass", 0.0) or 0.0)
+            p_contrib = mass * float(np.exp(-d_mean / recovery))
+            max_p = max(max_p, p_contrib)
+            # Vertical drop line + marker.
+            ax.vlines(d_mean, 0, p_contrib, colors=c, linewidth=1.2,
+                      alpha=0.6)
+            ax.plot(d_mean, p_contrib, marker="o", color=c, markersize=6,
+                    markeredgecolor="white", markeredgewidth=0.8)
+            ax.annotate(
+                f"{tag}\nmass={mass:.3f}\nd={d_mean/1000:.1f}km\n"
+                f"P={s.get('p_approx', p_contrib):.2e}",
+                xy=(d_mean, p_contrib),
+                xytext=(8, 8), textcoords="offset points",
+                fontsize=6, color=c, fontweight="bold",
+                bbox=dict(fc="white", alpha=0.95, ec=c, pad=2,
+                          boxstyle="round,pad=0.3"),
+                arrowprops=dict(arrowstyle="-", color=c, alpha=0.5),
+            )
+
+        ax.set_xlabel("Along-track distance from turning point (m)", fontsize=7)
+        ax.set_ylabel("Probability (mass × survival)", fontsize=7)
+        ax.set_xlim(0, max_d)
+        # y-limit accommodates the survival curve (max=1) and the
+        # tallest obstacle marker.
+        ax.set_ylim(0, max(1.05, max_p * 1.2))
+        ax.grid(True, alpha=0.2)
+        ax.tick_params(labelsize=6)
+        ax.legend(fontsize=6, loc="upper right")
 
     # -----------------------------------------------------------------
     # Interaction
@@ -952,26 +1006,108 @@ class PoweredOverlapVisualizer:
         self._draw_detail(comp)
         self._draw_waterfall(comp)
         self.fig.canvas.draw()
+        # Reflect the change on the sidebar so the user can see which
+        # row corresponds to the panels currently shown.  Block
+        # signals to avoid recursion through ``itemSelectionChanged``.
+        sidebar = getattr(self, 'sidebar', None)
+        idx_map = getattr(self, 'sidebar_index_map', None)
+        if sidebar is not None and idx_map is not None:
+            try:
+                row = idx_map.index(idx)
+                blocked = sidebar.blockSignals(True)
+                try:
+                    sidebar.selectRow(row)
+                finally:
+                    sidebar.blockSignals(blocked)
+            except ValueError:
+                pass
 
     def _connect_events(self) -> None:
-        self.fig.canvas.mpl_connect('button_press_event', self._on_overview_click)
+        self.fig.canvas.mpl_connect(
+            'button_press_event', self._on_overview_click,
+        )
 
     def _on_overview_click(self, event) -> None:
-        """Handle click on the overview panel to select a turning point."""
+        """Handle click on the overview panel to select a turning point.
+
+        Two-stage routing:
+
+        1. If the click lands close to a computation's turn-point
+           marker (8 % of the axis range), select that computation.
+        2. Otherwise project the click onto every leg line; the
+           computation is the one whose ``turn_pt`` is closest to the
+           projection on the nearest leg.  This way clicking *anywhere*
+           on a leg switches the bottom panels to a computation on
+           that leg.
+
+        Note: clicks may not always reach this handler depending on
+        the QGIS / Qt build.  The sidebar QTableWidget is the
+        guaranteed-working interaction; this stays as a convenience.
+        """
         if event.inaxes != self.axes["overview"]:
             return
         if event.xdata is None or event.ydata is None:
             return
-        # Threshold: 5% of the larger axis range.
         ax = self.axes["overview"]
         xlim = ax.get_xlim()
         ylim = ax.get_ylim()
-        threshold = 0.05 * max(xlim[1] - xlim[0], ylim[1] - ylim[0])
+        axis_range = max(xlim[1] - xlim[0], ylim[1] - ylim[0])
+
+        # Stage 1: snap to a turn-point marker.
         idx = find_closest_computation_index(
-            (event.xdata, event.ydata), self.computations, threshold,
+            (event.xdata, event.ydata), self.computations,
+            threshold=0.08 * axis_range,
         )
         if idx is not None:
             self._select_computation(idx)
+            return
+
+        # Stage 2: project the click onto each leg, find the closest
+        # leg, then pick the computation on that leg whose turn-point
+        # is closest to the projection.
+        click = np.array([event.xdata, event.ydata])
+        best_leg: str | None = None
+        best_proj: np.ndarray | None = None
+        best_perp_dist = float("inf")
+        for seg_id, leg in self.legs.items():
+            start = np.asarray(leg["start"], dtype=float)
+            end = np.asarray(leg["end"], dtype=float)
+            seg = end - start
+            seg_len_sq = float(np.dot(seg, seg))
+            if seg_len_sq <= 0:
+                continue
+            t = float(np.dot(click - start, seg)) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            proj = start + t * seg
+            d = float(np.linalg.norm(click - proj))
+            if d < best_perp_dist:
+                best_perp_dist = d
+                best_leg = str(seg_id)
+                best_proj = proj
+        if best_leg is None or best_proj is None:
+            return
+        if best_perp_dist > 0.50 * axis_range:
+            return
+
+        candidates = [
+            (i, c) for i, c in enumerate(self.computations)
+            if str(c.get("seg_id")) == best_leg
+        ]
+        if not candidates:
+            idx = find_closest_computation_index(
+                (event.xdata, event.ydata), self.computations,
+                threshold=axis_range,
+            )
+            if idx is not None:
+                self._select_computation(idx)
+            return
+        chosen_idx = min(
+            candidates,
+            key=lambda ic: float(np.linalg.norm(
+                np.asarray(ic[1]["turn_pt"]) - best_proj,
+            )),
+        )[0]
+        self._select_computation(chosen_idx)
 
     # -----------------------------------------------------------------
     # Class method: embed in dialog
@@ -1049,7 +1185,69 @@ class PoweredOverlapVisualizer:
             a.tick_params(labelsize=6)
 
         canvas = FigureCanvas(fig)
-        layout.addWidget(canvas)
+
+        # Wrap canvas + sidebar table in a horizontal splitter so the
+        # user can drag the boundary.  The sidebar lists every
+        # computation as a (Leg | Direction | Probability) row -- clicking
+        # a row swaps the bottom panels.  This is more reliable than
+        # clicking on legs in the matplotlib canvas itself, which
+        # sometimes fails to receive events on certain Qt+QGIS combos.
+        from qgis.PyQt.QtCore import Qt
+        from qgis.PyQt.QtWidgets import (
+            QSplitter, QTableWidget, QTableWidgetItem, QAbstractItemView,
+            QHeaderView,
+        )
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(canvas)
+
+        sidebar = QTableWidget(len(computations), 3)
+        sidebar.setHorizontalHeaderLabels(['Leg', 'Direction', 'Probability'])
+        sidebar.verticalHeader().setVisible(False)
+        sidebar.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        sidebar.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows,
+        )
+        sidebar.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection,
+        )
+        # Sort rows by descending probability so the dominant
+        # computations are at the top of the list.
+        ordered = sorted(
+            enumerate(computations),
+            key=lambda ic: -_total_p_for_comp(ic[1]),
+        )
+        sidebar_index_map: list[int] = []  # row -> original computation idx
+        for row, (orig_idx, comp) in enumerate(ordered):
+            sidebar_index_map.append(orig_idx)
+            seg_id = str(comp.get('seg_id', ''))
+            d_name = comp.get('dir_info', {}).get('name', '')
+            p_total = _total_p_for_comp(comp)
+            for col, val in enumerate(
+                (seg_id, d_name, f"{p_total:.3e}"),
+            ):
+                item = QTableWidgetItem(val)
+                if col == 2:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight
+                        | Qt.AlignmentFlag.AlignVCenter,
+                    )
+                sidebar.setItem(row, col, item)
+        sidebar.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents,
+        )
+        sidebar.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch,
+        )
+        sidebar.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents,
+        )
+        sidebar.setMinimumWidth(220)
+        sidebar.setMaximumWidth(360)
+        splitter.addWidget(sidebar)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+
+        layout.addWidget(splitter)
 
         # Build and run visualizer
         viz = cls(
@@ -1058,7 +1256,31 @@ class PoweredOverlapVisualizer:
             computations, mode,
         )
         viz.canvas = canvas
+        viz.sidebar = sidebar
+        viz.sidebar_index_map = sidebar_index_map
         viz.run_visualization()
+
+        # Wire row selection to ``_select_computation``.  Use
+        # ``itemSelectionChanged`` which fires both for mouse clicks
+        # and for keyboard navigation.
+        def _on_sidebar_selection_changed():
+            rows = {
+                idx.row() for idx in sidebar.selectedIndexes()
+            }
+            if not rows:
+                return
+            row = next(iter(rows))
+            if 0 <= row < len(sidebar_index_map):
+                viz._select_computation(sidebar_index_map[row])
+
+        sidebar.itemSelectionChanged.connect(_on_sidebar_selection_changed)
+        # Highlight the default-selected row (the one auto-picked by
+        # ``run_visualization``) in the sidebar.
+        try:
+            default_row = sidebar_index_map.index(viz._selected_comp_idx)
+            sidebar.selectRow(default_row)
+        except (ValueError, AttributeError):
+            sidebar.selectRow(0)
 
         mode_label = "Powered Allision" if mode == "allision" else "Powered Grounding"
         dialog.setWindowTitle(f"OMRAT - {mode_label} Cat II Visualization")

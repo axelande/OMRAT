@@ -238,9 +238,11 @@ class GatherData:
         self.populate_tbl(depth_rows, self.p.main_widget.twDepthList)
         self.populate_tbl(object_rows, self.p.main_widget.twObjectList)
         
-        # Load data to canvas
-        self.p.load_lines(data)
-        # Add depth features to the consolidated depth layer
+        # Load data to canvas.  Order matters: layers added EARLIER end
+        # up at the BOTTOM of the QGIS layer panel and therefore render
+        # behind layers added later.  We want depth polygons to sit at
+        # the back (they fill large areas of the canvas), structures in
+        # the middle, and the leg lines on top so they stay visible.
         self.p.object.area_type = 'depth'
         for i, dep in enumerate(depth_rows):
             depth_value = dep[1] if len(dep) > 1 else dep[0]
@@ -252,6 +254,8 @@ class GatherData:
             # obj = [id, height_value, polygon] - use height_value (obj[1]) for layer name
             height_value = obj[1] if len(obj) > 1 else obj[0]
             self.p.object.load_area(f'Structure - {height_value}m', obj[2], row=j, value=height_value, value_field='Height')
+        # Legs go on last so they stay on top of depths + structures.
+        self.p.load_lines(data)
             
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.

@@ -372,6 +372,7 @@ class ShipCollisionModelMixin:
         pc_crossing: float,
         length_intervals: list[dict],
         by_waypoint: dict[tuple[float, float], float] | None = None,
+        by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None = None,
     ) -> float:
         """Calculate crossing collision frequency between all leg pairs.
 
@@ -521,6 +522,30 @@ class ShipCollisionModelMixin:
                                         total_crossing += contrib
                                         if by_waypoint is not None and shared_pt is not None:
                                             by_waypoint[shared_pt] = by_waypoint.get(shared_pt, 0.0) + contrib
+                                        if by_leg_pair is not None:
+                                            # Threshold from IWRAP to
+                                            # split a "small-angle"
+                                            # merge from a true crossing.
+                                            kind = (
+                                                'merging'
+                                                if crossing_angle <= 30.0
+                                                else 'crossing'
+                                            )
+                                            pair_key = (
+                                                str(leg1_key), str(leg2_key),
+                                            )
+                                            rec = by_leg_pair.setdefault(
+                                                pair_key,
+                                                {
+                                                    'crossing': 0.0,
+                                                    'merging': 0.0,
+                                                    'waypoint': shared_pt,
+                                                    'angle_deg': float(
+                                                        crossing_angle,
+                                                    ),
+                                                },
+                                            )
+                                            rec[kind] += contrib
 
                 crossing_pairs_processed += 1
                 if total_pairs > 0:
@@ -646,9 +671,13 @@ class ShipCollisionModelMixin:
             )
 
         # Crossing collisions between different legs (per-waypoint accum).
+        # ``by_leg_pair`` lets the View buttons render
+        # "leg_a -> leg_b" rows separately for crossing vs merging.
+        crossing_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
         total_crossing = self._calc_crossing_collisions(
             traffic_data, segment_data, leg_keys, pc_crossing, length_intervals,
             by_waypoint=crossing_by_wp,
+            by_leg_pair=crossing_by_pair,
         )
         for pt, contrib in crossing_by_wp.items():
             rec = by_waypoint.setdefault(pt, {'crossing': 0.0, 'bend': 0.0})
@@ -668,10 +697,58 @@ class ShipCollisionModelMixin:
             f"{pt[0]:.6f} {pt[1]:.6f}": rec
             for pt, rec in by_waypoint.items()
         }
+        # Serialise the per-leg-pair accumulator with string keys so it
+        # round-trips through any JSON / dict-copy step.
+        by_leg_pair_serialisable = {
+            f"{a}->{b}": {
+                'crossing': rec.get('crossing', 0.0),
+                'merging': rec.get('merging', 0.0),
+                'angle_deg': rec.get('angle_deg', 0.0),
+                'waypoint': (
+                    f"{rec['waypoint'][0]:.6f} {rec['waypoint'][1]:.6f}"
+                    if rec.get('waypoint') is not None else ''
+                ),
+            }
+            for (a, b), rec in crossing_by_pair.items()
+        }
+        # Bend is a same-leg phenomenon attributed to the leg's end
+        # waypoint -- key it as ``leg -> next_leg`` if any other leg
+        # starts at that point, otherwise fall back to ``leg ->`` so
+        # the dialog still has a useful label.
+        bend_by_pair: dict[str, dict[str, Any]] = {}
+        for leg_key, vals in by_leg.items():
+            bend = float(vals.get('bend', 0.0) or 0.0)
+            if bend <= 0.0:
+                continue
+            seg = segment_data.get(leg_key, {})
+            end_pt = self._parse_point(seg.get('End_Point', ''))
+            next_leg_id = ''
+            if end_pt is not None:
+                for other_key in leg_keys:
+                    if other_key == leg_key:
+                        continue
+                    other_seg = segment_data.get(other_key, {})
+                    other_start = self._parse_point(
+                        other_seg.get('Start_Point', '')
+                    )
+                    if (
+                        other_start is not None
+                        and self._points_match(end_pt, other_start)
+                    ):
+                        next_leg_id = str(other_key)
+                        break
+            label = f"{leg_key}->{next_leg_id}" if next_leg_id else f"{leg_key}->"
+            wp_text = (
+                f"{end_pt[0]:.6f} {end_pt[1]:.6f}" if end_pt is not None else ''
+            )
+            bend_by_pair[label] = {'bend': bend, 'waypoint': wp_text}
+
         self.collision_report = {
             'totals': result,
             'by_leg': by_leg,
             'by_waypoint': by_waypoint_serialisable,
+            'by_leg_pair': by_leg_pair_serialisable,
+            'bend_by_pair': bend_by_pair,
             'causation_factors': {
                 'headon': pc_headon,
                 'overtaking': pc_overtaking,

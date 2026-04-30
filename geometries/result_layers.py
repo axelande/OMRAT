@@ -37,6 +37,91 @@ import shapely.wkt as sw
 
 logger = logging.getLogger(__name__)
 
+# Human-readable aliases for the result-layer fields. Keys are the QGIS field
+# names (snake_case, used in code and attribute lookups); values are the
+# aliases shown in the attribute table and identify-feature popup.
+_FIELD_ALIASES = {
+    'total_edge_probability': 'Total edge probability',
+    'object_probability': 'Object probability',
+    'obstacle_id': 'Obstacle id',
+    'segment_idx': 'Segment idx',
+    'segment_id': 'Edge fid',
+    'normal_deg': 'Normal (deg)',
+    'value': 'Value',
+}
+
+
+def _set_result_field_aliases(layer: QgsVectorLayer) -> None:
+    """Apply user-friendly aliases to known result-layer field names.
+
+    Field aliases only affect display in the attribute table / identify
+    panel; the underlying snake_case field names stay stable so code,
+    expressions, and saved QGIS projects keep working.
+    """
+    fields = layer.fields()
+    for name, alias in _FIELD_ALIASES.items():
+        idx = fields.indexOf(name)
+        if idx >= 0:
+            layer.setFieldAlias(idx, alias)
+
+
+def _enable_fid_labels(layer: QgsVectorLayer, field_name: str) -> None:
+    """Turn on text labels for ``layer`` showing each feature's ``field_name``.
+
+    Used on the result layers so the user can see at a glance which
+    obstacle / leg fid every feature corresponds to without opening the
+    attribute table.
+    """
+    if layer is None:
+        return
+    if layer.fields().indexOf(field_name) < 0:
+        return
+    try:
+        from qgis.core import (
+            QgsPalLayerSettings,
+            QgsTextFormat,
+            QgsVectorLayerSimpleLabeling,
+        )
+        from qgis.PyQt.QtGui import QColor as _QColor
+    except Exception:
+        return
+
+    settings = QgsPalLayerSettings()
+    settings.fieldName = field_name
+    settings.isExpression = False
+    settings.enabled = True
+
+    # A small but readable text format with a white halo so the label
+    # stays legible regardless of the underlying symbology colour.
+    fmt = QgsTextFormat()
+    fmt.setSize(8)
+    fmt.setColor(_QColor('black'))
+    try:
+        buffer = fmt.buffer()
+        buffer.setEnabled(True)
+        buffer.setSize(0.6)
+        buffer.setColor(_QColor('white'))
+        fmt.setBuffer(buffer)
+    except Exception:
+        pass
+    settings.setFormat(fmt)
+
+    # Place lines along the line; centre points / polygons.
+    geom_type = layer.geometryType()
+    try:
+        from qgis.core import Qgis
+        if geom_type == Qgis.GeometryType.Line:
+            settings.placement = QgsPalLayerSettings.Placement.Line
+        else:
+            settings.placement = QgsPalLayerSettings.Placement.OverPoint
+    except Exception:
+        pass
+
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setLabelsEnabled(True)
+    layer.triggerRepaint()
+
+
 # Drift directions used in the model (standard nautical convention: 0=N, 90=E, CW)
 DRIFT_DIRECTIONS = {
     'North': 0,
@@ -440,8 +525,8 @@ def create_result_layer(
     fields = [
         QgsField("obstacle_id", QVariant.String),
         QgsField("segment_idx", QVariant.Int),  # Index of segment within obstacle
-        QgsField("total_prob", QVariant.Double),  # Per-segment probability
-        QgsField("obs_total", QVariant.Double),   # Total obstacle probability (for reference)
+        QgsField("total_edge_probability", QVariant.Double),  # Per-segment probability
+        QgsField("object_probability", QVariant.Double),      # Total obstacle probability (for reference)
         QgsField("normal_deg", QVariant.Double),  # Segment normal direction (compass degrees)
         QgsField("value", QVariant.Double),  # height or depth
     ]
@@ -456,6 +541,8 @@ def create_result_layer(
 
     provider.addAttributes(fields)
     layer.updateFields()
+    _set_result_field_aliases(layer)
+    _enable_fid_labels(layer, 'obstacle_id')
 
     # Add features - one per line segment with per-segment probability
     features = []
@@ -523,8 +610,8 @@ def create_result_layer(
             # Set attributes
             feat.setAttribute("obstacle_id", obs_id)
             feat.setAttribute("segment_idx", seg_idx)
-            feat.setAttribute("total_prob", seg_prob)  # Per-segment probability
-            feat.setAttribute("obs_total", obs_total_prob)  # Total obstacle probability
+            feat.setAttribute("total_edge_probability", seg_prob)  # Per-segment probability
+            feat.setAttribute("object_probability", obs_total_prob)  # Total obstacle probability
             feat.setAttribute("normal_deg", normal_angle)  # Segment orientation
             feat.setAttribute("value", obs_data.get('value', 0.0))
 
@@ -537,7 +624,10 @@ def create_result_layer(
     provider.addFeatures(features)
 
     # Log statistics
-    probs = [f["total_prob"] for f in features if f["total_prob"] is not None]
+    probs = [
+        f["total_edge_probability"] for f in features
+        if f["total_edge_probability"] is not None
+    ]
     if probs:
         logger.info(
             f"Created {layer_type} layer with {len(features)} segments from "
@@ -551,7 +641,7 @@ def create_result_layer(
 
 def apply_graduated_symbology(
     layer: QgsVectorLayer,
-    attribute: str = "total_prob",
+    attribute: str = "total_edge_probability",
     num_classes: int = 5,
 ) -> None:
     """
@@ -905,6 +995,23 @@ def _polygon_symbol_factory(color: QColor, frac: float) -> QgsFillSymbol:
     })
 
 
+def _parse_point_pair(text: str) -> tuple[float, float] | None:
+    """Parse ``"lon lat"`` (the OMRAT segment-table convention).
+
+    Returns ``None`` for malformed input rather than raising so the
+    layer build can skip a broken leg without aborting the whole pass.
+    """
+    if not isinstance(text, str):
+        return None
+    parts = text.replace(',', ' ').split()
+    if len(parts) < 2:
+        return None
+    try:
+        return float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+
+
 def _build_powered_layer(
     name: str,
     by_obstacle: dict[str, float],
@@ -912,22 +1019,143 @@ def _build_powered_layer(
     value_key: str,            # 'depth' or 'height'
     add_to_project: bool,
     by_obstacle_leg: dict[str, dict[str, float]] | None = None,
+    segment_data: dict[str, dict[str, Any]] | None = None,
 ) -> QgsVectorLayer | None:
-    """Construct a polygon layer coloured by per-obstacle powered probability.
+    """Construct a per-leg line layer coloured by powered probability.
 
-    ``obstacle_records`` is the list-of-dicts form (from
-    ``DriftingModelMixin._last_structures`` / ``_last_depths``) with keys
-    ``id``, ``wkt`` (UTM) or ``wkt_wgs84``, and either ``depth`` or
-    ``height``.  We prefer ``wkt_wgs84`` so the result layer renders in
-    WGS84 alongside the input layers.
+    Each feature is one route leg, summed across every obstacle that
+    contributed to its powered grounding / allision probability.  The
+    contributing obstacle ids are kept as ``obs_<id>`` columns so the
+    user can identify which obstacle drives a given leg.
 
-    When ``by_obstacle_leg`` is provided, one extra attribute is added
-    per leg ID encountered (``leg_<id>``) with that leg's contribution
-    to the obstacle's total powered probability.  Click-to-inspect on
-    the obstacle then shows where the risk is coming from.
+    Falls back to the legacy per-obstacle polygon layout when
+    ``segment_data`` is unavailable (older callers / test fixtures).
     """
     if not by_obstacle:
         return None
+
+    # Per-leg path (preferred, mirrors the drift result layer).
+    if segment_data and by_obstacle_leg:
+        return _build_powered_layer_per_leg(
+            name=name,
+            by_obstacle=by_obstacle,
+            obstacle_records=obstacle_records,
+            value_key=value_key,
+            by_obstacle_leg=by_obstacle_leg,
+            segment_data=segment_data,
+            add_to_project=add_to_project,
+        )
+
+    # Fallback: per-obstacle polygon layer (backward-compat).
+    return _build_powered_layer_per_obstacle(
+        name=name,
+        by_obstacle=by_obstacle,
+        obstacle_records=obstacle_records,
+        value_key=value_key,
+        by_obstacle_leg=by_obstacle_leg,
+        add_to_project=add_to_project,
+    )
+
+
+def _build_powered_layer_per_leg(
+    *,
+    name: str,
+    by_obstacle: dict[str, float],
+    obstacle_records: list[dict[str, Any]],
+    value_key: str,
+    by_obstacle_leg: dict[str, dict[str, float]],
+    segment_data: dict[str, dict[str, Any]],
+    add_to_project: bool,
+) -> QgsVectorLayer | None:
+    # Invert by_obstacle_leg into by_leg_obstacle.
+    by_leg_obstacle: dict[str, dict[str, float]] = {}
+    for obs_id, leg_map in by_obstacle_leg.items():
+        for leg_id, contrib in leg_map.items():
+            if not contrib:
+                continue
+            by_leg_obstacle.setdefault(str(leg_id), {})[str(obs_id)] = float(contrib)
+    if not by_leg_obstacle:
+        return None
+
+    layer = QgsVectorLayer('LineString?crs=EPSG:4326', name, 'memory')
+    pr = layer.dataProvider()
+
+    obs_ids_sorted = sorted({oid for legs in by_leg_obstacle.values() for oid in legs})
+    obs_to_field = {oid: f'obs_{oid}' for oid in obs_ids_sorted}
+
+    # Build a small "summary" of each obstacle (depth / height) so the
+    # user can see what an ``obs_<id>`` column refers to without
+    # round-tripping to the Depths / Objects tab.
+    obs_lookup = {str(rec.get('id', '')): rec for rec in obstacle_records}
+
+    fields = [
+        QgsField('segment_id', QVariant.String),
+        QgsField('total_edge_probability', QVariant.Double),
+        QgsField('value_max', QVariant.Double),  # max obstacle value (depth/height) on this leg
+    ]
+    for oid in obs_ids_sorted:
+        fields.append(QgsField(obs_to_field[oid], QVariant.Double))
+    pr.addAttributes(fields)
+    layer.updateFields()
+    _set_result_field_aliases(layer)
+    _enable_fid_labels(layer, 'segment_id')
+
+    feats: list[QgsFeature] = []
+    for leg_id, obs_map in by_leg_obstacle.items():
+        seg = segment_data.get(leg_id) or segment_data.get(str(leg_id))
+        if seg is None:
+            continue
+        sp = _parse_point_pair(str(seg.get('Start_Point', '') or seg.get('Start Point', '')))
+        ep = _parse_point_pair(str(seg.get('End_Point', '') or seg.get('End Point', '')))
+        if sp is None or ep is None:
+            continue
+        wkt = f'LINESTRING({sp[0]} {sp[1]}, {ep[0]} {ep[1]})'
+        qgis_geom = QgsGeometry.fromWkt(wkt)
+        if qgis_geom is None or qgis_geom.isEmpty():
+            continue
+
+        total = sum(obs_map.values())
+        if total <= 0.0:
+            continue
+
+        # Pick the largest obstacle's value (depth/height) as a coarse
+        # summary; per-obstacle detail lives in the obs_<id> columns.
+        try:
+            biggest_obs = max(obs_map.items(), key=lambda kv: kv[1])[0]
+            biggest_meta = obs_lookup.get(biggest_obs, {})
+            value_max = float(biggest_meta.get(value_key, 0.0) or 0.0)
+        except Exception:
+            value_max = 0.0
+
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(qgis_geom)
+        feat.setAttribute('segment_id', str(leg_id))
+        feat.setAttribute('total_edge_probability', float(total))
+        feat.setAttribute('value_max', value_max)
+        for oid in obs_ids_sorted:
+            feat.setAttribute(obs_to_field[oid], float(obs_map.get(oid, 0.0)))
+        feats.append(feat)
+
+    if not feats:
+        return None
+    pr.addFeatures(feats)
+    _apply_graduated(layer, 'total_edge_probability', _line_symbol_factory)
+    if add_to_project and layer.featureCount() > 0:
+        QgsProject.instance().addMapLayer(layer)
+        logger.info(f"Added {name} layer with {layer.featureCount()} features (per leg)")
+    return layer
+
+
+def _build_powered_layer_per_obstacle(
+    *,
+    name: str,
+    by_obstacle: dict[str, float],
+    obstacle_records: list[dict[str, Any]],
+    value_key: str,
+    by_obstacle_leg: dict[str, dict[str, float]] | None,
+    add_to_project: bool,
+) -> QgsVectorLayer | None:
+    """Legacy path: one polygon per obstacle, kept for backward compat."""
     layer = QgsVectorLayer(
         'MultiPolygon?crs=EPSG:4326', name, 'memory',
     )
@@ -935,10 +1163,8 @@ def _build_powered_layer(
     fields = [
         QgsField('obstacle_id', QVariant.String),
         QgsField('value', QVariant.Double),
-        QgsField('total_prob', QVariant.Double),
+        QgsField('total_edge_probability', QVariant.Double),
     ]
-    # Collect every leg id that contributed anywhere so all features
-    # share the same set of leg_X columns.
     all_leg_ids: list[str] = []
     leg_to_field: dict[str, str] = {}
     if by_obstacle_leg:
@@ -955,6 +1181,8 @@ def _build_powered_layer(
             fields.append(QgsField(field_name, QVariant.Double))
     pr.addAttributes(fields)
     layer.updateFields()
+    _set_result_field_aliases(layer)
+    _enable_fid_labels(layer, 'obstacle_id')
 
     lookup = {str(rec.get('id', '')): rec for rec in obstacle_records}
     feats: list[QgsFeature] = []
@@ -980,8 +1208,7 @@ def _build_powered_layer(
             feat.setAttribute('value', float(meta.get(value_key, 0.0) or 0.0))
         except (TypeError, ValueError):
             feat.setAttribute('value', 0.0)
-        feat.setAttribute('total_prob', float(prob))
-        # Per-leg attributes default to 0.0; fill in those that contributed.
+        feat.setAttribute('total_edge_probability', float(prob))
         if by_obstacle_leg is not None:
             obs_leg_contribs = by_obstacle_leg.get(str(obs_id), {})
             for leg_id, field_name in leg_to_field.items():
@@ -990,10 +1217,10 @@ def _build_powered_layer(
                 )
         feats.append(feat)
     pr.addFeatures(feats)
-    _apply_graduated(layer, 'total_prob', _polygon_symbol_factory)
+    _apply_graduated(layer, 'total_edge_probability', _polygon_symbol_factory)
     if add_to_project and layer.featureCount() > 0:
         QgsProject.instance().addMapLayer(layer)
-        logger.info(f"Added {name} layer with {layer.featureCount()} features")
+        logger.info(f"Added {name} layer with {layer.featureCount()} features (per obstacle)")
     return layer
 
 
@@ -1001,11 +1228,17 @@ def create_powered_grounding_layer(
     powered_grounding_report: dict[str, Any] | None,
     depths: list[dict[str, Any]],
     add_to_project: bool = True,
+    segment_data: dict[str, dict[str, Any]] | None = None,
 ) -> QgsVectorLayer | None:
-    """One polygon per depth contour, coloured by powered-grounding probability.
+    """Per-leg line layer coloured by powered-grounding probability.
 
-    Adds one ``leg_<id>`` attribute per leg that contributed, so the
-    user can inspect which leg dominates each grounding hotspot.
+    Each feature is a route leg (LineString) with the powered-grounding
+    probability summed across every depth contour that contributes to
+    it.  Per-depth contributions are kept as ``obs_<depth_id>`` columns
+    so users can identify which depth drives each leg's risk.
+
+    Falls back to a per-depth polygon layer when ``segment_data`` is
+    not supplied (older callers / test fixtures).
     """
     if not powered_grounding_report:
         return None
@@ -1017,6 +1250,7 @@ def create_powered_grounding_layer(
         'Powered Grounding Results',
         by_obstacle, depths, 'depth', add_to_project,
         by_obstacle_leg=by_obstacle_leg,
+        segment_data=segment_data,
     )
 
 
@@ -1024,10 +1258,17 @@ def create_powered_allision_layer(
     powered_allision_report: dict[str, Any] | None,
     structures: list[dict[str, Any]],
     add_to_project: bool = True,
+    segment_data: dict[str, dict[str, Any]] | None = None,
 ) -> QgsVectorLayer | None:
-    """One polygon per structure, coloured by powered-allision probability.
+    """Per-leg line layer coloured by powered-allision probability.
 
-    Adds one ``leg_<id>`` attribute per leg that contributed.
+    Each feature is a route leg (LineString) with the powered-allision
+    probability summed across every structure that contributes to it.
+    Per-structure contributions are kept as ``obs_<structure_id>``
+    columns.
+
+    Falls back to a per-structure polygon layer when ``segment_data``
+    is not supplied.
     """
     if not powered_allision_report:
         return None
@@ -1039,4 +1280,5 @@ def create_powered_allision_layer(
         'Powered Allision Results',
         by_obstacle, structures, 'height', add_to_project,
         by_obstacle_leg=by_obstacle_leg,
+        segment_data=segment_data,
     )

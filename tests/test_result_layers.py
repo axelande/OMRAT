@@ -378,12 +378,12 @@ class TestApplyGraduatedSymbology:
 
         layer = QgsVectorLayer("Point?crs=epsg:4326", "ranged", "memory")
         provider = layer.dataProvider()
-        provider.addAttributes([QgsField("total_prob", QVariant.Double)])
+        provider.addAttributes([QgsField("total_edge_probability", QVariant.Double)])
         layer.updateFields()
         for v in [0.1, 0.3, 0.5, 0.7, 0.9]:
             feat = QgsFeature(layer.fields())
             feat.setGeometry(QgsGeometry.fromWkt('POINT(0 0)'))
-            feat.setAttribute('total_prob', v)
+            feat.setAttribute('total_edge_probability', v)
             provider.addFeature(feat)
         apply_graduated_symbology(layer, num_classes=5)
         assert layer.renderer() is not None

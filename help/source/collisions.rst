@@ -233,6 +233,57 @@ Default causation factor
    P_C = 1.3 \times 10^{-4} \quad \text{(Pedersen 1995)}
 
 
+.. _crossing_traffic_distribution:
+
+How OMRAT distributes traffic between legs at a junction
+---------------------------------------------------------
+
+A common question from new users:
+
+   *"At a crossing or merging point, how does OMRAT decide which
+   fraction of leg A's traffic continues to leg B vs leg C?"*
+
+**Short answer: it doesn't.**  OMRAT does not model a routing
+distribution at junctions.  Each leg has its **own independent**
+traffic table, and crossing collisions are computed pairwise from
+:math:`Q_1 \times Q_2` for every pair of legs that share a waypoint.
+
+That means **the user is responsible for keeping leg traffic counts
+consistent**:
+
+* If 1000 ships/year transit a fork and the user expects 60 % to take
+  leg B and 40 % to take leg C, the *Frequency (ships/year)* value on
+  leg A must be ``1000``, on leg B ``600``, on leg C ``400`` — entered
+  manually on the Traffic tab (or split by AIS in the user's
+  pre-processing).
+* If you populate traffic from the AIS database (``pbUpdateAIS``),
+  OMRAT samples passages from the AIS table that intersect each leg's
+  passage line independently.  A ship that AIS shows transiting both
+  leg A and leg B contributes ``+1`` to leg A's count *and* ``+1`` to
+  leg B's count — i.e. AIS already supplies a self-consistent
+  distribution as a side-effect of how passages are counted.
+
+The crossing-collision contribution between leg :math:`i` and leg
+:math:`j` is therefore:
+
+.. math::
+
+   N_{G, i\to j} = \frac{Q_i \cdot Q_j \cdot D_{ij}}
+                       {V_i V_j |\sin\theta_{ij}| \cdot \text{sec/year}}
+
+with no extra weighting term for "the share of :math:`Q_i` that
+continues toward leg :math:`j`".  The same applies to merging collisions
+(treated as crossings with a small angle) and to bend collisions on a
+single leg (no neighbouring-leg contribution).
+
+.. container:: source-code-ref
+
+   ``compute/ship_collision_model.py:_calc_crossing_collisions``
+   iterates every pair ``(leg_i, leg_j)`` and skips pairs that don't
+   share a waypoint or are nearly parallel (``crossing_angle < 0.1
+   rad``).
+
+
 Bend Collisions
 ===============
 

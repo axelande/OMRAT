@@ -239,6 +239,7 @@ class PoweredModelMixin:
             )
             self.powered_grounding_layer = create_powered_grounding_layer(
                 self.powered_grounding_report, depths_meta, add_to_project=False,
+                segment_data=segment_data,
             )
         except Exception as e:
             import logging as _logging
@@ -411,6 +412,7 @@ class PoweredModelMixin:
             structs_meta = getattr(self, '_last_structures', None) or []
             self.powered_allision_layer = create_powered_allision_layer(
                 self.powered_allision_report, structs_meta, add_to_project=False,
+                segment_data=segment_data,
             )
         except Exception as e:
             import logging as _logging

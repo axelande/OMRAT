@@ -459,13 +459,14 @@ to six layers (only those with non-zero contributions are written):
      - Polygon
      - same shape as Allision.
    * - ``powered_grounding``
-     - Polygon
-     - ``obstacle_id``, ``value`` (depth), ``total_prob``,
-       per-leg ``leg_<id>`` columns.
+     - LineString (per leg)
+     - ``segment_id``, ``total_edge_probability``, ``value_max``
+       (deepest depth on this leg), per-depth ``obs_<id>`` columns.
    * - ``powered_allision``
-     - Polygon
-     - ``obstacle_id``, ``value`` (height), ``total_prob``,
-       per-leg ``leg_<id>`` columns.
+     - LineString (per leg)
+     - ``segment_id``, ``total_edge_probability``, ``value_max``
+       (tallest structure on this leg), per-structure ``obs_<id>``
+       columns.
    * - ``collision_lines``
      - LineString
      - ``leg_id``, ``head_on``, ``overtaking``, ``combined``.

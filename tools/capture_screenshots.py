@@ -855,16 +855,189 @@ def _layer_count() -> int:
         return -1
 
 
-def main(run_model: bool = False, drift_analysis: bool = False) -> None:
+def capture_quickstart(plugin) -> None:
+    """Capture the "Quick start from scratch" walkthrough screenshots.
+
+    Output files go to ``<OUT_DIR>/quickstart/qs_*.png`` so they don't
+    collide with the canonical 19-screenshot set.  Captured states:
+
+    * ``qs_01_empty_routes_tab`` — the Routes tab on a fresh project
+      (no legs yet).
+    * ``qs_02_canvas_blank`` — the QGIS canvas before any layer is added.
+    * ``qs_03_route_after_first_leg`` — Routes tab after a synthetic
+      leg has been added to ``twRouteList``.
+    * ``qs_04_canvas_with_legs`` — canvas zoomed to the synthetic legs.
+    * ``qs_05_depths_tab_empty`` / ``qs_06_objects_tab_empty`` — what
+      the user sees before they bring in depth / object polygons.
+    * ``qs_07_drift_settings_wind_rose`` — drift-settings dialog
+      (wind-rose section is the typical "where do I find depth info"
+      jumping-off point).
+    """
+    qs_dir = OUT_DIR / 'quickstart'
+    qs_dir.mkdir(parents=True, exist_ok=True)
+
+    def _save(widget, name: str) -> None:
+        path = qs_dir / f'{name}.png'
+        widget.show()
+        widget.raise_()
+        _process(120)
+        if widget.grab().save(str(path), 'PNG'):
+            print(f'  wrote quickstart/{path.name}')
+        else:
+            print(f'  FAILED to write {path}')
+
+    def _save_canvas(name: str) -> None:
+        # Reuse grab_canvas but with a quickstart-specific filename.
+        from qgis.core import QgsMapRendererCustomPainterJob, QgsMapSettings
+        path = qs_dir / f'{name}.png'
+        canvas = iface.mapCanvas()
+        size = canvas.size()
+        if size.width() <= 0 or size.height() <= 0:
+            size = QtCore.QSize(1280, 900)
+        fmt = getattr(QtGui.QImage, 'Format_ARGB32', None) or QtGui.QImage.Format.Format_ARGB32
+        img = QtGui.QImage(size, fmt)
+        white = QtCore.Qt.GlobalColor.white if hasattr(QtCore.Qt, 'GlobalColor') else QtCore.Qt.white
+        img.fill(white)
+        settings = QgsMapSettings()
+        settings.setOutputSize(size)
+        settings.setOutputDpi(96)
+        settings.setExtent(canvas.extent())
+        settings.setDestinationCrs(canvas.mapSettings().destinationCrs())
+        settings.setLayers([
+            l for l in QgsProject.instance().mapLayers().values() if l is not None
+        ])
+        settings.setBackgroundColor(QtGui.QColor('white'))
+        painter = QtGui.QPainter(img)
+        try:
+            job = QgsMapRendererCustomPainterJob(settings, painter)
+            job.start()
+            job.waitForFinished()
+        finally:
+            painter.end()
+        if img.save(str(path), 'PNG'):
+            print(f'  wrote quickstart/{path.name}')
+        else:
+            print(f'  FAILED to write {path}')
+
+    # Wipe any layers / segment data left from earlier captures so the
+    # "blank slate" shots are actually blank.
+    project = QgsProject.instance()
+    try:
+        existing = list(project.mapLayers().keys())
+        if existing:
+            project.removeMapLayers(existing)
+    except Exception:
+        pass
+    try:
+        plugin.segment_data.clear()
+        plugin.main_widget.twRouteList.setRowCount(0)
+        plugin.main_widget.twDepthList.setRowCount(0)
+        plugin.main_widget.twObjectList.setRowCount(0)
+    except Exception:
+        pass
+
+    dock = configure_dock(plugin)
+    tabs = dock.tabWidget
+
+    # 1. Empty Routes tab
+    tabs.setCurrentIndex(0)
+    _process(200)
+    _save(dock, 'qs_01_empty_routes_tab')
+
+    # 2. Empty canvas
+    iface.mapCanvas().zoomToFullExtent()
+    _process(200)
+    _save_canvas('qs_02_canvas_blank')
+
+    # 3. Inject a synthetic leg into the route table so the tab
+    # populates the same way the real "Place leg" tool would.
+    from qgis.PyQt.QtWidgets import QTableWidgetItem
+    tw = plugin.main_widget.twRouteList
+    tw.setRowCount(1)
+    cells = ['1', '1', 'LEG_1_1', '13.50 55.10', '14.50 55.30', '5000']
+    for col, txt in enumerate(cells):
+        tw.setItem(0, col, QTableWidgetItem(txt))
+    plugin.segment_data['1'] = {
+        'Route_Id': '1',
+        'Leg_name': 'LEG_1_1',
+        'Start_Point': '13.50 55.10',
+        'End_Point': '14.50 55.30',
+        'Width': '5000',
+        'Dirs': ['East going', 'West going'],
+    }
+    _process(200)
+    _save(dock, 'qs_03_route_after_first_leg')
+
+    # Add a memory layer so the canvas shows the leg.
+    from qgis.core import QgsVectorLayer, QgsFeature, QgsGeometry
+    leg_layer = QgsVectorLayer('LineString?crs=EPSG:4326', 'Quick start leg', 'memory')
+    feat = QgsFeature()
+    feat.setGeometry(QgsGeometry.fromWkt('LINESTRING(13.50 55.10, 14.50 55.30)'))
+    leg_layer.dataProvider().addFeature(feat)
+    leg_layer.updateExtents()
+    project.addMapLayer(leg_layer)
+    iface.mapCanvas().zoomToFullExtent()
+    _process(400)
+    _save_canvas('qs_04_canvas_with_legs')
+
+    # 4 & 5. Empty Depths / Objects tabs.
+    tabs.setCurrentIndex(2)
+    _process(200)
+    _save(dock, 'qs_05_depths_tab_empty')
+    tabs.setCurrentIndex(3)
+    _process(200)
+    _save(dock, 'qs_06_objects_tab_empty')
+
+    # 6. Drift Settings dialog (where wind-rose / drift-speed live).
+    # We deliberately avoid ``plugin.drift_settings.run()`` here -- it
+    # was already invoked once during ``capture_settings()``, which
+    # connected several signals.  Re-running would either duplicate
+    # those connections (cheap-but-ugly) or in some QGIS versions
+    # raise on the second connect.  Instead we just refresh + show
+    # the dialog directly.
+    try:
+        ds = plugin.drift_settings
+        # ``populate_drift`` repopulates the line-edits from the live
+        # ``drift_values`` dict so the captured shot reflects the
+        # currently-loaded project.
+        try:
+            ds.populate_drift()
+        except Exception as e:
+            print(f'  WARN: populate_drift failed: {e}')
+        dsw = ds.dsw
+        try:
+            dsw.show()
+            dsw.raise_()
+            dsw.activateWindow()
+        except Exception as e:
+            print(f'  WARN: dsw.show() failed: {e}')
+        _process(600)
+        _save(dsw, 'qs_07_drift_settings_wind_rose')
+        try:
+            dsw.close()
+        except Exception:
+            pass
+    except Exception as exc:
+        import traceback
+        print(f'  WARN: could not capture drift-settings: {exc}')
+        traceback.print_exc()
+
+
+def main(run_model: bool = False, drift_analysis: bool = False,
+         quickstart: bool = False) -> None:
     print(f'Capturing OMRAT screenshots to {OUT_DIR}')
     print(f'  run_model = {run_model}')
     print(f'  drift_analysis = {drift_analysis}')
+    print(f'  quickstart = {quickstart}')
     if not run_model:
         print('  >>> set OMRAT_RUN_MODEL=1 BEFORE exec() to also produce '
               'ui_result_layers.png')
     if not drift_analysis:
         print('  >>> set OMRAT_DRIFT=1 BEFORE exec() to also produce '
               'ui_drift_corridor.png')
+    if not quickstart:
+        print('  >>> set OMRAT_QUICKSTART=1 BEFORE exec() to also produce '
+              'quickstart/qs_*.png')
 
     hide_python_console()
 
@@ -906,28 +1079,43 @@ def main(run_model: bool = False, drift_analysis: bool = False) -> None:
         print('Drift analysis...')
         capture_drift_corridor(plugin)
 
+    if quickstart:
+        print('Quick-start (from-scratch walkthrough)...')
+        capture_quickstart(plugin)
+
     print(f'Done.  {len(list(OUT_DIR.glob("*.png")))} PNGs in {OUT_DIR}.')
 
 
-def _flag(name: str) -> bool:
+def _flag(name: str, default: bool = False) -> bool:
     """``True`` if env var ``name`` is set to a truthy string.
 
-    Recognised truthy values: ``1``, ``true``, ``yes``, ``on`` (case
-    insensitive).  Empty / unset / anything else => False.
+    When the env var is unset, ``default`` decides the result.
+    Recognised truthy values: ``1``, ``true``, ``yes``, ``on``.
+    Recognised falsy values: ``0``, ``false``, ``no``, ``off``.
     """
     val = (os.environ.get(name, '') or '').strip().lower()
-    return val in ('1', 'true', 'yes', 'on')
+    if not val:
+        return default
+    if val in ('1', 'true', 'yes', 'on'):
+        return True
+    if val in ('0', 'false', 'no', 'off'):
+        return False
+    return default
 
 
 if __name__ == '__main__' or 'qgis' in sys.modules:
-    # Toggle the slow phases via env vars so the user can opt in
-    # without editing this file:
+    # ``OMRAT_DRIFT`` and ``OMRAT_QUICKSTART`` default to ON so a single
+    # ``exec()`` produces every PNG the docs reference.  Set the env var
+    # to ``0`` (or ``false`` / ``no``) to skip the slow phases.
     #
     #     import os
-    #     os.environ['OMRAT_RUN_MODEL'] = '1'   # produces ui_result_layers.png
-    #     os.environ['OMRAT_DRIFT']     = '1'   # produces ui_drift_corridor.png
+    #     os.environ['OMRAT_DRIFT']     = '0'   # skip ui_drift_corridor.png
+    #     os.environ['OMRAT_QUICKSTART'] = '0'  # skip quickstart/qs_*.png
+    #     os.environ['OMRAT_RUN_MODEL'] = '1'   # additionally produce
+    #                                           # ui_result_layers.png
     #     exec(open(r'.../tools/capture_screenshots.py').read())
     main(
         run_model=_flag('OMRAT_RUN_MODEL'),
-        drift_analysis=_flag('OMRAT_DRIFT'),
+        drift_analysis=_flag('OMRAT_DRIFT', default=True),
+        quickstart=_flag('OMRAT_QUICKSTART', default=True),
     )

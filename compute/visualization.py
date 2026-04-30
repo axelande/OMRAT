@@ -71,8 +71,10 @@ class VisualizationMixin:
             transformed_objects_gdf,
             distributions,
             weights,
-            data = data,
-            distance=longest_length * 3.0
+            data=data,
+            distance=longest_length * 3.0,
+            drifting_report=getattr(self, 'drifting_report', None),
+            accident_kind='allision',
         )
         dialog.exec()  # ``exec_`` was dropped in PyQt6 (QGIS 4).
 
@@ -114,4 +116,168 @@ class VisualizationMixin:
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="grounding", max_draft=max_draft,
         )
+        dialog.exec()
+
+    def run_drift_grounding_visualization(self, data: dict[str, Any]) -> None:
+        """Show drifting-grounding overlap (drift counterpart to powered).
+
+        Reuses the drifting visualiser but substitutes shallow depth
+        polygons (depths whose value <= ``max_draft``) for the structure
+        objects.  Highlights the overlap between drift corridors and
+        grounding hazards so the user can see which depth areas drive
+        the drifting-grounding probability.
+        """
+        if not data.get('traffic_data'):
+            return
+        depths = data.get('depths') or []
+        if not depths:
+            return
+        try:
+            max_draft = float(data.get('max_draft', 15.0))
+        except (TypeError, ValueError):
+            max_draft = 15.0
+
+        lines, distributions, weights, line_names = prepare_traffic_lists(data)
+
+        # Filter depths to grounding hazards (depth <= ship draft).
+        hazards = []
+        for entry in depths:
+            try:
+                _did, val, wkt = entry
+                if float(val) <= max_draft:
+                    hazards.append(sw.loads(wkt))
+            except Exception:
+                continue
+        if not hazards:
+            return
+        transformed_lines, transformed_objects, _utm_crs = transform_to_utm(
+            lines, hazards,
+        )
+        fixed_objects = []
+        for obj in transformed_objects:
+            try:
+                if shp_make_valid is not None:
+                    fixed = shp_make_valid(obj)
+                else:
+                    fixed = obj.buffer(0)
+            except Exception:
+                fixed = obj
+            if fixed is not None:
+                fixed_objects.append(fixed)
+        transformed_objects = fixed_objects
+        if not transformed_objects:
+            return
+        longest_length = max(line.length for line in transformed_lines)
+        objects_gdf = [gpd.GeoDataFrame(geometry=[obj]) for obj in transformed_objects]
+        dialog = ShowGeomRes(self.p.main_widget)
+        DriftingOverlapVisualizer.show_in_dialog(
+            dialog,
+            transformed_lines,
+            line_names,
+            objects_gdf,
+            distributions,
+            weights,
+            data=data,
+            distance=longest_length * 3.0,
+            drifting_report=getattr(self, 'drifting_report', None),
+            accident_kind='grounding',
+        )
+        dialog.exec()
+
+    def run_collision_breakdown_dialog(self, encounter_type: str) -> None:
+        """Show a breakdown of a ship-ship collision encounter type.
+
+        * head-on / overtaking  -> per leg (single-leg phenomena).
+        * crossing / merging    -> per leg-pair "leg_a -> leg_b" with
+          the shared waypoint.
+        * bend                  -> per leg-pair "leg_a -> next_leg"
+          attributed to leg_a's end waypoint.
+
+        The dialog is read-only and adds no map layer; it answers
+        "which legs / leg-pairs drive this number?".
+        """
+        from qgis.PyQt.QtWidgets import (
+            QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView,
+        )
+        report = getattr(self, 'collision_report', None) or {}
+
+        wanted = encounter_type
+        rows: list[tuple[str, ...]] = []
+        headers: list[str] = []
+
+        if wanted in ('crossing', 'merging'):
+            by_leg_pair: dict[str, dict[str, Any]] = (
+                report.get('by_leg_pair', {}) or {}
+            )
+            headers = ['Leg pair', 'Waypoint (lon lat)', 'Angle°', 'Probability']
+            for label, rec in by_leg_pair.items():
+                v = float(rec.get(wanted, 0.0) or 0.0)
+                if v <= 0.0:
+                    continue
+                rows.append((
+                    label,
+                    str(rec.get('waypoint', '')),
+                    f"{float(rec.get('angle_deg', 0.0) or 0.0):.1f}",
+                    f"{v:.3e}",
+                ))
+            # Sort descending by probability (last column).
+            rows.sort(key=lambda r: -float(r[-1]))
+        elif wanted == 'bend':
+            bend_by_pair: dict[str, dict[str, Any]] = (
+                report.get('bend_by_pair', {}) or {}
+            )
+            headers = ['Leg pair', 'Waypoint (lon lat)', 'Probability']
+            for label, rec in bend_by_pair.items():
+                v = float(rec.get('bend', 0.0) or 0.0)
+                if v <= 0.0:
+                    continue
+                rows.append((
+                    label,
+                    str(rec.get('waypoint', '')),
+                    f"{v:.3e}",
+                ))
+            rows.sort(key=lambda r: -float(r[-1]))
+        else:
+            # head_on / overtaking are single-leg phenomena.
+            by_leg: dict[str, dict[str, float]] = report.get('by_leg', {}) or {}
+            headers = ['Leg', 'Probability']
+            for leg_id, leg_vals in by_leg.items():
+                if not isinstance(leg_vals, dict):
+                    continue
+                v = float(leg_vals.get(wanted, 0.0) or 0.0)
+                if v <= 0.0:
+                    continue
+                rows.append((str(leg_id), f"{v:.3e}"))
+            rows.sort(key=lambda r: -float(r[-1]))
+
+        if not rows:
+            return
+
+        dialog = QDialog(self.p.main_widget)
+        title = wanted.replace('_', '-').title()
+        if wanted in ('crossing', 'merging', 'bend'):
+            dialog.setWindowTitle(f"{title} collision per leg-pair / waypoint")
+        else:
+            dialog.setWindowTitle(f"{title} collision per leg")
+
+        layout = QVBoxLayout(dialog)
+        tw = QTableWidget(len(rows), len(headers), dialog)
+        tw.setHorizontalHeaderLabels(headers)
+        tw.verticalHeader().setVisible(False)
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row):
+                tw.setItem(r, c, QTableWidgetItem(val))
+        try:
+            tw.horizontalHeader().setSectionResizeMode(
+                0, QHeaderView.ResizeMode.Stretch,
+            )
+        except Exception:
+            try:
+                tw.horizontalHeader().setSectionResizeMode(
+                    0, QHeaderView.Stretch,
+                )
+            except Exception:
+                pass
+        layout.addWidget(tw)
+        dialog.resize(560, 540)
         dialog.exec()

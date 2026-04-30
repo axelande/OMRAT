@@ -5,10 +5,9 @@
 [general]
 name=Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.30
-qgisMaximumVersion=5.0
-supportsQt6=True
-description=This is an open source implementation of Pedersens and Friis-Hansen equations
-version=0.9.1
+qgisMaximumVersion=4.9
+description=This is an open source implementation of Pedersens and Friis-Hansen equations to calculate the probability of maritime accidents.
+version=0.9.3
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 
@@ -24,6 +23,8 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.9.3 - Improved visualization of the result and improved the documentation
+  Version 0.9.2 - Fixed some security issues
   Version 0.9.1 - Fixed some security issues
   Version 0.9.0 - Major rework of the drifting calculation and updated documentation
   Version 0.4.1 - Refactored the run_calculation and updated documentation
@@ -40,7 +41,7 @@ tags=routing, analysis, ship, risk
 category=Plugins
 icon=img/icon.png
 # experimental flag
-experimental=True
+# experimental=False
 
 # deprecated flag (applies to the whole plugin, not just a single version)
 deprecated=False

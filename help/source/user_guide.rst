@@ -569,19 +569,25 @@ canvas:
      - Key attributes
    * - Drifting Allision Results
      - Polygon
-     - ``obstacle_id``, ``total_prob``, plus per-segment columns and
-       a ``leg_<id>`` column per leg that contributed.
+     - ``obstacle_id``, ``total_edge_probability`` (alias *Total edge
+       probability*), ``object_probability`` (alias *Object probability*),
+       plus per-segment columns and a ``leg_<id>`` column per leg that
+       contributed.
    * - Drifting Grounding Results
      - Polygon
      - same shape as Allision.
    * - Powered Allision Results
-     - Polygon
-     - ``obstacle_id``, ``value`` (height), ``total_prob`` and one
-       ``leg_<id>`` column per leg that contributed.
+     - Line (per leg)
+     - ``segment_id``, ``total_edge_probability`` (powered-allision
+       probability summed across every contributing structure for this
+       leg), ``value_max`` (max structure height on this leg), one
+       ``obs_<id>`` column per contributing structure.
    * - Powered Grounding Results
-     - Polygon
-     - ``obstacle_id``, ``value`` (depth), ``total_prob`` and one
-       ``leg_<id>`` column per leg.
+     - Line (per leg)
+     - ``segment_id``, ``total_edge_probability`` (powered-grounding
+       probability summed across every contributing depth contour for
+       this leg), ``value_max`` (max depth on this leg), one
+       ``obs_<id>`` column per contributing depth.
    * - Ship-Ship Collision (per leg)
      - Line
      - ``leg_id``, ``head_on``, ``overtaking``, ``combined``.
@@ -589,7 +595,7 @@ canvas:
      - Point
      - ``waypoint``, ``crossing``, ``bend``, ``combined``.
 
-All layers are graduated red->green by ``total_prob`` /
+All layers are graduated red->green by ``total_edge_probability`` /
 ``combined``.  The line layer is rendered semi-transparent and ~3 mm
 wide so the underlying route stays visible.
 

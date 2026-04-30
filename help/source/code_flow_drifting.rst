@@ -509,9 +509,19 @@ A flat list of every function reached from
 * ``run_drifting_model`` - orchestrator (this chapter).
 * ``_build_transformed`` - UTM projection + make_valid.
 * ``_compute_reach_distance`` - T99 repair distance in metres.
+* ``_merge_depths_by_threshold`` - optional per-threshold merge of
+  depth polygons that share unique depth values; many traffic
+  draughts then index into the same merged geometry.
 * ``_precompute_spatial`` - min-distances + probability holes.
 * ``_precompute_shadow_layer`` - corridor/shadow/edge geom per
-  ``(leg, dir)``.
+  ``(leg, dir)``.  Now slimmer: pre-computes are pulled out into
+  :meth:`_compute_global_shadow_bounds` (uniform extrude bounds for
+  the shadow memo) and :meth:`_precompute_leg_lateral_params`
+  (per-leg lateral-distribution scalars + ``LegState``).
+* ``_run_shadow_pool`` - dispatch the per-(leg, dir) worker across
+  threads (or sequentially for tiny inputs); reports progress and
+  honours cancellation.  Extracted from
+  ``_precompute_shadow_layer``.
 * ``_precompute_bucket_memo`` - shadow cascade per ship bucket.
 * ``_iterate_traffic_and_sum`` - traffic cascade.
 * ``_process_cell_direction`` - per cell x direction contribution.
@@ -575,15 +585,55 @@ A flat list of every function reached from
   every slice (hot-path helper).
 * ``_extract_polygon_rings`` - polygon rings as numpy arrays.
 
-``geometries/get_drifting_overlap.py``
---------------------------------------
+``geometries/get_drifting_overlap.py`` and helper modules
+---------------------------------------------------------
 
+The original 1400-line module has been split into four files; the
+top-level facade (``get_drifting_overlap.py``) re-exports the public
+helpers so existing callers don't need to update imports.
+
+``geometries/drift_overlap_geometry.py`` -- pure-data helpers (no Qt /
+matplotlib):
+
+* ``create_polygon_from_line`` - leg buffered by the weighted lateral
+  distribution.
+* ``extend_polygon_in_directions`` - sweep that polygon in 8 drift
+  directions; returns one corridor polygon per direction.
+* ``compare_polygons_with_objs`` -- per ``(polygon, gdf, obj)`` overlap
+  matrix.
+* ``estimate_weighted_overlap`` - PDF-weighted coverage of an
+  intersection polygon.
+* ``compute_coverages_and_distances`` - flat per-(polygon, gdf, obj)
+  coverage + distance arrays.
 * ``compute_min_distance_by_object`` - per
   ``(leg, dir, obstacle)`` minimum along-drift distance.
 * ``directional_distances_to_points`` - vectorised per-point along-
   drift distance (used by ``_edge_geom_for``).
 * ``directional_min_distance_reverse_ray`` - wraps the helper above
   to return the min across a polygon's vertices.
+
+``geometries/drift_overlap_plot.py`` -- the bottom-axis matplotlib
+plot:
+
+* ``visualize`` - paints PDF + failure-remains :math:`P_{NR}` curve +
+  green "intersection extent" axvspan, with a picture-in-picture
+  zoom inset.
+
+``geometries/drift_overlap_sidebar.py`` -- Qt sidebar builder:
+
+* ``DIRECTION_LABELS`` / ``polygon_to_compass`` - 8 directions in the
+  order the geometry helpers iterate.
+* ``split_leg_name`` / ``lookup_contribution`` - parse leg names, look
+  up ``contrib_grounding`` / ``contrib_allision`` from the calc's
+  ``drifting_report['by_leg_direction']``.
+* ``build_overlap_sidebar`` - construct the sortable
+  ``QTableWidget`` used as the overlap-dialog sidebar.
+
+``geometries/get_drifting_overlap.py`` -- the
+:class:`DriftingOverlapVisualizer` class itself drives the three
+matplotlib axes (``ax1`` legs, ``ax2`` direction polygons, ``ax3``
+PDF).  ``show_in_dialog`` is the dialog factory used from the View
+buttons in :class:`AccidentResultsMixin`.
 
 ``geometries/drift/shadow.py``
 ------------------------------

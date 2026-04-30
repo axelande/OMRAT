@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 import numpy as np
 from qgis.core import QgsProject
 from qgis.PyQt.QtCore import QSettings
-from qgis.PyQt.QtWidgets import QTableWidget
+from qgis.PyQt.QtWidgets import QMessageBox, QTableWidget
 from shapely import wkt
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
@@ -184,6 +184,15 @@ class AIS:
     def update_legs(self, key:str|None=None):
         """Update AIS data for all legs or a specific leg."""
         if self.db is None:
+            QMessageBox.information(
+                self.omrat.main_widget,
+                self.omrat.tr("AIS database not connected"),
+                self.omrat.tr(
+                    "No AIS database connection is configured.\n\n"
+                    "Open Settings -> AIS Connection and provide a host, "
+                    "database, user and password before fetching AIS traffic."
+                ),
+            )
             return
         segment_data: dict[str, dict[str, str]] = self.get_segment_data_from_table()
         if key is None:

@@ -32,71 +32,13 @@ from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, Q
 from qgis.core import QgsPointXY, QgsMessageLog, Qgis, QgsApplication
 
 from qgis.gui import QgsMapToolPan, QgisInterface
+import copy
 import gc
 import sys
 import os
 import os.path
 import time
-from pathlib import Path
 
-
-def _fmt(v: float | None) -> str:
-    """Format a probability total for the previous-runs table."""
-    if v is None:
-        return ''
-    if v == 0:
-        return '0'
-    return f'{v:.3e}'
-
-
-def _format_duration(seconds: float | None) -> str:
-    """Human-readable elapsed-time string for the Duration column."""
-    if seconds is None:
-        return ''
-    s = float(seconds)
-    if s < 1:
-        return f"{s*1000:.0f} ms"
-    if s < 60:
-        return f"{s:.1f} s"
-    m, sec = divmod(s, 60)
-    if m < 60:
-        return f"{int(m)}:{int(sec):02d}"
-    h, m = divmod(m, 60)
-    return f"{int(h)}:{int(m):02d}:{int(sec):02d}"
-
-
-def _qt_enum(klass, name: str, *scoped_paths: str):
-    """Resolve a Qt enum value across Qt5 (flat) and Qt6 (scoped).
-
-    PyQt5 used flat enum members (``Qt.UserRole``).  PyQt6 (= QGIS 4)
-    moved them under their typed inner class
-    (``Qt.ItemDataRole.UserRole``).  Some PyQt6 builds expose the flat
-    form for backward compatibility, others don't.
-
-    This helper tries flat access first and falls back to each scoped
-    path until one resolves.
-
-    Example::
-
-        UserRole = _qt_enum(Qt, 'UserRole', 'ItemDataRole.UserRole')
-    """
-    val = getattr(klass, name, None)
-    if val is not None and not isinstance(val, type):
-        return val
-    for path in scoped_paths:
-        obj = klass
-        ok = True
-        for part in path.split('.'):
-            obj = getattr(obj, part, None)
-            if obj is None:
-                ok = False
-                break
-        if ok:
-            return obj
-    raise AttributeError(
-        f"{klass.__name__} has no enum member {name!r} "
-        f"(tried {[name, *scoped_paths]})"
-    )
 sys.path.append('.')
 # Initialize Qt resources from file resources.py
 from resources import *
@@ -104,7 +46,6 @@ from resources import *
 # Import the code for the DockWidget
 from compute.run_calculations import Calculation
 from compute.calculation_task import CalculationTask
-from compute.iwrap_convertion import write_iwrap_xml, parse_iwrap_xml
 from geometries.handle_qgis_iface import HandleQGISIface
 from omrat_utils.causation_factors import CausationFactors
 from omrat_utils.handle_ais import AIS
@@ -120,8 +61,24 @@ from geometries.drift import DriftCorridorGenerator
 from geometries.drift_corridor_task_v2 import DriftCorridorTask
 
 
-class OMRAT:
-    """QGIS Plugin Implementation."""
+from omrat_utils.compare_mixin import CompareMixin
+from omrat_utils.accident_results_mixin import AccidentResultsMixin
+from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin
+from omrat_utils.iwrap_io_mixin import IwrapIOMixin
+from omrat_utils.run_history_mixin import RunHistoryMixin
+
+
+class OMRAT(
+    IwrapIOMixin, CompareMixin, DriftAnalysisMixin, RunHistoryMixin,
+    AccidentResultsMixin,
+):
+    """QGIS Plugin Implementation.
+
+    Methods are progressively being extracted into mixins under
+    ``omrat_utils/`` to keep this module readable.  Each mixin owns a
+    cohesive group of slots / helpers; see the ``omrat_utils`` package
+    docstrings for what lives where.
+    """
     def __init__(self, iface:QgisInterface, testing:bool=False):
         """Constructor.
 
@@ -473,7 +430,14 @@ class OMRAT:
             field.setText('')
 
         self.main_widget.LEModelName.setText('')
-        self.main_widget.TWPreviousRuns.setRowCount(0)
+        # The Previous-runs table reflects the master run-history DB,
+        # not the currently-loaded project, so reload from the DB
+        # instead of wiping it -- the rows survive a project clear /
+        # load.
+        try:
+            self.refresh_previous_runs_table()
+        except Exception:
+            self.main_widget.TWPreviousRuns.setRowCount(0)
         self.main_widget.laDir1.setText('')
         self.main_widget.laDir2.setText('')
 
@@ -708,16 +672,30 @@ class OMRAT:
         if self.calc is None:
             return
 
-        # Refuse to run unless an output folder is configured.  The
-        # button should already be disabled, but defend against direct
-        # calls / keyboard shortcuts.
+        # Refuse to run unless an output folder AND a model name are
+        # configured.  The button should already be disabled, but defend
+        # against direct calls / keyboard shortcuts.
         out_dir = self._get_output_dir()
-        if out_dir is None:
-            QMessageBox.warning(
-                self.main_widget, 'Output folder required',
-                "Pick an output folder on the Run Analysis tab before "
-                "running the model.  Result layers from each run are "
-                "written to that folder as a single .gpkg file.",
+        try:
+            run_name = (self.main_widget.LEModelName.text() or '').strip()
+        except Exception:
+            run_name = ''
+        if out_dir is None or not run_name:
+            missing: list[str] = []
+            if not run_name:
+                missing.append('Name of the model')
+            if out_dir is None:
+                missing.append('Output folder (File path)')
+            QMessageBox.information(
+                self.main_widget,
+                self.tr('Quick start: missing inputs'),
+                self.tr(
+                    "Before running the model, fill in the following on the "
+                    "Run Analysis tab:\n\n  - {fields}\n\n"
+                    "Each run writes a result GeoPackage, an input snapshot "
+                    "(.omrat) and a markdown summary to that folder, named "
+                    "after the model."
+                ).format(fields="\n  - ".join(missing)),
             )
             return
 
@@ -741,6 +719,11 @@ class OMRAT:
 
         # Track elapsed time for the run-history "Duration" column.
         self._run_started_at = time.monotonic()
+
+        # Snapshot the input dict at kick-off so the .omrat archive
+        # written after a successful run reflects exactly what the
+        # calc consumed, not whatever the user has typed since.
+        self._run_input_snapshot = copy.deepcopy(data)
 
         # Add task to QGIS task manager (runs in background)
         QgsApplication.taskManager().addTask(task)
@@ -780,6 +763,11 @@ class OMRAT:
             )
         try:
             self.refresh_previous_runs_table()
+            # Select the just-completed run (always the top row of the
+            # history table) so the View buttons default to the latest
+            # run.  Without this the user would see the "select a run"
+            # popup right after their first model run.
+            self._select_latest_previous_run()
         except Exception as e:
             import traceback
             QgsMessageLog.logMessage(
@@ -806,423 +794,32 @@ class OMRAT:
         )
         self._current_task = None
 
-    def _auto_save_run(self, calc_object: Any) -> None:
-        """Write per-run GeoPackage + record metadata in the master DB."""
-        from omrat_utils.run_history import (
-            RunHistory, totals_from_calc, make_run_filename,
-        )
-        from omrat_utils.run_persistence import write_run_results
+    # Run-history flow (auto-save, sidecars, markdown report) is
+    # provided by ``RunHistoryMixin`` (see
+    # ``omrat_utils.run_history_mixin``).  These methods used to live
+    # here.
 
-        out_dir = self._get_output_dir()
-        if out_dir is None:
-            raise RuntimeError(
-                "No output folder configured on the Run Analysis tab. "
-                "Set one and re-run."
-            )
+    # Compare-tab slots are provided by ``CompareMixin`` (see
+    # ``omrat_utils.compare_mixin``).  They used to live here.
 
-        name = ''
-        try:
-            name = self.main_widget.LEModelName.text().strip()
-        except Exception:
-            pass
-        if not name:
-            name = time.strftime('run_%Y%m%d_%H%M%S')
-
-        # Per-run GeoPackage path: <out_dir>/<slug(name)>_<timestamp>.gpkg
-        ts_struct = time.localtime()
-        ts_text = time.strftime('%Y-%m-%d %H:%M:%S', ts_struct)
-        filename = make_run_filename(name, ts_struct)
-        gpkg_path = Path(out_dir) / filename
-
-        QgsMessageLog.logMessage(
-            f"Writing per-run results to {gpkg_path}", 'OMRAT', Qgis.Info,
-        )
-        try:
-            written_layers = write_run_results(
-                calc_object, gpkg_path,
-                structures=getattr(calc_object, '_last_structures', None),
-                depths=getattr(calc_object, '_last_depths', None),
-                depths_original=getattr(
-                    calc_object, '_last_depths_original', None,
-                ),
-                segment_data=self.segment_data,
-            )
-        except Exception as exc:
-            import traceback
-            QgsMessageLog.logMessage(
-                f"GeoPackage write failed: {exc}\n{traceback.format_exc()}",
-                'OMRAT', Qgis.Critical,
-            )
-            written_layers = []
-
-        # Compute elapsed time, if we tracked the start.
-        duration = None
-        try:
-            start = getattr(self, '_run_started_at', None)
-            if start is not None:
-                duration = float(time.monotonic() - start)
-        except Exception:
-            duration = None
-
-        history = RunHistory()
-        run_id = history.save_run(
-            name=name,
-            timestamp=ts_text,
-            duration_seconds=duration,
-            totals=totals_from_calc(calc_object),
-            output_dir=str(out_dir),
-            output_filename=filename,
-        )
-        dur_text = (
-            f"duration={duration:.1f}s" if duration is not None else "duration=n/a"
-        )
-        QgsMessageLog.logMessage(
-            f"Run '{name}' saved (run_id={run_id}, layers={len(written_layers)}, "
-            f"{dur_text}).  GeoPackage: {gpkg_path}",
-            'OMRAT', Qgis.Success,
-        )
+    # ------------------------------------------------------------------
+    # Accident-results QTable (replaces the legacy LEP* line-edit grid)
+    # ------------------------------------------------------------------
+    # (Accident type label, LEP* widget name on main_widget, View pushbutton
+    #  name on main_widget, slot on self).  Order is the row order of the
+    #  table.
+    # Accident-results table setup, ``LEP*`` legacy widgets, and the
+    # per-row View dispatcher all live in ``AccidentResultsMixin``
+    # (see ``omrat_utils.accident_results_mixin``).
 
     # ------------------------------------------------------------------
     # Output folder + Run Model gating
     # ------------------------------------------------------------------
-    def _get_output_dir(self) -> Path | None:
-        """Resolved + validated output folder, or ``None`` if not set."""
-        try:
-            text = (self.main_widget.LEReportPath.text() or '').strip()
-        except Exception:
-            text = ''
-        if not text:
-            return None
-        path = Path(text)
-        if not path.is_dir():
-            return None
-        return path
-
-    def choose_output_folder(self) -> None:
-        """Pop a folder picker into ``LEReportPath``.
-
-        Each Run Model writes its result layers into a single
-        ``<name>_<timestamp>.gpkg`` file in this folder.
-        """
-        initial = ''
-        try:
-            initial = (self.main_widget.LEReportPath.text() or '').strip()
-        except Exception:
-            initial = ''
-        if not initial:
-            initial = str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(
-            self.main_widget,
-            'Select output folder for OMRAT result GeoPackages',
-            initial,
-        )
-        if chosen:
-            self.main_widget.LEReportPath.setText(chosen)
-            try:
-                QSettings().setValue('omrat/output_dir', chosen)
-            except Exception:
-                pass
-            self._update_run_model_enabled()
-
-    def _restore_output_dir(self) -> None:
-        """At plugin start, restore the last-used output folder."""
-        try:
-            value = QSettings().value('omrat/output_dir', '', type=str)
-            if value:
-                self.main_widget.LEReportPath.setText(value)
-        except Exception:
-            pass
-
-    def _update_run_model_enabled(self) -> None:
-        """Run Model is gated on a writable output folder being selected.
-
-        When disabled the button shows the QSS ``:disabled`` style
-        (gray) defined in ``omrat_base.ui`` plus a tooltip telling the
-        user what to do.  When enabled the tooltip is cleared so the
-        regular blue look takes over without a stale hint.
-        """
-        try:
-            btn = self.main_widget.pbRunModel
-        except Exception:
-            return
-        enabled = self._get_output_dir() is not None
-        try:
-            btn.setEnabled(enabled)
-            btn.setToolTip(
-                '' if enabled else 'You must select a folder first'
-            )
-        except Exception:
-            pass
-
     # ------------------------------------------------------------------
-    # Previous-runs table on the Results tab
+    # Previous-runs table, output-folder gating, save-run flow are all
+    # provided by ``RunHistoryMixin`` (see
+    # ``omrat_utils.run_history_mixin``).
     # ------------------------------------------------------------------
-    def _setup_previous_runs_table(self) -> None:
-        """Configure ``TWPreviousRuns`` columns + add the load button.
-
-        Columns are slim now -- Name / Date / Duration only.  Detail
-        probabilities flow into the ``LEPDriftAllision`` etc. fields
-        below the table when the user picks a row (or several rows).
-        """
-        from qgis.PyQt import QtCore, QtWidgets
-        Qt = QtCore.Qt
-        AIV = QtWidgets.QAbstractItemView
-        tw = self.main_widget.TWPreviousRuns
-
-        headers = ['Name', 'Date', 'Duration']
-        tw.setColumnCount(len(headers))
-        tw.setHorizontalHeaderLabels(headers)
-        tw.horizontalHeader().setStretchLastSection(True)
-        tw.setSelectionBehavior(_qt_enum(
-            AIV, 'SelectRows', 'SelectionBehavior.SelectRows',
-        ))
-        tw.setSelectionMode(_qt_enum(
-            AIV, 'ExtendedSelection', 'SelectionMode.ExtendedSelection',
-        ))
-        tw.setEditTriggers(_qt_enum(
-            AIV, 'NoEditTriggers', 'EditTrigger.NoEditTriggers',
-        ))
-        tw.setContextMenuPolicy(_qt_enum(
-            Qt, 'CustomContextMenu', 'ContextMenuPolicy.CustomContextMenu',
-        ))
-        tw.customContextMenuRequested.connect(
-            self._previous_runs_context_menu,
-        )
-
-        # Drive the result-LineEdits from the row selection.
-        sel_model = tw.selectionModel()
-        if sel_model is not None:
-            sel_model.selectionChanged.connect(
-                lambda *_: self._on_previous_runs_selection_changed(),
-            )
-
-        # Add an "Add results to map" button programmatically next to
-        # the table.  We append it to the same vertical layout the
-        # table sits in so it appears just below.
-        try:
-            parent_widget = tw.parentWidget()
-            layout = parent_widget.layout() if parent_widget is not None else None
-            btn = QtWidgets.QPushButton('Add selected run results to map')
-            btn.setEnabled(False)
-            btn.clicked.connect(self._add_selected_run_to_map)
-            self._pb_add_run_to_map = btn
-            if layout is not None:
-                idx = layout.indexOf(tw)
-                if idx >= 0:
-                    layout.insertWidget(idx + 1, btn)
-                else:
-                    layout.addWidget(btn)
-        except Exception as exc:
-            QgsMessageLog.logMessage(
-                f'Could not add "Add to map" button: {exc}',
-                'OMRAT', Qgis.Warning,
-            )
-
-    def refresh_previous_runs_table(self) -> None:
-        """Reload ``TWPreviousRuns`` from the master history DB."""
-        from omrat_utils.run_history import RunHistory
-        from qgis.PyQt import QtWidgets, QtCore
-        user_role = _qt_enum(QtCore.Qt, 'UserRole', 'ItemDataRole.UserRole')
-        tw = self.main_widget.TWPreviousRuns
-        try:
-            runs = RunHistory().list_runs()
-        except Exception as e:
-            QgsMessageLog.logMessage(
-                f'Could not read run history: {e}', 'OMRAT', Qgis.Warning,
-            )
-            tw.setRowCount(0)
-            return
-        tw.setRowCount(len(runs))
-        for i, run in enumerate(runs):
-            cells = [
-                run.name,
-                run.timestamp,
-                _format_duration(run.duration_seconds),
-            ]
-            for j, text in enumerate(cells):
-                item = QtWidgets.QTableWidgetItem(text)
-                if j == 0:
-                    item.setData(user_role, run.run_id)
-                tw.setItem(i, j, item)
-        tw.resizeColumnsToContents()
-
-    def _selected_run_ids(self) -> list[int]:
-        from qgis.PyQt.QtCore import Qt
-        user_role = _qt_enum(Qt, 'UserRole', 'ItemDataRole.UserRole')
-        tw = self.main_widget.TWPreviousRuns
-        out: list[int] = []
-        seen: set[int] = set()
-        sel_model = tw.selectionModel()
-        if sel_model is None:
-            return out
-        for idx in sel_model.selectedRows():
-            item = tw.item(idx.row(), 0)
-            if item is None:
-                continue
-            run_id = item.data(user_role)
-            if run_id is not None and int(run_id) not in seen:
-                out.append(int(run_id))
-                seen.add(int(run_id))
-        return out
-
-    def _on_previous_runs_selection_changed(self) -> None:
-        """Populate ``LEP*`` fields from the selected run(s)."""
-        from omrat_utils.run_history import RunHistory
-        run_ids = self._selected_run_ids()
-        # Keep the "Add to map" button gated on having a single
-        # selected run.
-        try:
-            self._pb_add_run_to_map.setEnabled(len(run_ids) == 1)
-        except Exception:
-            pass
-        if not run_ids:
-            return
-        try:
-            runs = RunHistory().compare_runs(run_ids)
-        except Exception as e:
-            QgsMessageLog.logMessage(
-                f'Could not load previous-run details: {e}',
-                'OMRAT', Qgis.Warning,
-            )
-            return
-        if not runs:
-            return
-        self._fill_result_fields_from_runs(runs)
-
-    def _fill_result_fields_from_runs(self, runs) -> None:
-        """Write the per-run probabilities into the LEP*Collision /
-        LEPDriftAllision etc. line-edits.
-
-        Single run  -> LineEdit shows just the number.
-        Multiple    -> LineEdit shows ``v1 | v2 (Δ+12.3%) | v3 (Δ-4.5%)``
-                       where the first value is the baseline and each
-                       subsequent value carries its relative difference.
-        """
-        # Map LineEdit objectName -> totals key from RunMeta.totals_dict.
-        field_map = [
-            ('LEPDriftAllision',     'drift_allision'),
-            ('LEPDriftingGrounding', 'drift_grounding'),
-            ('LEPPoweredAllision',   'powered_allision'),
-            ('LEPPoweredGrounding',  'powered_grounding'),
-            ('LEPHeadOnCollision',   'head_on'),
-            ('LEPOvertakingCollision', 'overtaking'),
-            ('LEPCrossingCollision', 'crossing'),
-            ('LEPMergingCollision',  'bend'),
-        ]
-        for widget_name, key in field_map:
-            le = getattr(self.main_widget, widget_name, None)
-            if le is None:
-                continue
-            text = self._format_field_for_runs(runs, key)
-            try:
-                le.setText(text)
-            except Exception:
-                pass
-
-    @staticmethod
-    def _format_field_for_runs(runs, key: str) -> str:
-        if not runs:
-            return ''
-        baseline = runs[0].totals_dict().get(key)
-        parts = [_fmt(baseline)]
-        for r in runs[1:]:
-            v = r.totals_dict().get(key)
-            base_text = _fmt(v)
-            if v is None or baseline in (None, 0):
-                parts.append(base_text)
-            else:
-                rel = (v - baseline) / baseline * 100.0
-                parts.append(f"{base_text} (Δ{rel:+.1f}%)")
-        return ' | '.join(parts)
-
-    def _previous_runs_context_menu(self, pos) -> None:
-        from qgis.PyQt.QtWidgets import QMenu
-        tw = self.main_widget.TWPreviousRuns
-        run_ids = self._selected_run_ids()
-        if not run_ids:
-            return
-        menu = QMenu(tw)
-        if len(run_ids) == 1:
-            menu.addAction(
-                'Add results to map',
-                lambda: self._add_selected_run_to_map(),
-            )
-        menu.addSeparator()
-        menu.addAction(
-            'Delete from history',
-            lambda: self._delete_runs(run_ids),
-        )
-        menu.addAction(
-            'Delete from history + remove .gpkg file',
-            lambda: self._delete_runs(run_ids, delete_gpkg=True),
-        )
-        menu.exec_(tw.viewport().mapToGlobal(pos))
-
-    def _add_selected_run_to_map(self) -> None:
-        """Load the selected run's per-run GeoPackage onto the canvas."""
-        from omrat_utils.run_history import RunHistory
-        from omrat_utils.run_persistence import load_run_results_to_map
-        run_ids = self._selected_run_ids()
-        if len(run_ids) != 1:
-            return
-        run = RunHistory().get_run(run_ids[0])
-        if run is None:
-            return
-        gpkg_path = run.gpkg_path()
-        if gpkg_path is None or not gpkg_path.is_file():
-            QMessageBox.warning(
-                self.main_widget, 'GeoPackage missing',
-                f"The result file for run '{run.name}' could not be "
-                f"found.\nExpected at: {gpkg_path}",
-            )
-            return
-        try:
-            new_layers = load_run_results_to_map(gpkg_path, run.name)
-        except Exception as e:
-            import traceback
-            QgsMessageLog.logMessage(
-                f'Failed to load run on map: {e}\n{traceback.format_exc()}',
-                'OMRAT', Qgis.Warning,
-            )
-            return
-        # Track the layers so plugin unload / clear_model can remove
-        # them from the QGIS project.  Without this they survive a
-        # Plugin Reloader cycle and pile up across runs.
-        for layer in new_layers:
-            if layer is not None:
-                self._history_layers.append(layer)
-
-    def _delete_runs(self, run_ids: list[int], *, delete_gpkg: bool = False) -> None:
-        from omrat_utils.run_history import RunHistory
-        yes = _qt_enum(QMessageBox, 'Yes', 'StandardButton.Yes')
-        msg = (
-            f'Delete {len(run_ids)} run(s) from history'
-            + (' AND remove the .gpkg files from disk?' if delete_gpkg else '?')
-        )
-        confirm = QMessageBox.question(
-            self.main_widget, 'Delete runs', msg,
-        )
-        if confirm != yes:
-            return
-        history = RunHistory()
-        for run_id in run_ids:
-            try:
-                history.delete_run(run_id, delete_gpkg=delete_gpkg)
-            except Exception as e:
-                QgsMessageLog.logMessage(
-                    f'Failed to delete run {run_id}: {e}', 'OMRAT', Qgis.Warning,
-                )
-        self.refresh_previous_runs_table()
-
-    def open_previous_runs_dialog(self) -> None:
-        """File menu shortcut -- focuses the Results tab + the runs table."""
-        try:
-            self.main_widget.tabWidget.setCurrentWidget(
-                self.main_widget.tab_9,
-            )
-        except Exception:
-            pass
-        self.refresh_previous_runs_table()
 
     def choose_report_path(self) -> None:
         """Open a Save File dialog and store path in LEReportPath."""
@@ -1245,200 +842,9 @@ class OMRAT:
             except Exception:
                 pass
 
-    def export_to_iwrap(self) -> None:
-        """Export current project data to IWRAP XML format."""
-        try:
-            # Get file path from user
-            filename, _ = QFileDialog.getSaveFileName(
-                self.main_widget,
-                self.tr('Export to IWRAP XML'),
-                '',
-                'IWRAP XML Files (*.xml);;All Files (*.*)'
-            )
-
-            if not filename:
-                return  # User cancelled
-
-            # Ensure .xml extension
-            if not filename.lower().endswith('.xml'):
-                filename += '.xml'
-
-            # Gather current project data
-            import tempfile
-            import json
-            gd = GatherData(self)
-            data = gd.get_all_for_save()
-
-            # Save to temporary JSON file
-            temp_json = tempfile.NamedTemporaryFile(mode='w', suffix='.omrat', delete=False, encoding='utf-8')
-            temp_json_path = temp_json.name
-            try:
-                json.dump(data, temp_json, indent=2)
-                temp_json.close()
-
-                # Convert to IWRAP XML
-                write_iwrap_xml(temp_json_path, filename)
-
-                # Show success message
-                QMessageBox.information(
-                    self.main_widget,
-                    self.tr('Export Successful'),
-                    self.tr(f'Project successfully exported to:\n{filename}')
-                )
-            finally:
-                # Clean up temporary file
-                try:
-                    if os.path.exists(temp_json_path):
-                        os.remove(temp_json_path)
-                except Exception:
-                    pass
-
-        except Exception as e:
-            self.show_error_popup(
-                str(e),
-                'export_to_iwrap'
-            )
-
-    def import_from_iwrap(self) -> None:
-        """Import project data from IWRAP XML format."""
-        try:
-            # Get file path from user
-            filename, _ = QFileDialog.getOpenFileName(
-                self.main_widget,
-                self.tr('Import from IWRAP XML'),
-                '',
-                'IWRAP XML Files (*.xml);;All Files (*.*)'
-            )
-
-            if not filename:
-                return  # User cancelled
-
-            # Check if file exists
-            if not os.path.exists(filename):
-                QMessageBox.warning(
-                    self.main_widget,
-                    self.tr('File Not Found'),
-                    self.tr(f'The file does not exist:\n{filename}')
-                )
-                return
-
-            # Ask whether to clear current data before importing
-            choice = self._confirm_before_load('Import')
-            if choice == 'cancel':
-                return
-            if choice == 'clear':
-                self.clear_model()
-
-            # Parse IWRAP XML to .omrat dictionary format
-            import json
-            # Enable debug output to help diagnose issues
-            print("\n" + "="*70)
-            print("IMPORTING IWRAP XML FILE")
-            print("="*70)
-            data = parse_iwrap_xml(filename, debug=True)
-            print("\n" + "="*70)
-            print("IMPORT PARSING COMPLETE")
-            print("="*70 + "\n")
-
-            # Validate and normalize the imported data
-            from omrat_utils.storage import Storage
-            storage = Storage(self)
-            data = storage._normalize_legacy_to_schema(data)
-
-            # Validate schema
-            try:
-                from omrat_utils.validate_data import RootModelSchema
-                RootModelSchema.model_validate(data)
-            except Exception as validation_error:
-                QMessageBox.warning(
-                    self.main_widget,
-                    self.tr('Import Validation Error'),
-                    self.tr(f'The imported data failed validation:\n{str(validation_error)}\n\nThe data will still be loaded, but there may be missing or incorrect values.')
-                )
-
-            # Load the imported data into the plugin
-            # This will:
-            # 1. Populate ship categories (rebuilds traffic table dimensions)
-            # 2. Load traffic_data, segment_data, drift settings
-            # 3. Populate depths, objects, routes
-            gd = GatherData(self)
-            gd.populate(data)
-
-            # Update Traffic class reference to the new traffic_data
-            # (populate() assigns a new dict, so we need to update the reference)
-            self.traffic.traffic_data = self.traffic_data
-
-            # Refresh the traffic table display with imported data
-            self.traffic.update_direction_select()
-            self.traffic.update_traffic_tbl('segment')
-
-            # Show success message
-            QMessageBox.information(
-                self.main_widget,
-                self.tr('Import Successful'),
-                self.tr(f'Project successfully imported from:\n{filename}\n\nProject: {data.get("project_name", "Unknown")}\nSegments: {len(data.get("segment_data", {}))}')
-            )
-
-        except Exception as e:
-            self.show_error_popup(
-                str(e),
-                'import_from_iwrap'
-            )
-
-    def show_drift_allision(self):
-        gd = GatherData(self)
-        data = gd.get_all_for_save()
-        if self.calc is not None:
-            self.calc.run_drift_visualization(data)
-
-    def show_powered_allision(self):
-        """Show interactive Cat II powered allision (missed turn -> hits object) visualisation."""
-        gd = GatherData(self)
-        data = gd.get_all_for_save()
-        if self.calc is not None:
-            self.calc.run_powered_allision_visualization(data)
-
-    def show_powered_grounding(self):
-        """Show interactive Cat II powered grounding (missed turn -> hits depth area) visualisation."""
-        gd = GatherData(self)
-        data = gd.get_all_for_save()
-        if self.calc is not None:
-            self.calc.run_powered_grounding_visualization(data)
-
-    # ------------------------------------------------------------------
-    # Placeholder slots for "View" buttons whose visualisation pipelines
-    # have not been implemented yet.  The buttons exist in omrat_base.ui
-    # and are wired up below so users see a clear "not implemented" message
-    # instead of a silent dead button.  Replace the body of each method
-    # with the real visualisation call when the pipeline is ready.
-    # TODO(view-buttons):
-    #   - show_drift_grounding:    drifting-grounding overlap visualisation
-    #     (the drifting counterpart to show_powered_grounding)
-    #   - show_overtaking_collision, show_head_on_collision,
-    #     show_crossing_collision, show_merging_collision:
-    #     ship-ship collision visualisations by encounter type
-    # ------------------------------------------------------------------
-    def _view_button_not_implemented(self, name: str) -> None:
-        QgsMessageLog.logMessage(
-            f"'{name}' visualisation is not implemented yet (TODO).",
-            'OMRAT',
-            Qgis.Warning,
-        )
-
-    def show_drift_grounding(self):
-        self._view_button_not_implemented('Drift grounding')
-
-    def show_overtaking_collision(self):
-        self._view_button_not_implemented('Overtaking collision')
-
-    def show_head_on_collision(self):
-        self._view_button_not_implemented('Head-on collision')
-
-    def show_crossing_collision(self):
-        self._view_button_not_implemented('Crossing collision')
-
-    def show_merging_collision(self):
-        self._view_button_not_implemented('Merging collision')
+    # IWRAP import / export slots are provided by ``IwrapIOMixin``;
+    # accident-results table + per-row View dispatcher live in
+    # ``AccidentResultsMixin``.  See ``omrat_utils/`` for the split.
 
     def open_drift(self):
         self.drift_settings.run()
@@ -1485,187 +891,8 @@ class OMRAT:
         # To implement
         pass
 
-    def run_drift_analysis(self) -> None:
-        """Run drift corridor analysis as a background task."""
-        try:
-            # Remove old corridor layers first to avoid confusion
-            for layer in self.drift_corridor_layers:
-                try:
-                    project = QgsProject.instance()
-                    if project is not None and layer is not None:
-                        project.removeMapLayer(layer.id())
-                except Exception:
-                    pass
-            self.drift_corridor_layers.clear()
-
-            # Get thresholds from UI
-            depth_threshold = float(self.main_widget.leDepthThreshold.text() or 10)
-            height_threshold = float(self.main_widget.leHeightThreshold.text() or 10)
-
-            self.main_widget.label_drift_status.setText("Collecting data...")
-            self.main_widget.pbRunDriftAnalysis.setEnabled(False)
-
-            # Create generator and pre-collect data in main thread
-            # (Qt widgets can only be accessed from the main thread)
-            generator = DriftCorridorGenerator(self)
-            generator.precollect_data(depth_threshold, height_threshold)
-
-            self.main_widget.label_drift_status.setText("Starting corridor generation...")
-
-            # Create task
-            task = DriftCorridorTask(
-                "Generating Drift Corridors",
-                generator,
-                depth_threshold,
-                height_threshold
-            )
-
-            # Connect signals for progress and completion
-            task.progress_updated.connect(self._on_drift_progress)
-            task.corridors_generated.connect(self._on_drift_complete)
-            task.generation_failed.connect(self._on_drift_failed)
-
-            # Store task reference to prevent garbage collection
-            self._drift_task = task
-
-            # Add task to QGIS task manager (runs in background)
-            task_manager = QgsApplication.taskManager()
-            if task_manager is not None:
-                task_manager.addTask(task)
-            else:
-                # Fallback: run synchronously if task manager unavailable
-                self.main_widget.label_drift_status.setText("Running (no task manager)...")
-                corridors = generator.generate_corridors(depth_threshold, height_threshold)
-                self._on_drift_complete(corridors)
-
-        except Exception as e:
-            self.main_widget.label_drift_status.setText(f"Error: {str(e)}")
-            self.main_widget.pbRunDriftAnalysis.setEnabled(True)
-            QgsMessageLog.logMessage(f"Drift analysis failed: {e}", "OMRAT", Qgis.Critical)
-
-    def _on_drift_progress(self, completed: int, total: int, message: str) -> None:
-        """Handle progress updates from drift corridor task."""
-        if total > 0:
-            pct = int((completed / total) * 100)
-            self.main_widget.label_drift_status.setText(f"{message} ({pct}%)")
-        else:
-            self.main_widget.label_drift_status.setText(message)
-
-    def _on_drift_complete(self, corridors: list) -> None:
-        """Handle successful completion of drift corridor generation."""
-        self.main_widget.pbRunDriftAnalysis.setEnabled(True)
-
-        if not corridors:
-            self.main_widget.label_drift_status.setText("No corridors generated. Add routes first.")
-            return
-
-        # Create QGIS layers for corridors (runs in main thread)
-        self._create_corridor_layers(corridors)
-
-        num_legs = len(set(c['leg_index'] for c in corridors))
-        self.main_widget.label_drift_status.setText(
-            f"Generated {len(corridors)} corridors for {num_legs} legs"
-        )
-
-    def _on_drift_failed(self, error_msg: str) -> None:
-        """Handle drift corridor generation failure."""
-        self.main_widget.pbRunDriftAnalysis.setEnabled(True)
-        self.main_widget.label_drift_status.setText(f"Error: {error_msg}")
-        QgsMessageLog.logMessage(f"Drift analysis failed: {error_msg}", "OMRAT", Qgis.Critical)
-
-    def _create_corridor_layers(self, corridors: list) -> None:
-        """Create QGIS vector layers from corridor polygons - one layer per leg."""
-        # Group corridors by leg_index
-        legs = {}
-        for corridor in corridors:
-            leg_idx = corridor['leg_index']
-            if leg_idx not in legs:
-                legs[leg_idx] = []
-            legs[leg_idx].append(corridor)
-
-        # Create a layer for each leg
-        for leg_idx, leg_corridors in legs.items():
-            layer_name = f"Drift Corridors - Leg {leg_idx + 1}"
-
-            # Create memory layer
-            vl = QgsVectorLayer("Polygon?crs=EPSG:4326", layer_name, "memory")
-
-            # Add fields
-            fields = QgsFields()
-            fields.append(QgsField("direction", QMetaType.Type.QString))
-            fields.append(QgsField("angle", QMetaType.Type.Int))
-            fields.append(QgsField("leg_index", QMetaType.Type.Int))
-
-            provider = vl.dataProvider()
-            if provider is None:
-                continue
-            provider.addAttributes(fields.toList())
-            vl.updateFields()
-
-            # Add features for all 8 directions
-            for corridor in leg_corridors:
-                poly = corridor['polygon']
-                dir_name = corridor['direction']
-                if poly.is_empty:
-                    continue
-
-                # Handle MultiPolygon
-                if poly.geom_type == 'MultiPolygon':
-                    for geom in poly.geoms:
-                        feat = QgsFeature(fields)
-                        feat.setGeometry(QgsGeometry.fromWkt(geom.wkt))
-                        feat.setAttributes([dir_name, corridor['angle'], corridor['leg_index']])
-                        provider.addFeature(feat)
-                else:
-                    feat = QgsFeature(fields)
-                    feat.setGeometry(QgsGeometry.fromWkt(poly.wkt))
-                    feat.setAttributes([dir_name, corridor['angle'], corridor['leg_index']])
-                    provider.addFeature(feat)
-
-            vl.updateExtents()
-
-            # Style the layer with categorized renderer by direction
-            self._style_corridor_layer_categorized(vl)
-
-            # Track layer for cleanup
-            self.drift_corridor_layers.append(vl)
-
-            # Add to project
-            project = QgsProject.instance()
-            if project is not None:
-                project.addMapLayer(vl)
-
-    def _style_corridor_layer_categorized(self, layer: QgsVectorLayer) -> None:
-        """Apply categorized styling to corridor layer based on direction field."""
-        from qgis.core import QgsFillSymbol, QgsRendererCategory, QgsCategorizedSymbolRenderer
-
-        # Color mapping for directions
-        colors = {
-            'N': '#e41a1c',   # Red
-            'NE': '#377eb8',  # Blue
-            'E': '#4daf4a',   # Green
-            'SE': '#984ea3',  # Purple
-            'S': '#ff7f00',   # Orange
-            'SW': '#ffff33',  # Yellow
-            'W': '#a65628',   # Brown
-            'NW': '#f781bf',  # Pink
-        }
-
-        categories = []
-        for direction, color in colors.items():
-            symbol = QgsFillSymbol.createSimple({
-                'color': color,
-                'outline_color': color,
-                'outline_width': '0.5',
-            })
-            if symbol:
-                symbol.setOpacity(0.3)
-            category = QgsRendererCategory(direction, symbol, direction)
-            categories.append(category)
-
-        renderer = QgsCategorizedSymbolRenderer('direction', categories)
-        layer.setRenderer(renderer)
-        layer.triggerRepaint()
+    # Drift-analysis slots are provided by ``DriftAnalysisMixin``
+    # (see ``omrat_utils.drift_analysis_mixin``); they used to live here.
 
     #--------------------------------------------------------------------------
 
@@ -1707,17 +934,13 @@ class OMRAT:
             self.main_widget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
             self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
             self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)
-            self.main_widget.pbViewDriftingAllision.clicked.connect(self.show_drift_allision)
-            self.main_widget.pbViewPoweredAllision.clicked.connect(self.show_powered_allision)
-            self.main_widget.pbViewPoweredGrounding.clicked.connect(self.show_powered_grounding)
-            # TODO(view-buttons): replace the stubs below with real
-            # visualisation pipelines.  See omrat.py::show_drift_grounding
-            # et al. for the placeholders these connect to.
-            self.main_widget.pbViewDriftingGrounding.clicked.connect(self.show_drift_grounding)
-            self.main_widget.pbViewOvertakingCollision.clicked.connect(self.show_overtaking_collision)
-            self.main_widget.pbViewHeadOnCollision.clicked.connect(self.show_head_on_collision)
-            self.main_widget.pbViewCrossingCollision.clicked.connect(self.show_crossing_collision)
-            self.main_widget.pbViewMergingCollision.clicked.connect(self.show_merging_collision)
+            # The legacy ``pbView*`` push-buttons used to live in the
+            # .ui file as part of the LEP*+View grid; they were
+            # removed when the accident-results QTable was added.
+            # ``_setup_accident_results_table`` now creates per-row
+            # ``QPushButton`` cell widgets inside the table and wires
+            # them to ``show_*`` slots, so no ``clicked.connect`` is
+            # needed here.
             self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
             # ``LEReportPath`` is the per-run output folder (one .gpkg
             # is written per Run Model into this directory).  The
@@ -1736,6 +959,10 @@ class OMRAT:
                     )
                 if hasattr(self.main_widget, 'LEReportPath'):
                     self.main_widget.LEReportPath.textChanged.connect(
+                        lambda *_: self._update_run_model_enabled(),
+                    )
+                if hasattr(self.main_widget, 'LEModelName'):
+                    self.main_widget.LEModelName.textChanged.connect(
                         lambda *_: self._update_run_model_enabled(),
                     )
                 self._restore_output_dir()
@@ -1758,6 +985,23 @@ class OMRAT:
             except Exception as e:
                 QgsMessageLog.logMessage(
                     f'Could not initialise previous-runs table: {e}',
+                    'OMRAT', Qgis.Warning,
+                )
+            # Wire up the accident-results QTable that replaces the
+            # legacy LEP* line-edit grid.
+            try:
+                self._setup_accident_results_table()
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f'Could not initialise accident-results table: {e}',
+                    'OMRAT', Qgis.Warning,
+                )
+            # Wire up the Compare tab.
+            try:
+                self._setup_compare_tab()
+            except Exception as e:
+                QgsMessageLog.logMessage(
+                    f'Could not initialise Compare tab: {e}',
                     'OMRAT', Qgis.Warning,
                 )
             # Add a "Manage previous runs" item to the File menu so
