@@ -51,6 +51,72 @@ class TestConstruction:
             with pytest.raises(Exception, match='Error connecting to database'):
                 DB(db_host='badhost')
 
+    def test_connect_passes_utf8_client_encoding(self):
+        """All connections must explicitly request UTF-8 messages so a
+        non-English Windows locale (e.g. sv-SE) doesn't crash the
+        connection with ``UnicodeDecodeError``."""
+        with patch('compute.database.psycopg2.connect') as mock_connect:
+            mock_connect.return_value = MagicMock()
+            DB(db_host='h', db_name='n', db_user='u', db_pass='p')
+        kwargs = mock_connect.call_args.kwargs
+        assert kwargs.get('client_encoding') == 'UTF8'
+
+    def test_default_port_is_5432(self):
+        db = DB(db_user='u', db_pass='p', db_name='n')
+        assert db.db_port == '5432'
+
+    def test_explicit_port_is_stored_as_string(self):
+        # libpq wants the port as a string; we accept int or str at the
+        # API surface but always normalise to str internally.
+        db = DB(db_user='u', db_pass='p', db_name='n', db_port=6543)
+        assert db.db_port == '6543'
+
+    def test_zero_port_falls_back_to_default(self):
+        # Defensive: an empty/None/0 port from a stale QSettings value
+        # mustn't crash; treat it as "use the Postgres default 5432".
+        db = DB(db_user='u', db_pass='p', db_name='n', db_port=0)
+        assert db.db_port == '5432'
+
+    def test_connect_passes_port_to_psycopg2(self):
+        with patch('compute.database.psycopg2.connect') as mock_connect:
+            mock_connect.return_value = MagicMock()
+            DB(db_host='h', db_name='n', db_user='u', db_pass='p',
+               db_port=6543)
+        assert mock_connect.call_args.kwargs.get('port') == '6543'
+
+    def test_unicode_decode_error_surfaces_decoded_server_message(self):
+        """When libpq emits a cp1252 message before startup-params apply
+        (e.g. the user's "0xf6" failure on a Swedish Windows install),
+        the bytes are decoded as cp1252 and shown in the exception so
+        the user can read what the server actually said."""
+        # Real-world Swedish PostgreSQL message: "FATAL: lösenords-
+        # autentisering misslyckades för användaren ..."  Encoded in
+        # cp1252, this contains 0xf6 ('ö') and 0xe4 ('ä') etc.
+        swedish_bytes = (
+            'FATAL:  l\xf6senordsautentisering misslyckades '
+            'f\xf6r anv\xe4ndaren "u"'
+        ).encode('cp1252')
+        # Build an authentic UnicodeDecodeError carrying those bytes.
+        try:
+            swedish_bytes.decode('utf-8')
+        except UnicodeDecodeError as decode_err:
+            err = decode_err
+        with patch('compute.database.psycopg2.connect', side_effect=err):
+            with pytest.raises(Exception) as exc_info:
+                DB(db_host='h', db_name='n', db_user='u', db_pass='wrong')
+        msg = str(exc_info.value)
+        # Decoded Swedish phrase appears verbatim — that's the whole point.
+        assert 'lösenordsautentisering misslyckades' in msg
+        # And the helpful hint pointing at host/db/user/password is there.
+        assert 'host/database/username/password' in msg
+
+    def test_unicode_decode_error_handles_empty_bytes(self):
+        """Empty exc.object shouldn't crash the fallback path."""
+        err = UnicodeDecodeError('utf-8', b'', 0, 1, 'unexpected end')
+        with patch('compute.database.psycopg2.connect', side_effect=err):
+            with pytest.raises(Exception, match='no message bytes'):
+                DB(db_host='h', db_name='n', db_user='u', db_pass='wrong')
+
 
 class TestDisconnect:
     def test_disconnect_with_no_conn(self):

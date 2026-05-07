@@ -879,7 +879,15 @@ class OMRAT(
         
     def ais_settings(self) -> None:
         self.ais.run()
-        
+
+    def open_db_setup_wizard(self) -> None:
+        # Lazy import: keeps plugin startup unaffected even if the wizard
+        # module pulls in something heavyweight in the future.
+        from omrat_utils.handle_db_setup import DbSetupWizard
+        wiz = DbSetupWizard(self.main_widget)
+        wiz.exec()
+
+
     def update_ais(self) -> None:
         self.ais.update_legs()
     
@@ -926,6 +934,7 @@ class OMRAT(
             SettingMenu.addAction("Ship Categories", self.open_ship_categories)
             SettingMenu.addAction("Causation Factors", self.open_causation_factors)
             SettingMenu.addAction("AIS connection settings", self.ais_settings)
+            SettingMenu.addAction("Database setup wizard...", self.open_db_setup_wizard)
             #self.main_widget.actionSave_project.clicked.connect(self.save_work)
             #self.main_widget.actionOpen_project.clicked.connect(self.load_work)
             self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)

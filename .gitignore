@@ -5,7 +5,6 @@ help/build/
 zip_build/
 .coverage
 litterature/
-tests/example_data/
 .claude/
 .devcontainer/
 .vscode/

@@ -21,12 +21,15 @@ class DB:
         Set the timeout (sec) for a connection, default 24 hours.
     """
     def __init__(self, db_user: str = "", db_pass: str = "",
-                 db_name: str = "", db_host: str = "", time_out: int = 86400):
+                 db_name: str = "", db_host: str = "",
+                 db_port: int | str = 5432, time_out: int = 86400):
         self.db_host = db_host
         self.db_name = db_name
         self.db_user = db_user
         self.db_pass = db_pass
-        self.db_port = "5432"
+        # Coerce to str for libpq.  Default 5432 is preserved when caller
+        # passes 0 / "" / None to keep the old "use the default" semantics.
+        self.db_port = str(int(db_port)) if db_port else "5432"
         self.time_out = time_out
         self.conn: connection | None = None
         if self.db_host != "":
@@ -43,10 +46,34 @@ class DB:
                 port=self.db_port,
                 user=self.db_user,
                 password=self.db_pass,
+                # Force the server to transcode its messages to UTF-8.
+                # Without this, a non-English Windows locale (e.g. sv-SE
+                # lc_messages) returns cp1252 bytes that psycopg2 then
+                # crashes on with ``UnicodeDecodeError: 0xf6``.
+                client_encoding="UTF8",
                 options="-c statement_timeout=" + str(self.time_out) + "000"
             )
         except psycopg2.OperationalError as e:
             raise Exception(f"Error connecting to database on '{self.db_host}'. {e!s}")
+        except UnicodeDecodeError as e:
+            # libpq still emits messages in lc_messages encoding for some
+            # very-early failures (auth/role/db rejections before startup
+            # parameters are processed).  Surface the actual server
+            # message by decoding the bytes as cp1252 — that's what the
+            # user actually needs to see (e.g. Swedish "lösenords-
+            # autentisering misslyckades" → "password authentication
+            # failed").  Falls back to latin-1 with replacement so this
+            # path can never itself raise.
+            from omrat_utils.db_setup.connection_profile import (
+                decode_libpq_message,
+            )
+            server_msg = decode_libpq_message(e) or "<no message bytes>"
+            raise Exception(
+                f"Error connecting to database on '{self.db_host}'.\n"
+                f"Server message (decoded as cp1252):\n  {server_msg}\n\n"
+                f"This usually means the host/database/username/password "
+                f"is wrong, or the role does not exist."
+            )
 
     def _disconnect(self):
         if hasattr(self, 'conn'):

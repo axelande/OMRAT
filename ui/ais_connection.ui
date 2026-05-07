@@ -34,6 +34,29 @@
       </widget>
      </item>
      <item row="1" column="0">
+      <widget class="QLabel" name="label_port">
+       <property name="text">
+        <string>Port</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QSpinBox" name="SBPort">
+       <property name="minimum">
+        <number>1</number>
+       </property>
+       <property name="maximum">
+        <number>65535</number>
+       </property>
+       <property name="value">
+        <number>5432</number>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
       <widget class="QLabel" name="label_21">
        <property name="text">
         <string>Name of the database</string>
@@ -43,7 +66,7 @@
        </property>
       </widget>
      </item>
-     <item row="2" column="1">
+     <item row="3" column="1">
       <widget class="QLineEdit" name="leUserName">
        <property name="text">
         <string/>
@@ -53,7 +76,7 @@
        </property>
       </widget>
      </item>
-     <item row="2" column="0">
+     <item row="3" column="0">
       <widget class="QLabel" name="label_28">
        <property name="text">
         <string>Username</string>
@@ -63,14 +86,14 @@
        </property>
       </widget>
      </item>
-     <item row="1" column="1">
+     <item row="2" column="1">
       <widget class="QLineEdit" name="leDBName">
        <property name="text">
         <string/>
        </property>
       </widget>
      </item>
-     <item row="3" column="1">
+     <item row="4" column="1">
       <widget class="QLineEdit" name="lePassword">
        <property name="text">
         <string/>
@@ -80,14 +103,14 @@
        </property>
       </widget>
      </item>
-     <item row="4" column="1">
+     <item row="5" column="1">
       <widget class="QLineEdit" name="leProvider">
        <property name="text">
         <string>sjfv</string>
        </property>
       </widget>
      </item>
-     <item row="5" column="1">
+     <item row="6" column="1">
       <widget class="QSpinBox" name="SBYear">
        <property name="minimum">
         <number>2000</number>
@@ -100,7 +123,7 @@
        </property>
       </widget>
      </item>
-     <item row="3" column="0">
+     <item row="4" column="0">
       <widget class="QLabel" name="label_22">
        <property name="text">
         <string>Password</string>
@@ -110,7 +133,7 @@
        </property>
       </widget>
      </item>
-     <item row="4" column="0">
+     <item row="5" column="0">
       <widget class="QLabel" name="label_23">
        <property name="text">
         <string>Schema</string>
@@ -120,7 +143,7 @@
        </property>
       </widget>
      </item>
-     <item row="5" column="0">
+     <item row="6" column="0">
       <widget class="QLabel" name="label_27">
        <property name="text">
         <string>Year</string>
@@ -130,7 +153,7 @@
        </property>
       </widget>
      </item>
-     <item row="6" column="1">
+     <item row="7" column="1">
       <widget class="QGroupBox" name="a0">
        <property name="minimumSize">
         <size>
@@ -265,14 +288,14 @@
        </layout>
       </widget>
      </item>
-     <item row="7" column="1">
+     <item row="8" column="1">
       <widget class="QLineEdit" name="leMaxDev">
        <property name="text">
         <string>30</string>
        </property>
       </widget>
      </item>
-     <item row="7" column="0">
+     <item row="8" column="0">
       <widget class="QLabel" name="label_26">
        <property name="text">
         <string>Max angle deviation</string>
@@ -282,7 +305,144 @@
        </property>
       </widget>
      </item>
-     <item row="8" column="1">
+     <item row="9" column="0" colspan="2">
+      <widget class="QGroupBox" name="gbExtVessel">
+       <property name="title">
+        <string>External vessel lookup (optional)</string>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+       <property name="toolTip">
+        <string>LEFT JOIN extra per-MMSI vessel metadata from your own table.  Length and beam from this table override the AIS dim_a..d arithmetic when those look bogus; ship type and air draught are populated only when the corresponding columns are set.  Leave any column blank to skip it.</string>
+       </property>
+       <layout class="QFormLayout" name="extLookupForm">
+        <item row="0" column="0">
+         <widget class="QLabel" name="lbl_ext_schema">
+          <property name="text">
+           <string>Schema</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="QLineEdit" name="leExtSchema">
+          <property name="placeholderText">
+           <string>e.g. vessels</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="lbl_ext_table">
+          <property name="text">
+           <string>Table</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QLineEdit" name="leExtTable">
+          <property name="placeholderText">
+           <string>e.g. ship_registry</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="lbl_ext_mmsi_col">
+          <property name="text">
+           <string>MMSI column</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QLineEdit" name="leExtMmsiCol">
+          <property name="text">
+           <string>mmsi</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0">
+         <widget class="QLabel" name="lbl_ext_loa_col">
+          <property name="text">
+           <string>LOA column (optional)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="1">
+         <widget class="QLineEdit" name="leExtLoaCol">
+          <property name="placeholderText">
+           <string>e.g. loa  (blank = use dim_a + dim_b)</string>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="0">
+         <widget class="QLabel" name="lbl_ext_beam_col">
+          <property name="text">
+           <string>Beam column (optional)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="1">
+         <widget class="QLineEdit" name="leExtBeamCol">
+          <property name="placeholderText">
+           <string>e.g. breadth_moulded  (blank = use dim_c + dim_d)</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="0">
+         <widget class="QLabel" name="lbl_ext_ship_type_col">
+          <property name="text">
+           <string>Ship type column (optional)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="1">
+         <widget class="QLineEdit" name="leExtShipTypeCol">
+          <property name="placeholderText">
+           <string>e.g. ship_type  (blank = leave empty)</string>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="0">
+         <widget class="QLabel" name="lbl_ext_air_draught_col">
+          <property name="text">
+           <string>Air draught column (optional)</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="1">
+         <widget class="QLineEdit" name="leExtAirDraughtCol">
+          <property name="placeholderText">
+           <string>e.g. height  (blank = leave empty)</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </item>
+     <item row="10" column="1">
       <widget class="QLabel" name="label_24">
        <property name="minimumSize">
         <size>
@@ -310,7 +470,7 @@
        </property>
       </widget>
      </item>
-     <item row="8" column="0">
+     <item row="10" column="0">
       <widget class="QLabel" name="label_25">
        <property name="text">
         <string>Required database
@@ -322,6 +482,16 @@ structure:</string>
       </widget>
      </item>
     </layout>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="cbRecalcFullYear">
+     <property name="text">
+      <string>Recalculate frequencies to full year</string>
+     </property>
+     <property name="toolTip">
+      <string>When checked, the per-leg frequency is multiplied by (one year / observed coverage) so a partial-year ingest (e.g. 48 h of data) is reported as an annualised rate.  Coverage is computed from the actual segment timestamps in the configured year, with any gaps longer than 12 h excluded — so a few-day gap in a receiver outage does not artificially inflate the multiplier.</string>
+     </property>
+    </widget>
    </item>
    <item>
     <widget class="QDialogButtonBox" name="buttonBox">
@@ -337,6 +507,7 @@ structure:</string>
  </widget>
  <tabstops>
   <tabstop>leDBHost</tabstop>
+  <tabstop>SBPort</tabstop>
   <tabstop>leDBName</tabstop>
   <tabstop>leUserName</tabstop>
   <tabstop>lePassword</tabstop>
@@ -355,6 +526,15 @@ structure:</string>
   <tabstop>CB_11</tabstop>
   <tabstop>CB_12</tabstop>
   <tabstop>leMaxDev</tabstop>
+  <tabstop>gbExtVessel</tabstop>
+  <tabstop>leExtSchema</tabstop>
+  <tabstop>leExtTable</tabstop>
+  <tabstop>leExtMmsiCol</tabstop>
+  <tabstop>leExtLoaCol</tabstop>
+  <tabstop>leExtBeamCol</tabstop>
+  <tabstop>leExtShipTypeCol</tabstop>
+  <tabstop>leExtAirDraughtCol</tabstop>
+  <tabstop>cbRecalcFullYear</tabstop>
  </tabstops>
  <resources/>
  <connections>

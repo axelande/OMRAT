@@ -49,6 +49,17 @@ class TestGetType:
     def test_float_toc_accepted(self):
         assert get_type(79.0) == 18
 
+    def test_none_toc_returns_other(self):
+        """NULL ``type_and_cargo`` is common for vessels that never
+        broadcast Type-5 statics — bucket into 'Other Type' (20) instead
+        of crashing the whole traffic build."""
+        assert get_type(None) == 20
+
+    def test_unparseable_toc_returns_other(self):
+        """Defensive: a junk string from a hand-edited registry row
+        shouldn't bring the AIS pipeline down either."""
+        assert get_type("not-a-number") == 20
+
 
 # ---------------------------------------------------------------------------
 # close_to_line
@@ -172,6 +183,11 @@ def ais_with_mocks(monkeypatch):
             cb.isChecked.return_value = False
             setattr(acw, f'CB_{i}', cb)
         acw.leMaxDev.text.return_value = '10.0'
+        # Port spinbox defaults to the Postgres standard.
+        acw.SBPort.value.return_value = 5432
+        # Recalc-to-full-year checkbox starts off; tests opt in by
+        # setting ``ais_with_mocks.recalc_to_full_year = True``.
+        acw.cbRecalcFullYear.isChecked.return_value = False
         MockACW.return_value = acw
         MockDB.return_value = MagicMock()
 
@@ -209,9 +225,10 @@ class TestAISRunAndUnload:
 
 class TestAISUpdateSettings:
     def test_update_ais_settings_persists_to_qsettings(self, ais_with_mocks):
-        """The method reads widget text and stores db_host/user/pass/name
+        """The method reads widget text and stores db_host/port/user/pass/name
         into QSettings."""
         ais_with_mocks.acw.leDBHost.text.return_value = 'new-host'
+        ais_with_mocks.acw.SBPort.value.return_value = 6543
         ais_with_mocks.acw.leDBName.text.return_value = 'new-db'
         ais_with_mocks.acw.leUserName.text.return_value = 'u'
         ais_with_mocks.acw.lePassword.text.return_value = 'p'
@@ -220,12 +237,37 @@ class TestAISUpdateSettings:
         ais_with_mocks.acw.leMaxDev.text.return_value = '15.0'
 
         ais_with_mocks.update_ais_settings()
-        # QSettings.setValue called 4 times, one per field.
+        # QSettings.setValue called 6 times: host, port, user, pass, name,
+        # plus the recalc-to-full-year flag (the vessel-lookup config
+        # writes to its own QSettings instance, not this mock).
         setval = ais_with_mocks.settings.setValue
-        assert setval.call_count == 4
+        assert setval.call_count == 6
         stored = {c.args[0]: c.args[1] for c in setval.call_args_list}
         assert stored['omrat/db_host'] == 'new-host'
+        assert stored['omrat/db_port'] == 6543
         assert stored['omrat/db_name'] == 'new-db'
+        assert stored['omrat/recalc_to_full_year'] is False
+
+    def test_update_ais_settings_passes_port_to_db(self, ais_with_mocks):
+        """The chosen port flows through to the DB constructor."""
+        import omrat_utils.handle_ais as mod
+        from unittest.mock import patch
+
+        ais_with_mocks.acw.leDBHost.text.return_value = 'h'
+        ais_with_mocks.acw.SBPort.value.return_value = 6543
+        ais_with_mocks.acw.leDBName.text.return_value = 'n'
+        ais_with_mocks.acw.leUserName.text.return_value = 'u'
+        ais_with_mocks.acw.lePassword.text.return_value = 'p'
+        ais_with_mocks.acw.leProvider.text.return_value = 'ais'
+        ais_with_mocks.acw.SBYear.value.return_value = 2024
+        ais_with_mocks.acw.leMaxDev.text.return_value = '10'
+
+        with patch.object(mod, 'DB') as MockDB:
+            MockDB.return_value = MagicMock()
+            ais_with_mocks.update_ais_settings()
+        kwargs = MockDB.call_args.kwargs
+        assert kwargs['db_port'] == 6543
+        assert kwargs['db_host'] == 'h'
 
     def test_checked_months_collected(self, ais_with_mocks):
         """Checkboxes that return isChecked=True append their month index."""
@@ -241,6 +283,55 @@ class TestAISUpdateSettings:
         ais_with_mocks.acw.leMaxDev.text.return_value = '10'
         ais_with_mocks.update_ais_settings()
         assert ais_with_mocks.months == [3, 7]
+
+    def test_update_ais_settings_db_failure_shows_popup(
+        self, ais_with_mocks, monkeypatch
+    ):
+        """When the user clicks Save and DB() raises (wrong password,
+        missing role, server down), a QMessageBox.warning popup must
+        appear with the actual server message — *not* a Python-error
+        traceback dialog.  Regression test for the user's reported
+        ``UnicodeDecodeError: 0xf6`` failure mode."""
+        import omrat_utils.handle_ais as mod
+        from unittest.mock import patch
+
+        ais_with_mocks.acw.leDBHost.text.return_value = 'localhost'
+        ais_with_mocks.acw.leDBName.text.return_value = 'omrat'
+        ais_with_mocks.acw.leUserName.text.return_value = 'omrat'
+        ais_with_mocks.acw.lePassword.text.return_value = 'wrong'
+        ais_with_mocks.acw.leProvider.text.return_value = 'omrat'
+        ais_with_mocks.acw.SBYear.value.return_value = 2024
+        ais_with_mocks.acw.leMaxDev.text.return_value = '10'
+
+        # The legacy DB._connect surfaces a friendly cp1252-decoded
+        # message when libpq pre-startup fails — simulate that here.
+        decoded = (
+            "Error connecting to database on 'localhost'.\n"
+            "Server message (decoded as cp1252):\n"
+            "  FATAL:  Lösenordsautentisering misslyckades "
+            'för användare "omrat"'
+        )
+
+        def fail(**kwargs):
+            raise Exception(decoded)
+
+        monkeypatch.setattr(mod, 'DB', fail)
+        # Reset the QSettings mock so we can check it's NOT called.
+        ais_with_mocks.settings.setValue.reset_mock()
+
+        with patch.object(mod, 'QMessageBox') as MockMsg:
+            ais_with_mocks.update_ais_settings()
+
+        # Popup was shown with the decoded message as its body.
+        MockMsg.warning.assert_called_once()
+        body = MockMsg.warning.call_args.args[2]
+        assert 'Lösenordsautentisering misslyckades' in body
+        assert 'omrat' in body
+        # No connection means no credentials persisted to QSettings —
+        # bad creds shouldn't overwrite previously-working ones.
+        ais_with_mocks.settings.setValue.assert_not_called()
+        # And db is reset to None so update_legs hits its existing guard.
+        assert ais_with_mocks.db is None
 
 
 class TestAISUpdateLegsGuard:
@@ -347,6 +438,159 @@ class TestAISRunSql:
         assert 'segments_2024_1' in sql
         assert 'segments_2024_2' in sql
 
+    def test_run_sql_does_not_join_external_table_by_default(self, ais_with_mocks):
+        """Without a configured external vessel-lookup table, ``run_sql``
+        derives loa/beam straight from ``dim_a..d`` in the statics, and
+        emits NULL for ship_type / air_draught — no extra LEFT JOIN."""
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.db.execute_and_return.return_value = (True, [])
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.months = [1]
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        assert 'external_vessels' not in sql
+        assert 'LEFT OUTER JOIN' not in sql
+        # Dimensions still computed from statics.
+        assert 'dim_a + dim_b' in sql
+        assert 'dim_c + dim_d' in sql
+        # Two NULL placeholder columns to keep the consumer's 10-tuple
+        # unpack signature stable.
+        assert 'NULL::int as ship_type' in sql
+        assert 'NULL::double precision as air_draught' in sql
+
+    def test_run_sql_with_external_vessel_lookup_emits_join(self, ais_with_mocks):
+        """When the user has configured an external vessel-lookup table
+        (via the AIS Settings dialog), ``run_sql`` injects a CTE +
+        LEFT JOIN so loa/beam fall back to the user's columns when the
+        AIS dim arithmetic looks bogus, and ship_type/air_draught are
+        populated from there."""
+        from omrat_utils.vessel_lookup import VesselLookupConfig
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.db.execute_and_return.return_value = (True, [])
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.months = [1]
+        ais_with_mocks.vessel_lookup = VesselLookupConfig(
+            enabled=True, schema='vessels', table='ship_registry',
+            mmsi_col='mmsi',
+            loa_col='loa', beam_col='breadth_moulded',
+            ship_type_col='ship_type', air_draught_col='height',
+        )
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        # CTE + JOIN are present.
+        assert 'external_vessels AS (' in sql
+        assert 'FROM vessels.ship_registry' in sql
+        assert 'LEFT OUTER JOIN external_vessels ext ON ss.mmsi = ext.mmsi' in sql
+        # The CASE bodies now reference the external columns instead of NULL.
+        assert 'then ext.ext_loa else dim_a + dim_b' in sql
+        assert 'then ext.ext_beam else dim_c + dim_d' in sql
+        # ship_type and air_draught come from the external table now.
+        assert 'ext.ext_ship_type as ship_type' in sql
+        assert 'ext.ext_air_draught as air_draught' in sql
+
+    def test_run_sql_skips_join_when_lookup_disabled(self, ais_with_mocks):
+        """``enabled=False`` keeps the legacy statics-only path, even if
+        the rest of the config is filled in."""
+        from omrat_utils.vessel_lookup import VesselLookupConfig
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.db.execute_and_return.return_value = (True, [])
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.months = [1]
+        ais_with_mocks.vessel_lookup = VesselLookupConfig(
+            enabled=False,  # all other fields filled in but disabled
+            schema='vessels', table='ship_registry', mmsi_col='mmsi',
+            loa_col='loa',
+        )
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        assert 'external_vessels' not in sql
+        assert 'LEFT OUTER JOIN' not in sql
+
+    def test_compute_year_multiplier_returns_none_when_no_db(self, ais_with_mocks):
+        ais_with_mocks.db = None
+        assert ais_with_mocks.compute_year_multiplier() is None
+
+    def test_compute_year_multiplier_for_48h_clean(self, ais_with_mocks):
+        """48 h of data with no gaps > 12 h should give a multiplier of
+        ~365*24/48 = 182.5x (the example from the user's spec)."""
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        # span_s = 48 h, gap_s = 0 → coverage = 48 h, multiplier = 365*24/48
+        ais_with_mocks.db.execute_and_return.return_value = (
+            True, [[48 * 3600, 0]],
+        )
+        out = ais_with_mocks.compute_year_multiplier()
+        assert out is not None
+        multiplier, coverage_s, gap_s = out
+        assert coverage_s == 48 * 3600
+        assert gap_s == 0
+        assert multiplier == pytest.approx(365 * 24 / 48, rel=1e-6)
+        # SQL was issued with the schema/year and the 12-hour gap threshold.
+        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        assert 'ais.segments_2024' in sql
+        assert "interval '12 hours'" in sql
+
+    def test_compute_year_multiplier_subtracts_long_gaps(self, ais_with_mocks):
+        """A 200 h span with a 100 h receiver outage gives a 100 h
+        coverage, so the multiplier is 365*24/100."""
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.db.execute_and_return.return_value = (
+            True, [[200 * 3600, 100 * 3600]],
+        )
+        multiplier, coverage_s, gap_s = ais_with_mocks.compute_year_multiplier()
+        assert coverage_s == 100 * 3600
+        assert gap_s == 100 * 3600
+        assert multiplier == pytest.approx(365 * 24 / 100, rel=1e-6)
+
+    def test_compute_year_multiplier_returns_none_on_empty_table(self, ais_with_mocks):
+        """An empty segments table gives MAX/MIN = NULL — bail rather
+        than divide by zero."""
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.db.execute_and_return.return_value = (True, [[None, 0]])
+        assert ais_with_mocks.compute_year_multiplier() is None
+
+    def test_compute_year_multiplier_returns_none_on_query_error(self, ais_with_mocks):
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.db.execute_and_return.return_value = (False, [['boom']])
+        assert ais_with_mocks.compute_year_multiplier() is None
+
+    def test_run_sql_returns_10_columns(self, ais_with_mocks):
+        """``update_ais_data`` unpacks 10 fields per row, so the SELECT
+        must keep emitting that many across all SQL-shape changes.
+        Counting commas at the SELECT top-level is fragile but enough as a
+        guard-rail — adding a column should re-trigger this assertion."""
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.db.execute_and_return.return_value = (True, [])
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.months = [1]
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        # Each output column appears once in the final SELECT.
+        for col in (
+            "as loa,",
+            "as beam,",
+            "type_and_cargo,",
+            "draught,",
+            "as ship_type,",
+            "date1,",
+            "sog,",
+            "as air_draught,",
+            "as dist_from_start,",
+            "cog ",
+        ):
+            assert col in sql, f"output column {col!r} missing from SELECT"
+
 
 class TestAISUpdateAisData:
     def test_none_loa_defaults_to_100(self, ais_with_mocks):
@@ -379,6 +623,74 @@ class TestAISUpdateAisData:
         )
         # Cog 90 vs leg_bearing+180=450%360=90 -> matches line1.
         assert len(l1) == 1 and len(l2) == 0
+
+    def test_multiplier_scales_frequency_only(self, ais_with_mocks):
+        """The multiplier is added to ``Frequency (ships/year)`` per ping
+        but does NOT scale Speed/Beam/Draught/Heights — those are
+        observations later averaged by ``convert_list2avg``."""
+        ais_with_mocks.max_deviation = 45.0
+        # Row layout: loa, beam, toc, draught, sh_type, _, sog, air_draught, dist, cog
+        row = [100, 20, 70, 6.0, None, '2024-01-01', 12.0, 20.0, 0.0, 90.0]
+        ais_with_mocks.omrat.traffic.traffic_data = {
+            'L1': {
+                'East': {
+                    'Frequency (ships/year)': [[0] * 5 for _ in range(21)],
+                    'Speed (knots)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship heights (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship Beam (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Draught (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                },
+                'West': {
+                    'Frequency (ships/year)': [[0] * 5 for _ in range(21)],
+                    'Speed (knots)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship heights (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship Beam (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Draught (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                },
+            },
+        }
+        ais_with_mocks.update_ais_data(
+            'L1', [row, row, row], leg_bearing=270.0, dirs=['East', 'West'],
+            multiplier=182.5,  # 365*24/48 - the user's 48 h example
+        )
+        td = ais_with_mocks.omrat.traffic.traffic_data['L1']['East']
+        # 3 pings × 182.5 = 547.5 ships/year, all in the toc=70→cargo
+        # bucket (type_cat=18) and loa=100 → loa_cat=3.
+        assert td['Frequency (ships/year)'][18][3] == pytest.approx(547.5)
+        # Observation lists carry the raw values, not scaled by 182.5.
+        assert td['Speed (knots)'][18][3] == [12.0, 12.0, 12.0]
+        assert td['Ship Beam (meters)'][18][3] == [20.0, 20.0, 20.0]
+        assert td['Draught (meters)'][18][3] == [6.0, 6.0, 6.0]
+        assert td['Ship heights (meters)'][18][3] == [20.0, 20.0, 20.0]
+
+    def test_default_multiplier_is_one(self, ais_with_mocks):
+        """When the recalc-to-full-year flag is off, every ping
+        increments the frequency by exactly 1."""
+        ais_with_mocks.max_deviation = 45.0
+        row = [100, 20, 70, 6.0, None, '2024-01-01', 12.0, 20.0, 0.0, 90.0]
+        ais_with_mocks.omrat.traffic.traffic_data = {
+            'L1': {
+                'East': {
+                    'Frequency (ships/year)': [[0] * 5 for _ in range(21)],
+                    'Speed (knots)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship heights (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship Beam (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Draught (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                },
+                'West': {
+                    'Frequency (ships/year)': [[0] * 5 for _ in range(21)],
+                    'Speed (knots)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship heights (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Ship Beam (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                    'Draught (meters)': [[[] for _ in range(5)] for _ in range(21)],
+                },
+            },
+        }
+        ais_with_mocks.update_ais_data(
+            'L1', [row, row], leg_bearing=270.0, dirs=['East', 'West'],
+        )
+        td = ais_with_mocks.omrat.traffic.traffic_data['L1']['East']
+        assert td['Frequency (ships/year)'][18][3] == 2
 
     def test_cog_outside_deviation_is_skipped(self, ais_with_mocks):
         """cog not matching either leg direction falls through the continue."""

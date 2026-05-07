@@ -7,3 +7,5 @@ matplotlib
 pydantic
 requests
 defusedxml
+aissegments>=0.1.0
+aisdb>=1.7

@@ -14,6 +14,7 @@ from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
 from compute.database import DB
+from omrat_utils.vessel_lookup import VesselLookupConfig
 from ui.ais_connection_widget import AISConnectionWidget
 
 
@@ -81,7 +82,15 @@ def get_type(toc: float) -> int:
         19: Tanker (TOC 80-89)
         20: Other Type (everything else)
     """
-    toc_int = int(toc)
+    # NULL / unparseable type_and_cargo is common — any MMSI whose Type-5
+    # statics never came through arrives here as None.  Bucket those into
+    # "Other Type" rather than crashing the whole leg's traffic build.
+    if toc is None:
+        return 20
+    try:
+        toc_int = int(toc)
+    except (TypeError, ValueError):
+        return 20
     _TOC_MAP = {
         30: 0, 31: 1, 32: 1, 33: 2, 34: 3, 35: 4, 36: 5, 37: 6,
         50: 8, 51: 9, 52: 10, 53: 11, 54: 12, 55: 13,
@@ -126,8 +135,28 @@ class AIS:
         self.db: DB | None = None
         self.omrat = omrat
         self.acw = AISConnectionWidget()
+        # Optional LEFT JOIN against an external vessel-metadata table.
+        # The default-constructed config has ``enabled=False`` so
+        # ``is_valid()`` is False and ``run_sql`` skips the JOIN.
+        self.vessel_lookup: VesselLookupConfig = VesselLookupConfig.from_qsettings()
+        # When True, ``update_legs`` divides the year-of-seconds by the
+        # actual coverage seen in the data and uses that as a multiplier
+        # on the per-ping frequency increment, so a partial-year ingest
+        # is reported as an annualised rate.
+        self.recalc_to_full_year: bool = self._read_recalc_setting()
         self.set_start_ais_settings()
         self.dist_data: dict[str, dict[str, np.ndarray]] = {}
+
+    def _read_recalc_setting(self) -> bool:
+        """Read ``omrat/recalc_to_full_year`` and coerce to bool.
+
+        QSettings on Windows stores booleans as the strings ``"true"`` /
+        ``"false"`` rather than Python bools, so we accept either.
+        """
+        raw = self.settings.value("omrat/recalc_to_full_year", False)
+        if isinstance(raw, str):
+            return raw.strip().lower() == "true"
+        return bool(raw)
         
     def unload(self):
         """If signals from omrat was used they are disconnected"""
@@ -144,10 +173,27 @@ class AIS:
         db_name: str = self.settings.value("omrat/db_name", "")
         db_user: str = self.settings.value("omrat/db_user", "")
         db_pass: str = self.settings.value("omrat/db_pass", "")
+        # ``omrat/db_port`` is new (older installs won't have it).  Fall back
+        # to 5432, the Postgres default.
+        try:
+            db_port = int(self.settings.value("omrat/db_port", 5432) or 5432)
+        except (TypeError, ValueError):
+            db_port = 5432
         self.acw.leDBHost.setText(db_host)
+        self.acw.SBPort.setValue(db_port)
         self.acw.leDBName.setText(db_name)
         self.acw.leUserName.setText(db_user)
         self.acw.lePassword.setText(db_pass)
+        # External vessel-data lookup: prefill from QSettings.
+        self.acw.gbExtVessel.setChecked(bool(self.vessel_lookup.enabled))
+        self.acw.leExtSchema.setText(self.vessel_lookup.schema)
+        self.acw.leExtTable.setText(self.vessel_lookup.table)
+        self.acw.leExtMmsiCol.setText(self.vessel_lookup.mmsi_col or "mmsi")
+        self.acw.leExtLoaCol.setText(self.vessel_lookup.loa_col)
+        self.acw.leExtBeamCol.setText(self.vessel_lookup.beam_col)
+        self.acw.leExtShipTypeCol.setText(self.vessel_lookup.ship_type_col)
+        self.acw.leExtAirDraughtCol.setText(self.vessel_lookup.air_draught_col)
+        self.acw.cbRecalcFullYear.setChecked(bool(self.recalc_to_full_year))
         self.schema = self.acw.leProvider.text()
         self.year = self.acw.SBYear.value()
         self.months: list[int] = []
@@ -156,16 +202,18 @@ class AIS:
             if cb.isChecked():
                 self.months.append(i)
         try:
-            self.db = DB(db_host=db_host, 
-                        db_name=db_name, 
-                        db_user=db_user, 
-                        db_pass=db_pass)
+            self.db = DB(db_host=db_host,
+                        db_name=db_name,
+                        db_user=db_user,
+                        db_pass=db_pass,
+                        db_port=db_port)
         except Exception:
             self.db = None
         self.max_deviation = float(self.acw.leMaxDev.text())
     
     def update_ais_settings(self):
         db_host = self.acw.leDBHost.text()
+        db_port = int(self.acw.SBPort.value())
         db_name = self.acw.leDBName.text()
         db_user = self.acw.leUserName.text()
         db_pass = self.acw.lePassword.text()
@@ -176,11 +224,109 @@ class AIS:
             cb = getattr(self.acw, f'CB_{i}')
             if cb.isChecked():
                 self.months.append(i)
-        self.db = DB(db_host=db_host, db_name=db_name, db_user=db_user, db_pass=db_pass)
+        # Catch connection failures (wrong password, missing role, server
+        # down, ...) and surface them as a popup instead of letting the
+        # exception bubble up into a Python-error dialog.  ``DB._connect``
+        # already produces a friendly, cp1252-decoded message so we just
+        # show the exception text.
+        try:
+            self.db = DB(
+                db_host=db_host, db_name=db_name,
+                db_user=db_user, db_pass=db_pass,
+                db_port=db_port,
+            )
+        except Exception as e:
+            self.db = None
+            QMessageBox.warning(
+                self.omrat.main_widget,
+                self.omrat.tr("Could not connect to AIS database"),
+                str(e),
+            )
+            return
         self.max_deviation = float(self.acw.leMaxDev.text())
-        for key, value in zip(["db_host", "db_user", "db_pass", "db_name"], [db_host, db_user, db_pass, db_name]):
+        for key, value in zip(
+            ["db_host", "db_port", "db_user", "db_pass", "db_name"],
+            [db_host, db_port, db_user, db_pass, db_name],
+        ):
             self.settings.setValue(f"omrat/{key}", value)
-        
+        # Capture + persist the external-vessel-lookup config so the
+        # next ``run_sql`` call sees the user's edits and the next
+        # session restores them.
+        self.vessel_lookup = VesselLookupConfig(
+            enabled=bool(self.acw.gbExtVessel.isChecked()),
+            schema=self.acw.leExtSchema.text().strip(),
+            table=self.acw.leExtTable.text().strip(),
+            mmsi_col=self.acw.leExtMmsiCol.text().strip() or "mmsi",
+            loa_col=self.acw.leExtLoaCol.text().strip(),
+            beam_col=self.acw.leExtBeamCol.text().strip(),
+            ship_type_col=self.acw.leExtShipTypeCol.text().strip(),
+            air_draught_col=self.acw.leExtAirDraughtCol.text().strip(),
+        )
+        self.vessel_lookup.to_qsettings()
+        # Recalculate-to-full-year flag.
+        self.recalc_to_full_year = bool(self.acw.cbRecalcFullYear.isChecked())
+        self.settings.setValue(
+            "omrat/recalc_to_full_year", self.recalc_to_full_year,
+        )
+
+    # ----------------------------------------------------------- coverage
+
+    # Year-of-seconds (non-leap) — the reference window the multiplier
+    # normalises to.  The 6 h discrepancy from a leap year is well below
+    # the resolution of "ships per year" estimates and not worth a
+    # branch.
+    _YEAR_SECONDS = 365 * 24 * 3600
+
+    # Gaps in the data longer than this are treated as receiver outages
+    # rather than valid empty periods, and excluded from the coverage
+    # window.  12 h matches the user's spec.
+    _GAP_THRESHOLD_HOURS = 12
+
+    def compute_year_multiplier(self) -> tuple[float, float, float] | None:
+        """Inspect the segments table and return ``(multiplier, coverage_s, gap_s)``.
+
+        ``coverage_s`` = ``max(date1) - min(date1)`` minus the time spent
+        inside any inter-ping gap longer than
+        ``_GAP_THRESHOLD_HOURS``.  ``multiplier`` =
+        ``_YEAR_SECONDS / coverage_s`` so callers can scale a per-ping
+        count to an annualised rate.
+
+        Returns ``None`` when the DB is unset, the query fails, or the
+        table is empty (no rows → no coverage to extrapolate from).
+        """
+        if self.db is None:
+            return None
+        schema = _validate_sql_identifier(str(self.schema))
+        year = int(self.year)
+        gap_h = int(self._GAP_THRESHOLD_HOURS)
+        # nosec B608 - schema/year are validated identifiers; gap_h is int.
+        sql = (
+            "WITH ordered AS ("
+            f"SELECT date1, date1 - LAG(date1) OVER (ORDER BY date1) AS dt "
+            f"FROM {schema}.segments_{year}"
+            ") "
+            "SELECT EXTRACT(EPOCH FROM (MAX(date1) - MIN(date1))), "
+            "COALESCE(SUM(EXTRACT(EPOCH FROM dt)) "
+            f"FILTER (WHERE dt > interval '{gap_h} hours'), 0) "
+            "FROM ordered"
+        )
+        ok, rows = cast(
+            tuple[bool, list[list[Any]]],
+            self.db.execute_and_return(sql, return_error=True),
+        )
+        if not ok or not rows or rows[0][0] is None:
+            return None
+        try:
+            span_s = float(rows[0][0])
+            gap_s = float(rows[0][1])
+        except (TypeError, ValueError):
+            return None
+        coverage_s = span_s - gap_s
+        if coverage_s <= 0:
+            return None
+        multiplier = self._YEAR_SECONDS / coverage_s
+        return multiplier, coverage_s, gap_s
+
     def update_legs(self, key:str|None=None):
         """Update AIS data for all legs or a specific leg."""
         if self.db is None:
@@ -199,6 +345,26 @@ class AIS:
             legs: dict_items[str, dict[str, str]] = segment_data.items()
         else:
             legs = [[key, segment_data[key]]] # type: ignore
+        # Compute the annualisation multiplier once per refresh — it's
+        # a property of the database's overall coverage, not per-leg.
+        # When the user hasn't enabled the option, OR the query fails /
+        # the table is empty, we silently fall back to 1.0 (no scaling).
+        multiplier = 1.0
+        if self.recalc_to_full_year:
+            info = self.compute_year_multiplier()
+            if info is not None:
+                multiplier, coverage_s, gap_s = info
+                QMessageBox.information(
+                    self.omrat.main_widget,
+                    self.omrat.tr("Annualised AIS frequency"),
+                    self.omrat.tr(
+                        f"Coverage: {coverage_s / 3600:.1f} h "
+                        f"(skipped {gap_s / 3600:.1f} h of gaps > 12 h).\n"
+                        f"Multiplier: {multiplier:.2f}x "
+                        f"({self._YEAR_SECONDS / 3600:.0f} h / "
+                        f"{coverage_s / 3600:.1f} h)."
+                    ),
+                )
         for leg_key, leg_d in legs:
             if leg_key not in self.omrat.qgis_geoms.leg_dirs.keys():
                 # Use the current leg_key to look up segment direction labels
@@ -223,7 +389,10 @@ class AIS:
             ST_Point({end_p.x}, {end_p.y})::geography))
             """
             _, leg_bearing = cast(tuple[bool, list[list[Any]]], self.db.execute_and_return(sql, return_error=True))
-            line1, line2 = self.update_ais_data(leg_key, ais_data, leg_bearing[0][0], dirs)
+            line1, line2 = self.update_ais_data(
+                leg_key, ais_data, leg_bearing[0][0], dirs,
+                multiplier=multiplier,
+            )
             self.convert_list2avg()
             self.update_dist_data(line1, line2, leg_key)
             key = leg_key
@@ -319,23 +488,70 @@ class AIS:
         # nosec B608 - schema/year/month identifiers are validated above
         # (regex + int coerce); ``pl`` is bound through the ``%(pl)s``
         # placeholder, never inlined into the query string.
+        #
+        # Vessel dimensions come straight from the AIS Type-5 statics
+        # (dim_a/b/c/d):
+        #   loa  = dim_a + dim_b   (length: bow offset + stern offset)
+        #   beam = dim_c + dim_d   (beam:   port offset + starboard offset)
+        # When the AIS dimensions look bogus (sum < 2 m, or any single
+        # offset > the AIS spec maximum) we fall back to the user's
+        # external vessel table if one is configured (see
+        # ``vessel_lookup`` / the AIS Settings dialog), otherwise NULL.
+        # ``update_ais_data`` then falls back to its own default
+        # (loa=100 m, skip beam).
+        #
+        # ``ship_type`` and ``air_draught`` come from the external table
+        # only — neither is in the AIS Type-5 statics, so without a
+        # configured vessel-lookup table they're NULL.  Ship
+        # classification then falls back to ``type_and_cargo`` via
+        # ``get_type``; air-draught distributions stay empty.
+        ext_active = self.vessel_lookup.is_valid()
+        if ext_active:
+            # Defence-in-depth: ``is_valid()`` already enforces the
+            # SQL-identifier shape, but re-validate before interpolation
+            # so any future plumbing change still trips an early raise
+            # rather than handing a poisoned identifier to libpq.
+            for ident in (
+                self.vessel_lookup.schema, self.vessel_lookup.table,
+                self.vessel_lookup.mmsi_col, self.vessel_lookup.loa_col,
+                self.vessel_lookup.beam_col, self.vessel_lookup.ship_type_col,
+                self.vessel_lookup.air_draught_col,
+            ):
+                if ident:
+                    _validate_sql_identifier(ident)
+            cte_block = ", " + self.vessel_lookup.build_cte()
+            ext_join = (
+                " LEFT OUTER JOIN external_vessels ext ON ss.mmsi = ext.mmsi"
+            )
+            loa_fallback = "ext.ext_loa"
+            beam_fallback = "ext.ext_beam"
+            ship_type_expr = "ext.ext_ship_type as ship_type"
+            air_draught_expr = "ext.ext_air_draught as air_draught"
+        else:
+            cte_block = ""
+            ext_join = ""
+            loa_fallback = "NULL"
+            beam_fallback = "NULL"
+            ship_type_expr = "NULL::int as ship_type"
+            air_draught_expr = "NULL::double precision as air_draught"
+
         sql = (
-            "with segments as (" + union_block + "), "  # nosec B608
-            "get_vessel_info as("
-            "select mmsi, ship_type, loa, breadth_moulded as beam, "
-            "height as air_draught FROM vessels.seaweb_data) "
+            "with segments as (" + union_block + ")" + cte_block + " "  # nosec B608
             "SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 "
-            "then loa else dim_a + dim_b end as loa, "
+            f"then {loa_fallback} else dim_a + dim_b end as loa, "
             "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
-            "then loa else dim_c + dim_d end as beam, "
-            "type_and_cargo, draught, ship_type, date1, sog, air_draught, "
+            f"then {beam_fallback} else dim_c + dim_d end as beam, "
+            "type_and_cargo, draught, "
+            f"{ship_type_expr}, "
+            "date1, sog, "
+            f"{air_draught_expr}, "
             "st_distance("
             "st_intersection(segment, st_geomfromtext(%(pl)s,4326))::geography, "
             "st_startpoint(st_geomfromtext(%(pl)s, 4326))::geography"
             ") - st_length(st_geomfromtext(%(pl)s, 4326)::geography) / 2 "
             "as dist_from_start, cog "
-            "FROM segments ss "
-            "left outer JOIN get_vessel_info sd on ss.mmsi=sd.mmsi"
+            "FROM segments ss"
+            + ext_join
         )
         ok, ais_data = cast(
             tuple[bool, list[list[Any]]],
@@ -346,7 +562,19 @@ class AIS:
         else:
             raise TypeError(ais_data[0][0])
 
-    def update_ais_data(self, leg_key:str, ais_data:list[list[Any]], leg_bearing:float, dirs:list[str]) -> tuple[np.ndarray, np.ndarray]:
+    def update_ais_data(
+        self, leg_key: str, ais_data: list[list[Any]],
+        leg_bearing: float, dirs: list[str],
+        multiplier: float = 1.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Bin every passing ship into the per-(type, loa) frequency matrix.
+
+        ``multiplier`` (default 1.0) scales the per-ping increment so a
+        partial-year ingest can be reported as an annualised rate.  See
+        :meth:`compute_year_multiplier`.  Speed/Beam/Draught/Heights
+        distributions are *not* scaled — they are observations, not
+        counts, and ``convert_list2avg`` averages them downstream.
+        """
         line1:list[float] = []
         line2:list[float] = []
         for loa, beam, toc, draugt, sh_type, _, sog, air_draught, dist, cog in ais_data:
@@ -375,7 +603,7 @@ class AIS:
             if sh_type is None:
                 sh_type = ''
             type_cat = get_type(toc)
-            self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'][type_cat][loa_cat] += 1
+            self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'][type_cat][loa_cat] += multiplier
             if sog is not None:
                 self.omrat.traffic.traffic_data[leg_key][dir_]['Speed (knots)'][type_cat][loa_cat].append(float(sog))
             if air_draught is not None:

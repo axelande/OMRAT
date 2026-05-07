@@ -1,0 +1,28 @@
+services:
+  omrat-db:
+    image: postgis/postgis:16-3.4
+    container_name: omrat-db
+    environment:
+      POSTGRES_DB: ${OMRAT_DB_NAME:-omrat}
+      POSTGRES_USER: ${OMRAT_DB_USER:-omrat}
+      POSTGRES_PASSWORD: ${OMRAT_DB_PASSWORD:-omrat}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "${OMRAT_DB_PORT:-5432}:5432"
+    volumes:
+      - omrat-db-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${OMRAT_DB_USER:-omrat} -d ${OMRAT_DB_NAME:-omrat}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  omrat-db-data:
+    name: omrat-db-data
