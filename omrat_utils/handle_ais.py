@@ -296,23 +296,27 @@ class AIS:
         """
         if self.db is None:
             return None
+        from psycopg2 import sql as psql
+
         schema = _validate_sql_identifier(str(self.schema))
         year = int(self.year)
         gap_h = int(self._GAP_THRESHOLD_HOURS)
-        # nosec B608 - schema/year are validated identifiers; gap_h is int.
-        sql = (
+        sql = psql.SQL(
             "WITH ordered AS ("
-            f"SELECT date1, date1 - LAG(date1) OVER (ORDER BY date1) AS dt "
-            f"FROM {schema}.segments_{year}"
+            "SELECT date1, date1 - LAG(date1) OVER (ORDER BY date1) AS dt "
+            "FROM {schema}.{segments}"
             ") "
             "SELECT EXTRACT(EPOCH FROM (MAX(date1) - MIN(date1))), "
             "COALESCE(SUM(EXTRACT(EPOCH FROM dt)) "
-            f"FILTER (WHERE dt > interval '{gap_h} hours'), 0) "
+            "FILTER (WHERE dt > make_interval(hours => %s)), 0) "
             "FROM ordered"
+        ).format(
+            schema=psql.Identifier(schema),
+            segments=psql.Identifier(f"segments_{year}"),
         )
         ok, rows = cast(
             tuple[bool, list[list[Any]]],
-            self.db.execute_and_return(sql, return_error=True),
+            self.db.execute_and_return(sql, return_error=True, params=(gap_h,)),
         )
         if not ok or not rows or rows[0][0] is None:
             return None

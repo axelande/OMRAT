@@ -123,11 +123,18 @@ class VesselLookupConfig:
         of the appropriate type rather than skipping the alias — that
         way the consuming SELECT's ``ext.ext_loa`` etc. always resolves.
         """
+        # Identifiers below are validated by ``is_valid()`` (and re-validated
+        # at the call site in handle_ais.py) against the strict
+        # ``[A-Za-z_][A-Za-z0-9_]*`` pattern, so the f-string interpolation
+        # below cannot inject SQL.  Table/column names cannot be bound as
+        # query parameters; whitelist-validation is the canonical
+        # workaround.  Optional column slots that fall through to a
+        # ``NULL::<type>`` literal are also fixed strings, not user data.
         loa = self.loa_col or "NULL::double precision"
         beam = self.beam_col or "NULL::double precision"
         ship = self.ship_type_col or "NULL::int"
         air = self.air_draught_col or "NULL::double precision"
-        return (
+        return (  # nosec B608 - all interpolated values are validated identifiers
             "external_vessels AS ("
             f"SELECT {self.mmsi_col} AS mmsi, "
             f"{loa} AS ext_loa, "

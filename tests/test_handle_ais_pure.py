@@ -22,6 +22,26 @@ from omrat_utils.handle_ais import (
 )
 
 
+def _render(sql) -> str:
+    """Render a psycopg2.sql.Composable (or plain string) for substring tests.
+
+    The AIS query path now composes SQL with ``psycopg2.sql.Identifier`` for
+    safer identifier handling.  Tests assert against the raw SQL shape, so
+    this walks the Composable and emits identifier names without surrounding
+    double-quotes — the substring assertions stay readable.
+    """
+    from psycopg2 import sql as _psql
+    if isinstance(sql, str):
+        return sql
+    if isinstance(sql, _psql.Composed):
+        return "".join(_render(s) for s in sql.seq)
+    if isinstance(sql, _psql.SQL):
+        return sql.string
+    if isinstance(sql, _psql.Identifier):
+        return ".".join(sql.strings)
+    return str(sql)
+
+
 # ---------------------------------------------------------------------------
 # get_type (AIS type_and_cargo -> OMRAT ship type index)
 # ---------------------------------------------------------------------------
@@ -172,9 +192,18 @@ def ais_with_mocks(monkeypatch):
 
     # Patch DB to a no-op before importing AIS so ``set_start_ais_settings``
     # succeeds.  AISConnectionWidget is also a QWidget; patch it as a MagicMock.
+    # Also patch ``VesselLookupConfig.to_qsettings`` so the external-vessel
+    # round-trip doesn't try to serialise MagicMock values into a real
+    # QSettings backend (which under ``pytest-qgis`` is the live QGIS one
+    # and can hang the run).
+    from omrat_utils.vessel_lookup import VesselLookupConfig
+
     with patch('omrat_utils.handle_ais.DB') as MockDB, \
          patch('omrat_utils.handle_ais.AISConnectionWidget') as MockACW, \
-         patch('omrat_utils.handle_ais.QSettings') as MockSettings:
+         patch('omrat_utils.handle_ais.QSettings') as MockSettings, \
+         patch('omrat_utils.vessel_lookup.VesselLookupConfig.to_qsettings'), \
+         patch('omrat_utils.vessel_lookup.VesselLookupConfig.from_qsettings',
+               return_value=VesselLookupConfig()):
         MockSettings.return_value.value.return_value = ''
         acw = MagicMock()
         # Month checkboxes return False so ``months`` stays empty.
@@ -188,6 +217,17 @@ def ais_with_mocks(monkeypatch):
         # Recalc-to-full-year checkbox starts off; tests opt in by
         # setting ``ais_with_mocks.recalc_to_full_year = True``.
         acw.cbRecalcFullYear.isChecked.return_value = False
+        # External-vessel-lookup widgets return concrete strings so
+        # ``VesselLookupConfig`` is built from real text rather than from
+        # MagicMock objects (which break dataclass equality and any
+        # downstream string handling).
+        acw.gbExtVessel.isChecked.return_value = False
+        for name in (
+            'leExtSchema', 'leExtTable', 'leExtMmsiCol',
+            'leExtLoaCol', 'leExtBeamCol', 'leExtShipTypeCol',
+            'leExtAirDraughtCol',
+        ):
+            getattr(acw, name).text.return_value = ''
         MockACW.return_value = acw
         MockDB.return_value = MagicMock()
 
@@ -206,7 +246,9 @@ class TestAISRunAndUnload:
     def test_run_shows_and_executes_dialog(self, ais_with_mocks):
         ais_with_mocks.run()
         ais_with_mocks.acw.show.assert_called_once()
-        ais_with_mocks.acw.exec_.assert_called_once()
+        # PyQt6 (QGIS 4) dropped ``exec_``; the production code calls the
+        # underscore-free ``exec`` so it works on both PyQt5 and PyQt6.
+        ais_with_mocks.acw.exec.assert_called_once()
 
     def test_set_start_ais_settings_db_exception_sets_none(
         self, ais_with_mocks, monkeypatch
@@ -227,6 +269,9 @@ class TestAISUpdateSettings:
     def test_update_ais_settings_persists_to_qsettings(self, ais_with_mocks):
         """The method reads widget text and stores db_host/port/user/pass/name
         into QSettings."""
+        import omrat_utils.handle_ais as mod
+        from unittest.mock import patch
+
         ais_with_mocks.acw.leDBHost.text.return_value = 'new-host'
         ais_with_mocks.acw.SBPort.value.return_value = 6543
         ais_with_mocks.acw.leDBName.text.return_value = 'new-db'
@@ -236,7 +281,12 @@ class TestAISUpdateSettings:
         ais_with_mocks.acw.SBYear.value.return_value = 2024
         ais_with_mocks.acw.leMaxDev.text.return_value = '15.0'
 
-        ais_with_mocks.update_ais_settings()
+        # Re-patch DB locally: under pytest-qgis the fixture's outer patch
+        # context can be unwound by the time this test runs, so the real
+        # DB constructor would attempt to connect to ``new-host`` and hang.
+        with patch.object(mod, 'DB') as MockDB:
+            MockDB.return_value = MagicMock()
+            ais_with_mocks.update_ais_settings()
         # QSettings.setValue called 6 times: host, port, user, pass, name,
         # plus the recalc-to-full-year flag (the vessel-lookup config
         # writes to its own QSettings instance, not this mock).
@@ -336,12 +386,18 @@ class TestAISUpdateSettings:
 
 class TestAISUpdateLegsGuard:
     def test_update_legs_returns_early_when_db_is_none(self, ais_with_mocks):
-        """If self.db is None the method returns without touching anything."""
+        """If self.db is None the method shows a popup and returns without
+        running the segment-data pipeline."""
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+
         ais_with_mocks.db = None
-        # get_segment_data_from_table would raise if called on the MagicMock
-        # in a way we can detect, so observe via the omrat mock not being
-        # touched.
-        ais_with_mocks.update_legs()
+        # Patch QMessageBox so the real Qt binding doesn't reject the
+        # MagicMock parent widget — we only care that the segment-data
+        # pipeline is skipped.
+        with patch.object(mod, 'QMessageBox') as MockMsg:
+            ais_with_mocks.update_legs()
+        MockMsg.information.assert_called_once()
         assert not ais_with_mocks.omrat.traffic.create_empty_dict.called
 
     def test_update_legs_with_key_uses_single_leg(self, ais_with_mocks, monkeypatch):
@@ -529,10 +585,13 @@ class TestAISRunSql:
         assert coverage_s == 48 * 3600
         assert gap_s == 0
         assert multiplier == pytest.approx(365 * 24 / 48, rel=1e-6)
-        # SQL was issued with the schema/year and the 12-hour gap threshold.
-        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        # SQL was issued with the schema/year; the 12-hour gap threshold is
+        # now passed as a bound integer parameter rather than literal text.
+        call = ais_with_mocks.db.execute_and_return.call_args
+        sql = _render(call.args[0])
         assert 'ais.segments_2024' in sql
-        assert "interval '12 hours'" in sql
+        assert 'make_interval(hours => %s)' in sql
+        assert call.kwargs.get('params') == (12,)
 
     def test_compute_year_multiplier_subtracts_long_gaps(self, ais_with_mocks):
         """A 200 h span with a 100 h receiver outage gives a 100 h

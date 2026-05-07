@@ -31,12 +31,16 @@ except Exception:
 
 DEFAULT_PROFILE = "default"
 _PROFILE_PREFIX = "omrat/db_profiles"
+# NOTE: values below are QSettings KEY PATHS, not credentials.  The literal
+# ``"omrat/db_pass"`` is the registry path under which the legacy plain-text
+# password was stored — used only to read existing values back so older
+# installs migrate cleanly.  Flagged-as-secret false positive.
 _LEGACY_KEYS = {
     "host": "omrat/db_host",
     "port": "omrat/db_port",
     "database": "omrat/db_name",
     "user": "omrat/db_user",
-    "password": "omrat/db_pass",
+    "password": "omrat/db_pass",  # pragma: allowlist secret - QSettings key path, not a secret
 }
 
 

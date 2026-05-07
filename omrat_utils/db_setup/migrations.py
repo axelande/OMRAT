@@ -151,17 +151,24 @@ class Migrator:
         if not (1900 <= int(year) <= 2999):
             raise MigrationError(f"Year out of range: {year!r}")
         schema = _validate_identifier(self.profile.schema, "schema")
+        year_int = int(year)
         out: dict[str, int] = {}
         targets = [
-            f"{schema}.segments_{int(year)}",
-            f"{schema}.states_{int(year)}",
-            f"{schema}.statics_{int(year)}",
+            (schema, f"segments_{year_int}"),
+            (schema, f"states_{year_int}"),
+            (schema, f"statics_{year_int}"),
         ]
         with self._connect() as conn, conn.cursor() as cur:
-            for tbl in targets:
+            for schema_name, table_name in targets:
+                tbl_label = f"{schema_name}.{table_name}"
                 try:
-                    cur.execute(f"SELECT COUNT(*) FROM {tbl}")
-                    out[tbl] = int(cur.fetchone()[0])
+                    cur.execute(
+                        psql.SQL("SELECT COUNT(*) FROM {}.{}").format(
+                            psql.Identifier(schema_name),
+                            psql.Identifier(table_name),
+                        )
+                    )
+                    out[tbl_label] = int(cur.fetchone()[0])
                 except Exception:
                     conn.rollback()
                     # Table missing or otherwise unqueryable — omit silently;

@@ -89,7 +89,8 @@ class TestRunDriftVisualization:
             host.run_drift_visualization(data)
             MockDlg.assert_called_once_with(host.p.main_widget)
             MockViz.show_in_dialog.assert_called_once()
-            dialog_instance.exec_.assert_called_once()
+            # PyQt6 (QGIS 4) dropped ``exec_``; production calls ``exec``.
+            dialog_instance.exec.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

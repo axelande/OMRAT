@@ -43,7 +43,10 @@ def plugin_stub():
     plugin.segment_data = {}
     plugin.drift_values = None
     plugin.drift_settings = SimpleNamespace(drift_values=None)
-    plugin.causation_f = SimpleNamespace(data=None)
+    # ``CausationF.data`` on the real plugin is a dict of factor presets
+    # that ``populate`` merges the loaded ``pc`` block over.  The stub
+    # only needs ``.update`` to be callable, so a plain dict suffices.
+    plugin.causation_f = SimpleNamespace(data={})
     plugin.main_widget = MagicMock()
     plugin.main_widget.cbTrafficSelectSeg.clear = MagicMock()
     plugin.main_widget.cbTrafficSelectSeg.addItem = MagicMock()

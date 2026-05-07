@@ -29,6 +29,28 @@ from omrat_utils.handle_ais_ingest import (
 )
 
 
+def _render(sql) -> str:
+    """Render a psycopg2.sql.Composable (or plain string) for substring tests.
+
+    The ingestion pipeline now composes SQL with ``psycopg2.sql.Identifier``
+    so SAST tools can see safe identifier handling.  Tests that historically
+    asserted against the raw f-string still want to verify that the right
+    schema/table identifiers are present, so this walks the Composable tree
+    and emits the bare identifier names (no double-quoting) plus the literal
+    SQL fragments.
+    """
+    from psycopg2 import sql as _psql
+    if isinstance(sql, str):
+        return sql
+    if isinstance(sql, _psql.Composed):
+        return "".join(_render(s) for s in sql.seq)
+    if isinstance(sql, _psql.SQL):
+        return sql.string
+    if isinstance(sql, _psql.Identifier):
+        return ".".join(sql.strings)
+    return str(sql)
+
+
 # ---------------------------------------------------------------------------
 # IngestionSettings
 # ---------------------------------------------------------------------------
@@ -273,7 +295,8 @@ class TestInsertHelpers:
         cur.fetchone.return_value = (5,)
         result = _pipeline()._insert_static(cur, "omrat", 2021, mmsi=123, rec=None)
         assert result == 5
-        sql, params = cur.execute.call_args[0]
+        sql_obj, params = cur.execute.call_args[0]
+        sql = _render(sql_obj)
         assert "INSERT INTO omrat.statics_2021" in sql
         # All identity fields NULL.
         assert params[2] is None and params[3] is None
@@ -292,7 +315,8 @@ class TestInsertHelpers:
         }
         sid = _pipeline()._insert_static(cur, "omrat", 2021, mmsi=123, rec=rec)
         assert sid == 42
-        sql, params = cur.execute.call_args[0]
+        sql_obj, params = cur.execute.call_args[0]
+        sql = _render(sql_obj)
         assert "INSERT INTO omrat.statics_2021" in sql
         # Voyage fields must NOT appear in statics column list any more.
         assert "draught" not in sql
@@ -333,7 +357,8 @@ class TestInsertHelpers:
             cur, "omrat", 2021, mmsi=123, static_id=1, rec=rec, fallback_t=0.0,
         )
         assert sid == 7
-        sql, params = cur.execute.call_args[0]
+        sql_obj, params = cur.execute.call_args[0]
+        sql = _render(sql_obj)
         assert "INSERT INTO omrat.states_2021" in sql
         assert "draught" in sql and "type_and_cargo" in sql and "destination" in sql
         assert "static_id" in sql
@@ -385,7 +410,7 @@ class TestInsertHelpers:
                 cur, "omrat", 2021, mmsi=999, state_id=1, segments=[jan, feb],
             )
         assert ev.call_count == 2
-        sqls = [c.args[1] for c in ev.call_args_list]
+        sqls = [_render(c.args[1]) for c in ev.call_args_list]
         assert any("segments_2021_1" in s for s in sqls)
         assert any("segments_2021_2" in s for s in sqls)
 
@@ -398,7 +423,7 @@ class TestInsertHelpers:
             _pipeline()._bulk_insert_segments(
                 cur, "omrat", 2021, mmsi=999, state_id=42, segments=[seg],
             )
-        sql = ev.call_args.args[1]
+        sql = _render(ev.call_args.args[1])
         for col in ("mmsi", "date1", "date2", "segment", "cog", "sog",
                     "route_id", "state_id", "heading"):
             assert col in sql, f"missing column {col!r} in INSERT"
@@ -801,7 +826,7 @@ class TestBatchLoadCaches:
             (456, 2, 20, 100, 8, 10, None),
         ]
         pipeline._load_latest_statics(cur, "omrat", 2021)
-        sql = cur.execute.call_args[0][0]
+        sql = _render(cur.execute.call_args[0][0])
         assert "DISTINCT ON (mmsi)" in sql
         assert "omrat.statics_2021" in sql
         assert pipeline._statics_cache[123] == (1, (10, 80, 5, 7, 9999))
@@ -821,7 +846,7 @@ class TestBatchLoadCaches:
             (123, 7, 4.5, 70, "ROTTERDAM", None, 100),
         ]
         pipeline._load_latest_states(cur, "omrat", 2021)
-        sql = cur.execute.call_args[0][0]
+        sql = _render(cur.execute.call_args[0][0])
         assert "DISTINCT ON (mmsi)" in sql
         assert pipeline._states_cache[123] == (7, (4.5, 70, "ROTTERDAM", None, 100))
 

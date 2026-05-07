@@ -35,6 +35,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import logging
+import re
 import tempfile
 import time as time_mod
 from collections import defaultdict
@@ -45,6 +46,7 @@ from typing import Any, Callable, Iterable
 
 import numpy as np
 import psycopg2
+from psycopg2 import sql as psql
 from psycopg2.extras import execute_values
 
 from omrat_utils.db_setup import (
@@ -54,6 +56,21 @@ from omrat_utils.db_setup import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _quote_sqlite_ident(name: str) -> str:
+    """Validate ``name`` as a plain SQL identifier and return it double-quoted.
+
+    SQLite has no parameter binding for identifiers; the only safe way to
+    interpolate a table or column name is to whitelist its characters and
+    wrap it in double quotes (per the SQLite grammar).  Raises
+    ``ValueError`` for anything that isn't ``[A-Za-z_][A-Za-z0-9_]*``.
+    """
+    if not isinstance(name, str) or not _SQL_IDENT_RE.match(name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return f'"{name}"'
 
 # WGS84 mean radius (metres) — same value used inside aissegments.tdkc.
 _EARTH_RADIUS_M = 6_371_008.8
@@ -785,9 +802,9 @@ class IngestionPipeline:
         with contextlib.closing(sqlite3.connect(str(sqlite_path))) as con:
             cur = con.cursor()
             for month in range(1, 13):
-                tbl = f"ais_{year}{month:02d}_dynamic"
+                tbl = _quote_sqlite_ident(f"ais_{int(year)}{month:02d}_dynamic")
                 try:
-                    cur.execute(f"SELECT DISTINCT mmsi FROM {tbl}")
+                    cur.execute(f"SELECT DISTINCT mmsi FROM {tbl}")  # nosec B608
                 except sqlite3.OperationalError:
                     continue
                 for row in cur:
@@ -805,9 +822,9 @@ class IngestionPipeline:
         with contextlib.closing(sqlite3.connect(str(sqlite_path))) as con:
             cur = con.cursor()
             for month in range(1, 13):
-                tbl = f"ais_{year}{month:02d}_static"
+                tbl = _quote_sqlite_ident(f"ais_{int(year)}{month:02d}_static")
                 try:
-                    cur.execute(f"SELECT * FROM {tbl}")
+                    cur.execute(f"SELECT * FROM {tbl}")  # nosec B608
                 except sqlite3.OperationalError:
                     continue
                 cols = [d[0] for d in cur.description]
@@ -935,13 +952,18 @@ class IngestionPipeline:
         """Populate ``_statics_cache`` with the most recent statics row per MMSI."""
         try:
             cur.execute(
-                f"""
-                SELECT DISTINCT ON (mmsi)
-                    mmsi, rowid, dim_a, dim_b, dim_c, dim_d, imo_num
-                FROM {schema}.statics_{year}
-                WHERE mmsi IS NOT NULL
-                ORDER BY mmsi, rowid DESC
-                """
+                psql.SQL(
+                    """
+                    SELECT DISTINCT ON (mmsi)
+                        mmsi, rowid, dim_a, dim_b, dim_c, dim_d, imo_num
+                    FROM {schema}.{table}
+                    WHERE mmsi IS NOT NULL
+                    ORDER BY mmsi, rowid DESC
+                    """
+                ).format(
+                    schema=psql.Identifier(schema),
+                    table=psql.Identifier(f"statics_{int(year)}"),
+                )
             )
         except Exception:
             return
@@ -954,13 +976,18 @@ class IngestionPipeline:
         """Populate ``_states_cache`` with the most recent states row per MMSI."""
         try:
             cur.execute(
-                f"""
-                SELECT DISTINCT ON (mmsi)
-                    mmsi, rowid, draught, type_and_cargo, destination, eta, static_id
-                FROM {schema}.states_{year}
-                WHERE mmsi IS NOT NULL
-                ORDER BY mmsi, rowid DESC
-                """
+                psql.SQL(
+                    """
+                    SELECT DISTINCT ON (mmsi)
+                        mmsi, rowid, draught, type_and_cargo, destination, eta, static_id
+                    FROM {schema}.{table}
+                    WHERE mmsi IS NOT NULL
+                    ORDER BY mmsi, rowid DESC
+                    """
+                ).format(
+                    schema=psql.Identifier(schema),
+                    table=psql.Identifier(f"states_{int(year)}"),
+                )
             )
         except Exception:
             return
@@ -1129,12 +1156,17 @@ class IngestionPipeline:
         if rec is None:
             rec = {}
         cur.execute(
-            f"""
-            INSERT INTO {schema}.statics_{year}
-                (mmsi, "date", dim_a, dim_b, dim_c, dim_d, imo_num)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING rowid
-            """,
+            psql.SQL(
+                """
+                INSERT INTO {schema}.{table}
+                    (mmsi, "date", dim_a, dim_b, dim_c, dim_d, imo_num)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING rowid
+                """
+            ).format(
+                schema=psql.Identifier(schema),
+                table=psql.Identifier(f"statics_{int(year)}"),
+            ),
             (
                 mmsi,
                 self._ts_to_dt(rec.get("time")),
@@ -1172,12 +1204,17 @@ class IngestionPipeline:
             destination = destination.strip()[:20]  # legacy varchar(20)
 
         cur.execute(
-            f"""
-            INSERT INTO {schema}.states_{year}
-                (mmsi, "date", draught, type_and_cargo, eta, destination, static_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING rowid
-            """,
+            psql.SQL(
+                """
+                INSERT INTO {schema}.{table}
+                    (mmsi, "date", draught, type_and_cargo, eta, destination, static_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING rowid
+                """
+            ).format(
+                schema=psql.Identifier(schema),
+                table=psql.Identifier(f"states_{int(year)}"),
+            ),
             (
                 mmsi,
                 self._ts_to_dt(rec.get("time")) or self._ts_to_dt(fallback_t),
@@ -1232,12 +1269,17 @@ class IngestionPipeline:
         for month, rows in by_month.items():
             execute_values(
                 cur,
-                f"""
-                INSERT INTO {schema}.segments_{year}_{month}
-                    (mmsi, date1, date2, segment, cog, sog,
-                     route_id, state_id, heading)
-                VALUES %s
-                """,
+                psql.SQL(
+                    """
+                    INSERT INTO {schema}.{table}
+                        (mmsi, date1, date2, segment, cog, sog,
+                         route_id, state_id, heading)
+                    VALUES %s
+                    """
+                ).format(
+                    schema=psql.Identifier(schema),
+                    table=psql.Identifier(f"segments_{int(year)}_{int(month)}"),
+                ),
                 rows,
                 template=(
                     "(%s, %s, %s, "

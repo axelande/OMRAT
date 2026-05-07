@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -439,27 +439,35 @@ class TestDriftingOverlapVisualizerEvents:
         assert v.current_distribution is v.distributions[0]
         assert v.current_weight is v.weights[0]
 
-    def test_on_polygon_click_wrong_axes_returns(self, qgis_iface, capsys):
+    def test_on_polygon_click_wrong_axes_returns(self, qgis_iface):
+        """Click in ``ax1`` (the leg picker) is ignored — the polygon
+        renderer must not run."""
         v = self._make_visualizer_with_objs(qgis_iface)
         from types import SimpleNamespace
-        evt = SimpleNamespace(inaxes=v.ax1, xdata=10, ydata=10)
-        v.on_polygon_click(evt)
-        assert 'wrong axes' in capsys.readouterr().out
+        with patch.object(v, '_render_polygon_panel') as render:
+            evt = SimpleNamespace(inaxes=v.ax1, xdata=10, ydata=10)
+            v.on_polygon_click(evt)
+        render.assert_not_called()
 
-    def test_on_polygon_click_no_xy(self, qgis_iface, capsys):
+    def test_on_polygon_click_no_xy(self, qgis_iface):
+        """Mouse events without xdata/ydata (e.g. off-canvas) are ignored."""
         v = self._make_visualizer_with_objs(qgis_iface)
         from types import SimpleNamespace
-        evt = SimpleNamespace(inaxes=v.ax2, xdata=None, ydata=None)
-        v.on_polygon_click(evt)
-        assert 'No x/y' in capsys.readouterr().out
+        with patch.object(v, '_render_polygon_panel') as render:
+            evt = SimpleNamespace(inaxes=v.ax2, xdata=None, ydata=None)
+            v.on_polygon_click(evt)
+        render.assert_not_called()
 
-    def test_on_polygon_click_no_extended_polygons(self, qgis_iface, capsys):
+    def test_on_polygon_click_no_extended_polygons(self, qgis_iface):
+        """Before a leg is selected there are no corridor polygons to
+        hit-test, so the click handler returns silently."""
         v = self._make_visualizer_with_objs(qgis_iface)
         v.current_extended_polygons = None
         from types import SimpleNamespace
-        evt = SimpleNamespace(inaxes=v.ax2, xdata=10, ydata=10)
-        v.on_polygon_click(evt)
-        assert 'extended poly is None' in capsys.readouterr().out
+        with patch.object(v, '_render_polygon_panel') as render:
+            evt = SimpleNamespace(inaxes=v.ax2, xdata=10, ydata=10)
+            v.on_polygon_click(evt)
+        render.assert_not_called()
 
     def test_simulate_initial_selection_runs_full_pipeline(self, qgis_iface):
         """Constructor calls simulate_initial_selection, which exercises
@@ -470,11 +478,12 @@ class TestDriftingOverlapVisualizerEvents:
         assert v.current_line is not None
         assert v.current_extended_polygons is not None
 
-    def test_on_polygon_click_outside_any_polygon(self, qgis_iface, capsys):
+    def test_on_polygon_click_outside_any_polygon(self, qgis_iface):
+        """Click far from every corridor polygon: hit-test loop falls
+        through without rendering the bottom panel."""
         v = self._make_visualizer_with_objs(qgis_iface)
         from types import SimpleNamespace
-        # Click far away from all corridor polygons.
-        evt = SimpleNamespace(inaxes=v.ax2, xdata=100_000, ydata=100_000)
-        v.on_polygon_click(evt)
-        out = capsys.readouterr().out
-        assert 'No polygon was clicked' in out
+        with patch.object(v, '_render_polygon_panel') as render:
+            evt = SimpleNamespace(inaxes=v.ax2, xdata=100_000, ydata=100_000)
+            v.on_polygon_click(evt)
+        render.assert_not_called()

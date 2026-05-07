@@ -1,0 +1,19 @@
+[run]
+branch = False
+omit =
+    # Diagnostic / standalone scripts run manually, not unit tests.
+    drifting/debug/*
+    tests/diagnostics/*
+
+[report]
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+    # Type-checking-only imports are never executed at runtime.
+    ^\s*if TYPE_CHECKING:
+    # Defensive re-raise branches
+    raise NotImplementedError
+    # __repr__ helpers that coverage tends to miss
+    def __repr__
+    # Main guards
+    if __name__ == .__main__.:

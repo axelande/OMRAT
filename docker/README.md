@@ -41,10 +41,14 @@ Wait ~30 seconds for the healthcheck to go green, then connect from OMRAT
 Then run the OMRAT schema migrations (the wizard does this for you, or
 from a Python shell):
 
+<!-- pragma: allowlist secret — the snippet below shows the local-dev
+     Docker default credentials, not a real secret.  Override via the
+     OMRAT_DB_PASSWORD env var for any non-throwaway deployment. -->
+
 ```python
 from omrat_utils.db_setup import ConnectionProfile, Migrator
 p = ConnectionProfile(host="localhost", database="omrat",
-                      user="omrat", password="omrat", schema="omrat")
+                      user="omrat", password="omrat", schema="omrat")  # pragma: allowlist secret
 Migrator(p).apply_pending()
 Migrator(p).ensure_year_partition(2024)
 ```

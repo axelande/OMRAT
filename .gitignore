@@ -12,6 +12,5 @@ tmpclaude-*
 drifting_report.md
 examples/
 
-.vscode/.env
-.vscode/launch.json
-.vscode/settings.json
+.vscode/*
+.qgis-settings/
