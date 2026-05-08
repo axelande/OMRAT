@@ -45,7 +45,7 @@ class PoweredModelMixin:
         if not traffic_data or not segment_data or not depths_list:
             self.powered_grounding_report = {
                 'totals': {'grounding': 0.0}, 'by_obstacle': {},
-                'by_obstacle_leg': {},
+                'by_obstacle_leg': {}, 'by_cell': {},
             }
             try:
                 self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
@@ -58,6 +58,11 @@ class PoweredModelMixin:
         # Per-(obstacle, leg) breakdown for the result-layer attributes.
         # Outer key = obstacle id, inner key = leg id.
         by_obstacle_leg: dict[str, dict[str, float]] = {}
+        # Per-(ship_type_idx, length_idx) annual-frequency breakdown.
+        # Keys are ``"{loa_i}_{type_j}"`` strings so the report stays JSON-
+        # friendly; consumed by ``compute/consequence.py`` to map accident
+        # frequencies onto oil-onboard / spill-fraction matrices.
+        by_cell: dict[str, float] = {}
 
         # Build projector
         try:
@@ -216,12 +221,17 @@ class PoweredModelMixin:
                                 obs_legs[leg_str] = (
                                     obs_legs.get(leg_str, 0.0) + contrib
                                 )
+                                cell_key = f"{loa_i}_{type_j}"
+                                by_cell[cell_key] = (
+                                    by_cell.get(cell_key, 0.0) + contrib
+                                )
 
         # Persist per-obstacle breakdown for the result layer.
         self.powered_grounding_report = {
             'totals': {'grounding': float(total)},
             'by_obstacle': by_obstacle,
             'by_obstacle_leg': by_obstacle_leg,
+            'by_cell': by_cell,
             'causation_factor': pc_grounding,
         }
 
@@ -273,7 +283,7 @@ class PoweredModelMixin:
         if not traffic_data or not segment_data or not objects_list:
             self.powered_allision_report = {
                 'totals': {'allision': 0.0}, 'by_obstacle': {},
-                'by_obstacle_leg': {},
+                'by_obstacle_leg': {}, 'by_cell': {},
             }
             try:
                 self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
@@ -284,6 +294,9 @@ class PoweredModelMixin:
         pc_allision = float(pc_vals.get('allision', 1.9e-4))
         by_obstacle: dict[str, float] = {}
         by_obstacle_leg: dict[str, dict[str, float]] = {}
+        # Per-(ship_type_idx, length_idx) annual-frequency breakdown.  See
+        # ``run_powered_grounding_model`` for the rationale.
+        by_cell: dict[str, float] = {}
 
         # Build obstacle height lookup from objects list, keyed by ID
         obj_heights: dict[str, float] = {}
@@ -397,12 +410,17 @@ class PoweredModelMixin:
                         obs_legs[leg_str] = (
                             obs_legs.get(leg_str, 0.0) + contrib
                         )
+                        cell_key = f"{loa_i}_{type_j}"
+                        by_cell[cell_key] = (
+                            by_cell.get(cell_key, 0.0) + contrib
+                        )
 
         # Persist per-obstacle breakdown for the result layer.
         self.powered_allision_report = {
             'totals': {'allision': float(total)},
             'by_obstacle': by_obstacle,
             'by_obstacle_leg': by_obstacle_leg,
+            'by_cell': by_cell,
             'causation_factor': pc_allision,
         }
 

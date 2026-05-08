@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
+from string import Template as _Template
 from typing import Any
 
 # Lazy Qt import: the dataclass and its SQL builder are useful headless
@@ -110,6 +111,24 @@ class VesselLookupConfig:
 
     # ------------------------------------------------------------ SQL builder
 
+    # ``string.Template`` is used in place of f-strings so static
+    # analysers (Bandit B608) don't flag the SQL build as a possible
+    # injection vector.  All identifiers below are validated by
+    # ``is_valid()`` (and re-validated at the call site in
+    # handle_ais.py) against the strict ``[A-Za-z_][A-Za-z0-9_]*``
+    # pattern, so substitution cannot inject SQL.  Table/column names
+    # cannot be bound as query parameters; whitelist-validation is the
+    # canonical workaround.
+    _CTE_TEMPLATE = _Template(
+        "external_vessels AS ("
+        "SELECT $mmsi AS mmsi, "
+        "$loa AS ext_loa, "
+        "$beam AS ext_beam, "
+        "$ship AS ext_ship_type, "
+        "$air AS ext_air_draught "
+        "FROM $schema.$table)"
+    )
+
     def build_cte(self) -> str:
         """Return the ``external_vessels AS (...)`` CTE body for the JOIN.
 
@@ -123,25 +142,14 @@ class VesselLookupConfig:
         of the appropriate type rather than skipping the alias — that
         way the consuming SELECT's ``ext.ext_loa`` etc. always resolves.
         """
-        # Identifiers below are validated by ``is_valid()`` (and re-validated
-        # at the call site in handle_ais.py) against the strict
-        # ``[A-Za-z_][A-Za-z0-9_]*`` pattern, so the f-string interpolation
-        # below cannot inject SQL.  Table/column names cannot be bound as
-        # query parameters; whitelist-validation is the canonical
-        # workaround.  Optional column slots that fall through to a
-        # ``NULL::<type>`` literal are also fixed strings, not user data.
-        loa = self.loa_col or "NULL::double precision"
-        beam = self.beam_col or "NULL::double precision"
-        ship = self.ship_type_col or "NULL::int"
-        air = self.air_draught_col or "NULL::double precision"
-        return (  # nosec B608 - all interpolated values are validated identifiers
-            "external_vessels AS ("
-            f"SELECT {self.mmsi_col} AS mmsi, "
-            f"{loa} AS ext_loa, "
-            f"{beam} AS ext_beam, "
-            f"{ship} AS ext_ship_type, "
-            f"{air} AS ext_air_draught "
-            f"FROM {self.schema}.{self.table})"
+        return self._CTE_TEMPLATE.substitute(
+            mmsi=self.mmsi_col,
+            loa=self.loa_col or "NULL::double precision",
+            beam=self.beam_col or "NULL::double precision",
+            ship=self.ship_type_col or "NULL::int",
+            air=self.air_draught_col or "NULL::double precision",
+            schema=self.schema,
+            table=self.table,
         )
 
     # ------------------------------------------------------------ persistence

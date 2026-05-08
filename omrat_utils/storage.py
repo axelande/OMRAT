@@ -205,6 +205,36 @@ class Storage:
             except Exception:
                 drift['blackout_by_ship_type'] = {}
         out['drift'] = drift
+
+        # Seed the consequence block on legacy projects that pre-date the
+        # Consequence menu.  ``handle_consequence`` will reshape on load if
+        # the user's ship-category dimensions changed since the file was
+        # written, but we still need a valid block so RootModelSchema
+        # validates.
+        if 'consequence' not in out or not isinstance(out.get('consequence'), dict):
+            try:
+                from omrat_utils.consequence_defaults import (
+                    default_oil_onboard,
+                    default_spill_probability,
+                    default_spill_fraction,
+                    default_catastrophe_levels,
+                )
+                ship_cats = out.get('ship_categories') or {}
+                types = list(ship_cats.get('types', []))
+                intervals = list(ship_cats.get('length_intervals', []))
+                out['consequence'] = {
+                    'oil_onboard': default_oil_onboard(types, intervals),
+                    'spill_probability': default_spill_probability(),
+                    'spill_fraction': default_spill_fraction(),
+                    'catastrophe_levels': default_catastrophe_levels(),
+                }
+            except Exception:
+                out['consequence'] = {
+                    'oil_onboard': [],
+                    'spill_probability': [],
+                    'spill_fraction': [],
+                    'catastrophe_levels': [],
+                }
         return out
 
     def new_file_path(self, save, show_msg, dir_path, generic_name, filter_text):

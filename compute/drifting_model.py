@@ -1402,6 +1402,12 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             'by_structure_segment_legdir': {},  # Per-segment per leg-direction for structures
             'by_depth_segment_legdir': {},  # Per-segment per leg-direction for depths
             'by_anchoring_segment_legdir': {},  # Per-segment per leg-direction for anchoring
+            # Per-(ship_type_idx, length_idx) annual-frequency contributions.
+            # Pre-causation-factor; ``run_drifting_model`` rescales them by
+            # the same ``allision_rf`` / ``grounding_rf`` it applies to the
+            # totals.  Consumed by ``compute/consequence.py``.
+            'by_cell_allision': {},
+            'by_cell_grounding': {},
         }
         if debug_trace:
             report['debug_obstacles'] = {}
@@ -1438,6 +1444,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     continue
                 hours_present = (line_length / (speed_kts * 1852.0)) * freq
                 base = hours_present * _blackout_per_hour_for(ship_type)
+                cell_allision_acc = 0.0
+                cell_grounding_acc = 0.0
 
                 for d_idx in range(8):
                     rp = rose_prob(d_idx)
@@ -1475,6 +1483,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     total_allision += a_delta
                     total_grounding += g_delta
                     total_anchoring += an_delta
+                    cell_allision_acc += a_delta
+                    cell_grounding_acc += g_delta
 
                     # Update cascade progress after each direction.  Report every
                     # ~1% of the cascade so users see movement and can cancel.
@@ -1490,6 +1500,19 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                             report['totals']['grounding'] = total_grounding
                             report['totals']['anchoring'] = total_anchoring
                             return total_allision, total_grounding, report
+
+                if ship_type >= 0 and ship_size >= 0:
+                    cell_key = f"{ship_type}_{ship_size}"
+                    if cell_allision_acc > 0.0:
+                        report['by_cell_allision'][cell_key] = (
+                            report['by_cell_allision'].get(cell_key, 0.0)
+                            + cell_allision_acc
+                        )
+                    if cell_grounding_acc > 0.0:
+                        report['by_cell_grounding'][cell_key] = (
+                            report['by_cell_grounding'].get(cell_key, 0.0)
+                            + cell_grounding_acc
+                        )
 
         report['totals']['allision'] = total_allision
         report['totals']['grounding'] = total_grounding
@@ -2018,6 +2041,14 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
 
         self.drifting_allision_prob = float(total_allision * allision_rf)
         self.drifting_grounding_prob = float(total_grounding * grounding_rf)
+        # Apply the same risk factors to the per-cell breakdowns so the
+        # consequence calculation sees the same scaling as the totals.
+        if allision_rf != 1.0:
+            for k, v in list(report.get('by_cell_allision', {}).items()):
+                report['by_cell_allision'][k] = float(v) * allision_rf
+        if grounding_rf != 1.0:
+            for k, v in list(report.get('by_cell_grounding', {}).items()):
+                report['by_cell_grounding'][k] = float(v) * grounding_rf
         self.drifting_report = report
 
         # Store structures and depths for result layer generation.

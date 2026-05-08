@@ -67,7 +67,49 @@ class GatherData:
         self.copy_depths_and_objects()
         # Persist the ship category scheme (types and size intervals) used to build traffic tables
         self.data['ship_categories'] = self.get_ship_categories_for_save()
+        # Persist the oil-spill consequence block.  Pulled from the
+        # ``Consequence`` handler if the dialogs have been opened, otherwise
+        # filled with category-aware defaults so the .omrat round-trips.
+        self.data['consequence'] = self.get_consequence_for_save()
         return self.data
+
+    def get_consequence_for_save(self) -> dict[str, Any]:
+        """Snapshot the four consequence matrices for the .omrat file.
+
+        Reads the live state held by ``self.p.consequence`` (created in
+        ``OMRAT.__init__``) and converts it to plain Python types.  The
+        consequence handler keeps every matrix in shape with the current
+        ship_categories, so we don't have to reshape here.
+        """
+        from omrat_utils.consequence_defaults import (
+            default_oil_onboard,
+            default_spill_probability,
+            default_spill_fraction,
+            default_catastrophe_levels,
+        )
+
+        ship_cats = self.data.get('ship_categories', {}) or {}
+        types = list(ship_cats.get('types', []))
+        intervals = list(ship_cats.get('length_intervals', []))
+
+        consequence_handler = getattr(self.p, 'consequence', None)
+        if consequence_handler is not None:
+            return {
+                'oil_onboard': consequence_handler.oil_onboard,
+                'spill_probability': consequence_handler.spill_probability,
+                'spill_fraction': consequence_handler.spill_fraction,
+                'catastrophe_levels': [
+                    dict(level) for level in consequence_handler.catastrophe_levels
+                ],
+            }
+        # Handler not constructed (e.g. headless tests).  Fall back to
+        # defaults so the .omrat still validates.
+        return {
+            'oil_onboard': default_oil_onboard(types, intervals),
+            'spill_probability': default_spill_probability(),
+            'spill_fraction': default_spill_fraction(),
+            'catastrophe_levels': default_catastrophe_levels(),
+        }
     
     def copy_depths_and_objects(self):
         # Read rows from QTableWidget instead of iterating the widget
@@ -256,6 +298,16 @@ class GatherData:
             self.p.object.load_area(f'Structure - {height_value}m', obj[2], row=j, value=height_value, value_field='Height')
         # Legs go on last so they stay on top of depths + structures.
         self.p.load_lines(data)
+
+        # Load oil-spill consequence inputs into the handler.  If the
+        # handler hasn't been constructed yet (testing path) we silently
+        # skip; the next save will just write defaults.
+        consequence_handler = getattr(self.p, 'consequence', None)
+        if consequence_handler is not None:
+            consequence_handler.load_from_dict(
+                data.get('consequence') or {},
+                data.get('ship_categories') or {},
+            )
             
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.

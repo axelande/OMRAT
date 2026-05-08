@@ -114,6 +114,96 @@ class AccidentResultsMixin:
         self._configure_accident_table(tw)
         self._populate_accident_rows(tw)
         self._wire_clipboard_copy_shortcut(tw)
+        self._setup_catastrophe_results_table()
+
+    def _setup_catastrophe_results_table(self) -> None:
+        """Configure ``TWCatastropheResults`` -- the small annual-frequency
+        table that sits below ``TWAccidentResults`` on the Run Analysis
+        tab.  Headers are set here; rows get (re)populated each run from
+        ``_populate_catastrophe_results_table``.
+        """
+        from qgis.PyQt import QtWidgets
+        from qgis.PyQt.QtWidgets import QHeaderView
+
+        AIV = QtWidgets.QAbstractItemView
+        tw = getattr(self.main_widget, 'TWCatastropheResults', None)
+        if tw is None:
+            return
+        tw.setColumnCount(3)
+        tw.setHorizontalHeaderLabels([
+            'Catastrophe level', 'Threshold (m^3)', 'Exceedance (events/year)',
+        ])
+        tw.setRowCount(0)
+        tw.verticalHeader().setVisible(False)
+        tw.setEditTriggers(_qt_enum(
+            AIV, 'NoEditTriggers', 'EditTrigger.NoEditTriggers',
+        ))
+        tw.setSelectionBehavior(_qt_enum(
+            AIV, 'SelectRows', 'SelectionBehavior.SelectRows',
+        ))
+        try:
+            mode_stretch = _qt_enum(
+                QHeaderView, 'Stretch', 'ResizeMode.Stretch',
+            )
+            mode_resize = _qt_enum(
+                QHeaderView, 'ResizeToContents', 'ResizeMode.ResizeToContents',
+            )
+            tw.horizontalHeader().setSectionResizeMode(0, mode_stretch)
+            tw.horizontalHeader().setSectionResizeMode(1, mode_resize)
+            tw.horizontalHeader().setSectionResizeMode(2, mode_resize)
+        except Exception:
+            pass
+        self._wire_clipboard_copy_shortcut(tw)
+
+    def _reset_accident_table_to_base(self) -> None:
+        """Strip per-run comparison columns from ``TWAccidentResults``.
+
+        ``_fill_result_fields_from_runs`` (in :class:`RunHistoryMixin`)
+        inserts two extra columns per selected run before the View column.
+        Selecting nothing or selecting different runs has to put the table
+        back to its 3-column base layout (Accident type / Probability /
+        View) before a fresh fill -- this method does that.
+        """
+        from qgis.PyQt import QtWidgets
+
+        tw = getattr(self.main_widget, 'TWAccidentResults', None)
+        if tw is None:
+            return
+        # Base layout has exactly three columns; anything past that came
+        # from a previous-runs comparison fill.  Drop them right-to-left
+        # so column indices stay stable.
+        while tw.columnCount() > 3:
+            tw.removeColumn(tw.columnCount() - 2)
+        # Reset headers + the View column header to the canonical labels
+        # so the comparison-fill labels don't bleed across selections.
+        tw.setHorizontalHeaderLabels(['Accident type', 'Probability', 'View'])
+
+    def _populate_catastrophe_results_table(self, consequence_result) -> None:
+        """Populate ``TWCatastropheResults`` from a ``consequence_result``
+        dict produced by :func:`compute.consequence.compute_catastrophe_exceedance`.
+
+        Rows are written in the same (ascending volume) order returned by
+        the calculation.  ``None`` or missing levels clear the table.
+        """
+        from qgis.PyQt import QtWidgets
+
+        tw = getattr(self.main_widget, 'TWCatastropheResults', None)
+        if tw is None:
+            return
+        levels: list = []
+        if isinstance(consequence_result, dict):
+            levels = list(consequence_result.get('levels', []) or [])
+        tw.setRowCount(len(levels))
+        for r, lvl in enumerate(levels):
+            try:
+                name = str(lvl.get('name', ''))
+                qty = float(lvl.get('quantity', 0.0))
+                exceed = float(lvl.get('exceedance', 0.0))
+            except Exception:
+                continue
+            tw.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
+            tw.setItem(r, 1, QtWidgets.QTableWidgetItem(f'{qty:.2f}'))
+            tw.setItem(r, 2, QtWidgets.QTableWidgetItem(f'{exceed:.3e}'))
 
     def _ensure_legacy_lep_widgets(self) -> None:
         """Create the ``LEP*`` / ``pbView*`` widgets as hidden children

@@ -142,11 +142,17 @@ class ShipCollisionModelMixin:
         leg_length_m: float,
         pc_headon: float,
         length_intervals: list[dict],
+        by_cell: dict[str, float] | None = None,
     ) -> float:
         """Calculate head-on collision frequency for a single leg.
 
         Head-on collisions arise from ships travelling in opposite directions
         on the same leg.
+
+        If ``by_cell`` is provided, per-(ship_type, length_idx) annual-frequency
+        contributions are accumulated into it.  Each pair (i, j) vs (k, l)
+        splits its contribution 50/50 between the two participating cells, so
+        single-direction sums add up to the leg total.
 
         Returns the total head-on collision frequency for this leg.
         """
@@ -232,7 +238,14 @@ class ShipCollisionModelMixin:
                             B1=b1, B2=b2,
                             L_w=leg_length_m
                         )
-                        leg_head_on += n_g_headon * pc_headon
+                        contrib = n_g_headon * pc_headon
+                        leg_head_on += contrib
+                        if by_cell is not None and contrib > 0.0:
+                            half = 0.5 * contrib
+                            k1 = f"{loa_i}_{type_j}"
+                            k2 = f"{loa_k}_{type_l}"
+                            by_cell[k1] = by_cell.get(k1, 0.0) + half
+                            by_cell[k2] = by_cell.get(k2, 0.0) + half
 
         return leg_head_on
 
@@ -243,11 +256,16 @@ class ShipCollisionModelMixin:
         leg_length_m: float,
         pc_overtaking: float,
         length_intervals: list[dict],
+        by_cell: dict[str, float] | None = None,
     ) -> float:
         """Calculate overtaking collision frequency for a single leg.
 
         Overtaking collisions occur between ships travelling in the same
         direction at different speeds.
+
+        If ``by_cell`` is provided, per-(ship_type, length_idx) contributions
+        are accumulated into it (50/50 split between the overtaking and
+        overtaken cell).
 
         Returns the total overtaking collision frequency for this leg.
         """
@@ -306,7 +324,14 @@ class ShipCollisionModelMixin:
                         B_fast=b_fast, B_slow=b_slow,
                         L_w=leg_length_m
                     )
-                    leg_overtaking += n_g_overtaking * pc_overtaking
+                    contrib = n_g_overtaking * pc_overtaking
+                    leg_overtaking += contrib
+                    if by_cell is not None and contrib > 0.0:
+                        half = 0.5 * contrib
+                        k1 = f"{loa_i}_{type_i}"
+                        k2 = f"{loa_j}_{type_j}"
+                        by_cell[k1] = by_cell.get(k1, 0.0) + half
+                        by_cell[k2] = by_cell.get(k2, 0.0) + half
 
         return leg_overtaking
 
@@ -316,11 +341,16 @@ class ShipCollisionModelMixin:
         seg_info: dict[str, Any],
         pc_bend: float,
         length_intervals: list[dict],
+        by_cell: dict[str, float] | None = None,
     ) -> float:
         """Calculate bend collision frequency for a single leg.
 
         Bend collisions occur at waypoints where a ship fails to turn.
         Only calculated when ``bend_angle > 5 degrees``.
+
+        If ``by_cell`` is provided, the bend total is distributed across the
+        cells contributing traffic on this leg in proportion to their share
+        of total frequency.
 
         Returns the total bend collision frequency for this leg.
         """
@@ -332,6 +362,10 @@ class ShipCollisionModelMixin:
         avg_length = 150.0
         avg_beam = 25.0
         count = 0
+        # Cell-level traffic shares for downstream apportionment.  Keys are
+        # ``"{loa_i}_{type_j}"``, values are total annual frequency on this
+        # leg (summed over both directions).
+        cell_freqs: dict[str, float] = {}
         for dir_key in dir_keys:
             dir_data = leg_dirs.get(dir_key, {})
             freq = np.array(dir_data.get('Frequency (ships/year)', []))
@@ -343,6 +377,8 @@ class ShipCollisionModelMixin:
                         avg_length = (avg_length * count + self.get_loa_midpoint(loa_i, length_intervals)) / (count + 1)
                         avg_beam = (avg_beam * count + self.estimate_beam(self.get_loa_midpoint(loa_i, length_intervals))) / (count + 1)
                         count += 1
+                        cell_key = f"{loa_i}_{type_j}"
+                        cell_freqs[cell_key] = cell_freqs.get(cell_key, 0.0) + q
 
         # Bend collisions should only be calculated when there's an actual bend
         # at a waypoint between consecutive legs. Default to 0 (no bend).
@@ -361,6 +397,10 @@ class ShipCollisionModelMixin:
                 theta=bend_angle_rad
             )
             leg_bend += n_g_bend * pc_bend
+            if by_cell is not None and leg_bend > 0.0 and avg_freq > 0.0:
+                for cell_key, cf in cell_freqs.items():
+                    share = leg_bend * (cf / avg_freq)
+                    by_cell[cell_key] = by_cell.get(cell_key, 0.0) + share
 
         return leg_bend
 
@@ -373,6 +413,8 @@ class ShipCollisionModelMixin:
         length_intervals: list[dict],
         by_waypoint: dict[tuple[float, float], float] | None = None,
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None = None,
+        by_cell_crossing: dict[str, float] | None = None,
+        by_cell_merging: dict[str, float] | None = None,
     ) -> float:
         """Calculate crossing collision frequency between all leg pairs.
 
@@ -522,15 +564,15 @@ class ShipCollisionModelMixin:
                                         total_crossing += contrib
                                         if by_waypoint is not None and shared_pt is not None:
                                             by_waypoint[shared_pt] = by_waypoint.get(shared_pt, 0.0) + contrib
+                                        kind = (
+                                            'merging'
+                                            if crossing_angle <= 30.0
+                                            else 'crossing'
+                                        )
                                         if by_leg_pair is not None:
                                             # Threshold from IWRAP to
                                             # split a "small-angle"
                                             # merge from a true crossing.
-                                            kind = (
-                                                'merging'
-                                                if crossing_angle <= 30.0
-                                                else 'crossing'
-                                            )
                                             pair_key = (
                                                 str(leg1_key), str(leg2_key),
                                             )
@@ -546,6 +588,25 @@ class ShipCollisionModelMixin:
                                                 },
                                             )
                                             rec[kind] += contrib
+                                        # Per-cell apportionment, split
+                                        # 50/50 between the two legs'
+                                        # ship cells.  Uses kind to route
+                                        # contributions to crossing vs
+                                        # merging accumulators so the
+                                        # consequence calculation can
+                                        # treat them as separate accident
+                                        # categories.
+                                        bucket = (
+                                            by_cell_merging
+                                            if kind == 'merging'
+                                            else by_cell_crossing
+                                        )
+                                        if bucket is not None and contrib > 0.0:
+                                            half = 0.5 * contrib
+                                            k1 = f"{loa_i}_{type_j}"
+                                            k2 = f"{loa_k}_{type_l}"
+                                            bucket[k1] = bucket.get(k1, 0.0) + half
+                                            bucket[k2] = bucket.get(k2, 0.0) + half
 
                 crossing_pairs_processed += 1
                 if total_pairs > 0:
@@ -589,7 +650,13 @@ class ShipCollisionModelMixin:
 
         if not traffic_data or not segment_data:
             self.ship_collision_prob = 0.0
-            self.collision_report = {'totals': result, 'by_leg': {}}
+            self.collision_report = {
+                'totals': result, 'by_leg': {},
+                'by_cell': {
+                    'head_on': {}, 'overtaking': {}, 'bend': {},
+                    'crossing': {}, 'merging': {},
+                },
+            }
             return result
 
         # Get causation factors
@@ -608,6 +675,14 @@ class ShipCollisionModelMixin:
         total_overtaking = 0.0
         total_crossing = 0.0
         total_bend = 0.0
+        # Per-(ship_type_idx, length_idx) annual-frequency contributions per
+        # accident sub-type.  Pair-wise collisions split 50/50 between the
+        # two cells; bend distributes proportionally to per-cell traffic.
+        by_cell_head_on: dict[str, float] = {}
+        by_cell_overtaking: dict[str, float] = {}
+        by_cell_bend: dict[str, float] = {}
+        by_cell_crossing: dict[str, float] = {}
+        by_cell_merging: dict[str, float] = {}
 
         leg_keys = list(traffic_data.keys())
         total_legs = len(leg_keys)
@@ -629,15 +704,18 @@ class ShipCollisionModelMixin:
             leg_length_m = float(seg_info.get('line_length', 1000.0))
 
             leg_head_on = self._calc_head_on_collisions(
-                leg_dirs, seg_info, leg_length_m, pc_headon, length_intervals
+                leg_dirs, seg_info, leg_length_m, pc_headon, length_intervals,
+                by_cell=by_cell_head_on,
             )
 
             leg_overtaking = self._calc_overtaking_collisions(
-                leg_dirs, seg_info, leg_length_m, pc_overtaking, length_intervals
+                leg_dirs, seg_info, leg_length_m, pc_overtaking, length_intervals,
+                by_cell=by_cell_overtaking,
             )
 
             leg_bend = self._calc_bend_collisions(
-                leg_dirs, seg_info, pc_bend, length_intervals
+                leg_dirs, seg_info, pc_bend, length_intervals,
+                by_cell=by_cell_bend,
             )
 
             # Store leg results
@@ -678,6 +756,8 @@ class ShipCollisionModelMixin:
             traffic_data, segment_data, leg_keys, pc_crossing, length_intervals,
             by_waypoint=crossing_by_wp,
             by_leg_pair=crossing_by_pair,
+            by_cell_crossing=by_cell_crossing,
+            by_cell_merging=by_cell_merging,
         )
         for pt, contrib in crossing_by_wp.items():
             rec = by_waypoint.setdefault(pt, {'crossing': 0.0, 'bend': 0.0})
@@ -749,6 +829,13 @@ class ShipCollisionModelMixin:
             'by_waypoint': by_waypoint_serialisable,
             'by_leg_pair': by_leg_pair_serialisable,
             'bend_by_pair': bend_by_pair,
+            'by_cell': {
+                'head_on': by_cell_head_on,
+                'overtaking': by_cell_overtaking,
+                'bend': by_cell_bend,
+                'crossing': by_cell_crossing,
+                'merging': by_cell_merging,
+            },
             'causation_factors': {
                 'headon': pc_headon,
                 'overtaking': pc_overtaking,

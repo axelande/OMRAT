@@ -55,6 +55,7 @@ from omrat_utils.handle_distributions import Distributions
 from omrat_utils.storage import Storage
 from omrat_utils.handle_object import OObject
 from omrat_utils.handle_ship_cat import ShipCategories
+from omrat_utils.handle_consequence import Consequence
 from omrat_utils.gather_data import GatherData
 from omrat_widget import OMRATMainWidget
 from geometries.drift import DriftCorridorGenerator
@@ -124,6 +125,7 @@ class OMRAT(
         self.causation_f: CausationFactors = CausationFactors(self)
         self.calc: Calculation | None = Calculation(self)
         self.ship_cat = ShipCategories(self)
+        self.consequence = Consequence(self)
         self.ais = AIS(self)
         self.traffic = Traffic(self, self.main_widget)
         self.distributions = Distributions(self)
@@ -750,6 +752,16 @@ class OMRAT(
             'OMRAT',
             Qgis.Success
         )
+        # Catastrophe-level exceedance table on the Run Analysis tab.
+        try:
+            self._populate_catastrophe_results_table(
+                getattr(calc_object, 'consequence_result', None),
+            )
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f'Failed to populate catastrophe-results table: {e}',
+                'OMRAT', Qgis.Warning,
+            )
         # Auto-save the run to the history GeoPackage so the user can
         # reload / compare it later.  Failures here are non-fatal --
         # the on-canvas results and line-edits are already populated.
@@ -921,6 +933,7 @@ class OMRAT(
 
             fileMenu = menubar.addMenu('File')
             SettingMenu = menubar.addMenu('Settings')
+            ConsequenceMenu = menubar.addMenu('Consequence')
             analyse_sen_Menu = menubar.addMenu('Analyse sensitivity')
             HelpMenu = menubar.addMenu('Help')
             
@@ -935,6 +948,21 @@ class OMRAT(
             SettingMenu.addAction("Causation Factors", self.open_causation_factors)
             SettingMenu.addAction("AIS connection settings", self.ais_settings)
             SettingMenu.addAction("Database setup wizard...", self.open_db_setup_wizard)
+            ConsequenceMenu.addAction(
+                "Maximum oil onboard...", self.consequence.run_oil_onboard_dialog,
+            )
+            ConsequenceMenu.addAction(
+                "Spill probability per accident...",
+                self.consequence.run_spill_probability_dialog,
+            )
+            ConsequenceMenu.addAction(
+                "Spill fraction per accident...",
+                self.consequence.run_spill_fraction_dialog,
+            )
+            ConsequenceMenu.addAction(
+                "Catastrophe levels...",
+                self.consequence.run_catastrophe_levels_dialog,
+            )
             #self.main_widget.actionSave_project.clicked.connect(self.save_work)
             #self.main_widget.actionOpen_project.clicked.connect(self.load_work)
             self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)

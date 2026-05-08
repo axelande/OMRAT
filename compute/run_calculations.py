@@ -73,6 +73,9 @@ class Calculation(
         # Drifting model attributes
         self.drifting_allision_prob: float = 0.0
         self.drifting_grounding_prob: float = 0.0
+        # Oil-spill consequence result populated at the end of
+        # ``CalculationTask.run`` -- see ``compute/consequence.py``.
+        self.consequence_result: dict[str, Any] | None = None
 
     def set_progress_callback(self, callback: Callable[[int, int, str], bool]) -> None:
         """

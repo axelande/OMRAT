@@ -101,6 +101,22 @@ class ShipCategoriesModel(BaseModel):
     length_intervals: List[LengthInterval]
     selection_mode: Optional[str] = None
 
+class CatastropheLevel(BaseModel):
+    name: str
+    quantity: float
+
+class ConsequenceModel(BaseModel):
+    """Project-level oil-spill consequence inputs.
+
+    All four matrices are sized to match the current ship-category
+    dimensions or accident / spill-level taxonomy; loaders reshape them on
+    read so older projects still validate after the user adds rows.
+    """
+    oil_onboard: List[List[float]] = Field(default_factory=list)
+    spill_probability: List[List[float]] = Field(default_factory=list)
+    spill_fraction: List[List[float]] = Field(default_factory=list)
+    catastrophe_levels: List[CatastropheLevel] = Field(default_factory=list)
+
 class RootModelSchema(BaseModel):
     pc: PC
     drift: Drift
@@ -109,3 +125,4 @@ class RootModelSchema(BaseModel):
     depths: Depths
     objects: Objects
     ship_categories: Optional[ShipCategoriesModel] = None
+    consequence: Optional[ConsequenceModel] = None

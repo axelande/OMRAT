@@ -140,6 +140,30 @@ class CalculationTask(QgsTask):
                 )
                 return False
 
+            # Phase 5: Oil-spill consequence (catastrophe-level exceedance)
+            self._update_description("Computing oil-spill consequences...")
+            try:
+                from compute.consequence import compute_catastrophe_exceedance
+                consequence_block = self.data.get('consequence') or {}
+                self.calc.consequence_result = compute_catastrophe_exceedance(
+                    consequence_block,
+                    drifting_report=getattr(self.calc, 'drifting_report', None),
+                    powered_grounding_report=getattr(
+                        self.calc, 'powered_grounding_report', None,
+                    ),
+                    powered_allision_report=getattr(
+                        self.calc, 'powered_allision_report', None,
+                    ),
+                    collision_report=getattr(self.calc, 'collision_report', None),
+                )
+            except Exception as exc:
+                QgsMessageLog.logMessage(
+                    f'Consequence calculation failed: {exc}',
+                    'OMRAT',
+                    Qgis.Warning,
+                )
+                self.calc.consequence_result = None
+
             self._update_description("Complete")
             self.setProgress(100)
             QgsMessageLog.logMessage(
