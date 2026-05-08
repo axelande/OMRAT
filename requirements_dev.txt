@@ -15,5 +15,14 @@ pydantic
 requests
 defusedxml
 aissegments>=0.1.0
-aisdb>=1.7
+# aisdb is intentionally NOT installed for tests:
+#  - 1.7.x publishes wheels only for cp310-cp312, and the qgis/qgis:stable
+#    CI image now ships Python 3.13, forcing an sdist build.
+#  - The 1.7.x sdist has `[project.license-files]` as a TOML table, which
+#    newer maturin/PEP-639 rejects ("expected a sequence"), so the build
+#    fails on Ubuntu CI.
+#  - Every aisdb import in the codebase is lazy (inside methods), and
+#    test_ais_ingest.py mocks all aisdb interactions, so the test suite
+#    runs fine without it.  aisdb stays in requirements.txt for runtime
+#    users on Python 3.12.
 
