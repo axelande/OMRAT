@@ -27,8 +27,7 @@ class DB:
         self.db_name = db_name
         self.db_user = db_user
         self.db_pass = db_pass
-        # Coerce to str for libpq.  Default 5432 is preserved when caller
-        # passes 0 / "" / None to keep the old "use the default" semantics.
+        # Default 5432 is preserved when caller passes 0 / "" / None to keep the old "use the default" semantics.
         self.db_port = str(int(db_port)) if db_port else "5432"
         self.time_out = time_out
         self.conn: connection | None = None
@@ -111,7 +110,10 @@ class DB:
             else:
                 return [False]
 
-    def execute_and_return(self, sql, return_error: bool = False, params: tuple | list | dict | None = None) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
+    def execute_and_return(self, 
+        sql: str | psycopg2.sql.Composable, 
+        return_error: bool = False, 
+        params: tuple | list | dict | None = None) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
         """Execute the query and returns the result as a list of list
         Parameters
         ----------
@@ -147,7 +149,7 @@ class DB:
             else:
                 return [[False]]
 
-    def execute(self, sql: str, commit: bool = True, return_error: bool = False):
+    def execute(self, sql: str, commit: bool = True, return_error: bool = False) -> None | tuple[bool, Exception]:
         """Execute the query
         Parameters
         ----------
@@ -220,4 +222,3 @@ class DB:
                 return [False, e]
             else:
                 return False
-

@@ -1286,7 +1286,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         ) -> tuple[float, float, dict[str, Any]]:
         drift = data['drift']
         debug_trace = bool(drift.get('debug_trace', False))
-        drift_p = float(drift.get('drift_p', 0.0))
+        drift_p = float(drift.get('drift_p', 1.0))
         blackout_per_hour = drift_p / (365.0 * 24.0)
         # Per-ship-type blackout rate (events/ship-year).  IWRAP uses 1.0 for
         # most types and 0.1 for RoRo / Passenger types.  If the data didn't
@@ -1303,9 +1303,9 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         def _blackout_per_hour_for(ship_type_idx: int) -> float:
             rate = blackout_rate_by_type.get(int(ship_type_idx), drift_p)
             return rate / (365.0 * 24.0)
-        anchor_p = float(drift.get('anchor_p', 0.0))
-        anchor_d = float(drift.get('anchor_d', 0.0))
-        drift_speed_kts = float(drift.get('speed', 0.0))
+        anchor_p = float(drift.get('anchor_p', 0.7))
+        anchor_d = float(drift.get('anchor_d', 7.0))
+        drift_speed_kts = float(drift.get('speed', 1.0))
         drift_speed = drift_speed_kts * 1852.0 / 3600.0  # Convert knots to m/s
 
         # Fresh per-call memo for bucket-scoped cascade entries.

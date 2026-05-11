@@ -38,7 +38,7 @@ class CalculationTask(QgsTask):
         Initialize the calculation task.
 
         Args:
-            description: Human-readable description for the task
+            description: Readable description for the task
             calc_object: The Calculation object with run_drifting_model method
             data: Dictionary of data passed to run_drifting_model
         """
