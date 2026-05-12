@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, field_validator
 from typing import Dict, List, Optional, Union
 
 class PC(BaseModel):
@@ -39,15 +39,27 @@ class TrafficDirectionData(BaseModel):
 class TrafficLeg(RootModel[Dict[str, TrafficDirectionData]]):
     """A leg's traffic data, keyed by direction label.
 
-    The direction labels are derived from the leg's compass bearing in
-    ``HandleQGISIface.update_segment_data`` and may be any of the four
-    pairs ``(N going, S going)``, ``(E going, W going)``, ``(S going,
-    N going)``, ``(W going, E going)``.  An earlier schema only
-    accepted ``East going`` / ``West going`` and silently failed to
-    load any project drawn with a north-south leg -- this RootModel
-    accepts whatever directions the bearing logic emits.
+    Every leg has exactly two directions (forward + reverse), but the
+    actual labels are derived from the leg's compass bearing in
+    ``HandleQGISIface.update_segment_data`` and vary per-leg:
+    ``(N going, S going)``, ``(E going, W going)``, ``(S going,
+    N going)``, or ``(W going, E going)``.  An earlier schema only
+    accepted the ``East going`` / ``West going`` pair as fixed alias
+    keys and silently failed to load any project drawn with a
+    north-south leg -- the RootModel accepts whatever directions the
+    bearing logic emits, while the validator below preserves the
+    "exactly two" constraint that the rest of the calculation relies
+    on.
     """
-    pass
+    @field_validator('root')
+    @classmethod
+    def _exactly_two_directions(cls, v):
+        if not isinstance(v, dict) or len(v) != 2:
+            raise ValueError(
+                "Traffic leg must have exactly two direction entries "
+                f"(got {len(v) if isinstance(v, dict) else type(v).__name__})"
+            )
+        return v
 
 class TrafficData(RootModel[Dict[str, TrafficLeg]]):
     pass
