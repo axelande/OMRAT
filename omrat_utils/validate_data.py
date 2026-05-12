@@ -117,6 +117,25 @@ class ConsequenceModel(BaseModel):
     spill_fraction: List[List[float]] = Field(default_factory=list)
     catastrophe_levels: List[CatastropheLevel] = Field(default_factory=list)
 
+
+class JunctionModel(BaseModel):
+    """A single junction (place where two or more legs meet).
+
+    ``transitions[in_leg][out_leg]`` stores the share of traffic that,
+    after arriving on ``in_leg``, continues onto ``out_leg``.  Rows
+    must sum to ~1.0 (validated separately via
+    :func:`geometries.junctions.validate_junctions`).
+    """
+    point: List[float] = Field(default_factory=list)  # [lon, lat]
+    legs: Dict[str, str] = Field(default_factory=dict)  # leg_id -> "start"|"end"
+    transitions: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    source: str = "geometry"  # "geometry" | "ais" | "user"
+
+
+class JunctionsModel(RootModel[Dict[str, JunctionModel]]):
+    pass
+
+
 class RootModelSchema(BaseModel):
     pc: PC
     drift: Drift
@@ -126,3 +145,4 @@ class RootModelSchema(BaseModel):
     objects: Objects
     ship_categories: Optional[ShipCategoriesModel] = None
     consequence: Optional[ConsequenceModel] = None
+    junctions: Optional[JunctionsModel] = None

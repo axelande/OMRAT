@@ -1,6 +1,9 @@
 """A database class DB"""
+from __future__ import annotations
+
 from typing import Any
 import psycopg2
+import psycopg2.sql  # required for the type annotation on execute_and_return
 from psycopg2._psycopg import connection
 import pandas as pd
 

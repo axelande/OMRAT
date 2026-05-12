@@ -206,6 +206,13 @@ class Storage:
                 drift['blackout_by_ship_type'] = {}
         out['drift'] = drift
 
+        # Seed the junctions block on legacy projects that pre-date the
+        # transition-matrix model.  An empty dict is a valid block —
+        # downstream code falls back to "all-traffic-counted" defaults
+        # when a junction has no recorded matrix.
+        if 'junctions' not in out or not isinstance(out.get('junctions'), dict):
+            out['junctions'] = {}
+
         # Seed the consequence block on legacy projects that pre-date the
         # Consequence menu.  ``handle_consequence`` will reshape on load if
         # the user's ship-category dimensions changed since the file was

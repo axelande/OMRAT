@@ -22,7 +22,7 @@ out of the box.
 ## Quickstart
 
 ```bash
-cp docker/.env.example docker/.env
+cp docker/env.example docker/.env
 # edit docker/.env if you want non-default credentials
 docker compose -f docker/docker-compose.yml up -d
 ```

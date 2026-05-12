@@ -10,9 +10,127 @@ unit-tested standalone.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from omrat_utils.consequence_defaults import ACCIDENT_KEYS, ACCIDENT_TYPES
+
+
+# ---------------------------------------------------------------------------
+# Public validation
+# ---------------------------------------------------------------------------
+
+
+_ROW_SUM_TOLERANCE_PCT = 0.05
+
+
+@dataclass
+class ConsequenceValidation:
+    """Result of :func:`validate_consequence`.
+
+    ``ok`` is True only when ``errors`` is empty.  ``warnings`` covers
+    issues that don't break the calculation but might surprise the user
+    (e.g. duplicate catastrophe thresholds).
+    """
+    ok: bool
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def validate_consequence(consequence: dict[str, Any] | None) -> ConsequenceValidation:
+    """Check that a consequence block is internally consistent.
+
+    Mirrors the constraints the dialog UI enforces (rows sum to 100,
+    minimum two catastrophe levels) so headless / batch callers can run
+    the same checks before invoking
+    :func:`compute_catastrophe_exceedance`.
+
+    The checker never raises — it returns the report so callers can
+    decide how to surface the issues.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not isinstance(consequence, dict):
+        return ConsequenceValidation(
+            ok=False, errors=["consequence block missing or not a dict"],
+        )
+
+    spill_prob = consequence.get('spill_probability') or []
+    for i, row in enumerate(spill_prob):
+        if not isinstance(row, (list, tuple)):
+            errors.append(f"spill_probability row {i}: not a list")
+            continue
+        try:
+            row_sum = float(sum(float(v) for v in row))
+        except (TypeError, ValueError):
+            errors.append(f"spill_probability row {i}: non-numeric value")
+            continue
+        if abs(row_sum - 100.0) > _ROW_SUM_TOLERANCE_PCT:
+            errors.append(
+                f"spill_probability row {i}: sums to {row_sum:.2f}, "
+                f"expected 100.0 (+/- {_ROW_SUM_TOLERANCE_PCT})"
+            )
+
+    spill_frac = consequence.get('spill_fraction') or []
+    for i, row in enumerate(spill_frac):
+        if not isinstance(row, (list, tuple)):
+            errors.append(f"spill_fraction row {i}: not a list")
+            continue
+        for j, v in enumerate(row):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                errors.append(f"spill_fraction row {i} col {j}: non-numeric value")
+                continue
+            if not 0.0 <= f <= 100.0:
+                errors.append(
+                    f"spill_fraction row {i} col {j}: {f:.2f} outside [0, 100]"
+                )
+
+    levels = consequence.get('catastrophe_levels') or []
+    if len(levels) < 2:
+        errors.append(
+            f"catastrophe_levels: need at least 2, got {len(levels)}"
+        )
+    seen_quantities: set[float] = set()
+    for i, lvl in enumerate(levels):
+        if not isinstance(lvl, dict):
+            errors.append(f"catastrophe_levels[{i}]: not a dict")
+            continue
+        try:
+            q = float(lvl.get('quantity', 0.0))
+        except (TypeError, ValueError):
+            errors.append(f"catastrophe_levels[{i}]: non-numeric quantity")
+            continue
+        if q <= 0:
+            errors.append(
+                f"catastrophe_levels[{i}]: quantity {q} must be positive"
+            )
+        if q in seen_quantities:
+            warnings.append(
+                f"catastrophe_levels[{i}]: duplicate quantity {q} -- "
+                "exceedance will be double-counted"
+            )
+        seen_quantities.add(q)
+
+    oil = consequence.get('oil_onboard') or []
+    for i, row in enumerate(oil):
+        if not isinstance(row, (list, tuple)):
+            errors.append(f"oil_onboard row {i}: not a list")
+            continue
+        for j, v in enumerate(row):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                errors.append(f"oil_onboard row {i} col {j}: non-numeric value")
+                continue
+            if f < 0:
+                errors.append(f"oil_onboard row {i} col {j}: {f} is negative")
+
+    return ConsequenceValidation(
+        ok=not errors, errors=errors, warnings=warnings,
+    )
 
 
 def _by_cell_for_accident(

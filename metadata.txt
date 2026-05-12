@@ -23,7 +23,7 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
-  Version 0.11.1 - Minor code comments updates
+  Version 0.11.1 - Minor code comments updates and some checks regarding junctions.
   Version 0.11.0 - Added consequences to calculate the risk of maritime accidents
   Version 0.10.1 - Fixed some minor bugs
   Version 0.10.0 - Added ingestion of AIS data

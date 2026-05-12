@@ -71,7 +71,20 @@ class GatherData:
         # ``Consequence`` handler if the dialogs have been opened, otherwise
         # filled with category-aware defaults so the .omrat round-trips.
         self.data['consequence'] = self.get_consequence_for_save()
+        # Persist the junction transition matrices.  Empty dict is fine
+        # — the load path falls back to geometric defaults if missing.
+        self.data['junctions'] = self.get_junctions_for_save()
         return self.data
+
+    def get_junctions_for_save(self) -> dict[str, Any]:
+        """Snapshot the junction registry for the .omrat file."""
+        handler = getattr(self.p, 'junctions', None)
+        if handler is None:
+            return {}
+        try:
+            return handler.to_dict()
+        except Exception:
+            return {}
 
     def get_consequence_for_save(self) -> dict[str, Any]:
         """Snapshot the four consequence matrices for the .omrat file.
@@ -307,6 +320,17 @@ class GatherData:
             consequence_handler.load_from_dict(
                 data.get('consequence') or {},
                 data.get('ship_categories') or {},
+            )
+
+        # Load junction transition matrices.  Missing block is treated
+        # as "rebuild from scratch" — the handler will discover the
+        # junctions implied by the loaded segment_data and seed them
+        # with geometric defaults.
+        junctions_handler = getattr(self.p, 'junctions', None)
+        if junctions_handler is not None:
+            junctions_handler.load_from_dict(
+                data.get('junctions') or {},
+                data.get('segment_data') or {},
             )
             
     def populate_ship_categories(self, ship_categories: dict[str, Any]):

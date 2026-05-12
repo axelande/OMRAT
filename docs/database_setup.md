@@ -35,7 +35,7 @@ The easiest path on a developer machine: the bundled Docker stack
 
 ```bash
 cd <OMRAT repo root>
-cp docker/.env.example docker/.env       # edit credentials if you want
+cp docker/env.example docker/.env       # edit credentials if you want
 docker compose -f docker/docker-compose.yml up -d
 ```
 

@@ -86,13 +86,18 @@ covers:
 - ✅ Ship-ship collisions (head-on, overtaking, crossing, bend).
 - ✅ IWRAP Mk2 XML import / export.
 - ✅ AIS database import (PostgreSQL/PostGIS).
+- ✅ Oil-spill consequence modelling — annual catastrophe-exceedance
+  rates from per-cell accident frequencies, configurable oil-onboard,
+  spill probability, spill fraction, and catastrophe-level inputs.
+- ✅ Junction transition matrix — per-junction routing of traffic
+  between connected legs (geometric default, AIS-derived when a DB
+  is configured, manually editable).
 - ✅ Per-run GeoPackage history with side-by-side comparison.
 
 Open work (high level):
 
 - Make the calculation IWRAP-bit-identical for cross-validation.
-- Add consequence modelling — collision energies, oil-spill volumes,
-  structure-damage thresholds.
+- Laden / ballast oil onboard split for tankers.
 - Powered Cat I (failure-on-route) once the supporting traffic
   segmentation lands.
 

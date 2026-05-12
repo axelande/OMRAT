@@ -56,6 +56,7 @@ from omrat_utils.storage import Storage
 from omrat_utils.handle_object import OObject
 from omrat_utils.handle_ship_cat import ShipCategories
 from omrat_utils.handle_consequence import Consequence
+from omrat_utils.handle_junctions import Junctions
 from omrat_utils.gather_data import GatherData
 from omrat_widget import OMRATMainWidget
 from geometries.drift import DriftCorridorGenerator
@@ -126,6 +127,7 @@ class OMRAT(
         self.calc: Calculation | None = Calculation(self)
         self.ship_cat = ShipCategories(self)
         self.consequence = Consequence(self)
+        self.junctions = Junctions(self)
         self.ais = AIS(self)
         self.traffic = Traffic(self, self.main_widget)
         self.distributions = Distributions(self)
@@ -899,9 +901,60 @@ class OMRAT(
         wiz = DbSetupWizard(self.main_widget)
         wiz.exec()
 
+    def open_junction_dialog(self) -> None:
+        """Open the junction transition-matrix editor."""
+        from omrat_utils.junction_matrix_dialog import open_junction_dialog
+        # Make sure the registry reflects the current segment set before
+        # the user starts editing — newly added legs would otherwise be
+        # invisible.
+        if getattr(self, 'junctions', None) is not None:
+            self.junctions.rebuild_from_segments(prefer_user=True)
+        open_junction_dialog(self)
+
 
     def update_ais(self) -> None:
+        # The "Update all distributions" button does three things in
+        # sequence: (1) validate routes (snap close waypoints, split
+        # crossing legs); (2) refresh per-leg AIS traffic; (3) refresh
+        # the junction transition matrices, preferring AIS-derived
+        # shares where available.
+        try:
+            from omrat_utils.route_validation_ui import run_validation_pass
+            outcome = run_validation_pass(self)
+            if outcome.merges_applied or outcome.splits_applied:
+                QMessageBox.information(
+                    self.main_widget,
+                    self.tr("Route validation"),
+                    self.tr(
+                        f"Merged {outcome.merges_applied} waypoint pair(s); "
+                        f"split {outcome.splits_applied} crossing(s).  "
+                        "The junction registry has been refreshed."
+                    ),
+                )
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Route validation skipped: {exc}", "OMRAT", Qgis.Warning,
+            )
+
         self.ais.update_legs()
+
+        # Refresh junction transition matrices.  When a DB connection is
+        # configured we prefer AIS-derived shares; otherwise the handler
+        # falls back to its existing geometry/user defaults.
+        try:
+            handler = getattr(self, 'junctions', None)
+            if handler is not None:
+                handler.rebuild_from_segments(prefer_user=True)
+                if getattr(self.ais, 'db', None) is not None:
+                    counts = self.ais.compute_junction_transitions()
+                    if counts:
+                        handler.apply_ais_counts(counts)
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Junction transition refresh skipped: {exc}",
+                "OMRAT",
+                Qgis.Warning,
+            )
     
     def remove_route(self)-> None:
         # To implement
@@ -948,6 +1001,9 @@ class OMRAT(
             SettingMenu.addAction("Causation Factors", self.open_causation_factors)
             SettingMenu.addAction("AIS connection settings", self.ais_settings)
             SettingMenu.addAction("Database setup wizard...", self.open_db_setup_wizard)
+            SettingMenu.addAction(
+                "Junction transition matrix...", self.open_junction_dialog,
+            )
             ConsequenceMenu.addAction(
                 "Maximum oil onboard...", self.consequence.run_oil_onboard_dialog,
             )

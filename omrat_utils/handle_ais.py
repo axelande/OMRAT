@@ -622,6 +622,147 @@ class AIS:
         np_line2 = np.array(line2)
         return np_line1, np_line2
 
+    # ----------------------------------------------------------- junction transitions
+
+    def fetch_passages_for_leg(
+        self, leg_d: dict[str, str], near_radius_m: float | None = None,
+    ) -> dict[str, list[float]]:
+        """Return ``{mmsi: [unix_timestamp, ...]}`` for AIS pings inside the leg.
+
+        ``near_radius_m`` is currently unused — the existing ``run_sql``
+        builds a passage line spanning the whole width of the leg, which
+        is the same data the per-leg traffic update consumes.  When AIS-
+        derived junction transitions become production-grade we will
+        switch to a near-junction sub-polygon to better reflect "ships
+        actually transiting the junction" instead of "ships anywhere
+        on the leg".  For now the wider polygon is good enough because
+        the ``transition_counts_from_passages`` algorithm self-filters
+        by the per-MMSI temporal window.
+        """
+        if self.db is None:
+            return {}
+        start_p = wkt.loads(f"Point ({leg_d['Start_Point']})")
+        end_p = wkt.loads(f"Point ({leg_d['End_Point']})")
+        if not isinstance(start_p, Point) or not isinstance(end_p, Point):
+            return {}
+        pl = get_pl(
+            self.db,
+            lat1=start_p.y, lat2=end_p.y,
+            lon1=start_p.x, lon2=end_p.x,
+            l_width=float(leg_d.get('Width', 5000)),
+        )
+        try:
+            rows = self.run_sql(pl)
+        except Exception:
+            return {}
+        # ``run_sql`` returns the per-ping row used by ``update_ais_data``;
+        # we only need the (mmsi, date1) pair to build the transition
+        # counts.  ``date1`` is at column index 5 in the SELECT order
+        # (loa, beam, type_and_cargo, draught, ship_type, date1, sog,
+        # air_draught, dist_from_start, cog).  ``mmsi`` is not in the
+        # public SELECT list — we replay the same query joined back to
+        # ``ss.mmsi`` here for the targeted use case.
+        # Keep the implementation pragmatic: re-issue a lighter query
+        # focused on (mmsi, date1) so we don't have to refactor run_sql.
+        return self._fetch_mmsi_passages(pl)
+
+    def _fetch_mmsi_passages(self, pl: str) -> dict[str, list[float]]:
+        """Return ``{mmsi: [unix_timestamp, ...]}`` for the given passage line."""
+        if self.db is None:
+            return {}
+        schema = _validate_sql_identifier(str(self.schema))
+        year = int(self.year)
+        months: list[int] = []
+        for m in (self.months or []):
+            mi = int(m)
+            if 1 <= mi <= 12:
+                months.append(mi)
+        if months:
+            tables = [f"{schema}.segments_{year}_{month}" for month in months]
+        else:
+            tables = [f"{schema}.segments_{year}"]
+        # ``schema`` is regex-validated, ``year``/``month`` are coerced to
+        # int, and ``pl`` is bound through the ``%(pl)s`` placeholder, so
+        # f-string interpolation of the table name is safe here.
+        select_template = (  # nosec B608
+            "select ss.mmsi, "
+            "extract(epoch from date1) as t "
+            "FROM {tbl} ss "
+            "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
+            "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
+        )
+        sql = " UNION ".join(  # nosec B608
+            select_template.format(tbl=tbl, schema=schema, year=year)
+            for tbl in tables
+        )
+        try:
+            ok, rows = cast(
+                tuple[bool, list[list[Any]]],
+                self.db.execute_and_return(
+                    sql, return_error=True, params={"pl": pl},
+                ),
+            )
+        except Exception:
+            return {}
+        if not ok or not rows:
+            return {}
+        out: dict[str, list[float]] = {}
+        for mmsi, t in rows:
+            if mmsi is None or t is None:
+                continue
+            out.setdefault(str(mmsi), []).append(float(t))
+        return out
+
+    def compute_junction_transitions(
+        self,
+        time_window_s: float | None = None,
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Build a ``{junction_id: {in_leg: {out_leg: count}}}`` table from AIS.
+
+        Returns an empty dict if the database is offline or the project
+        has no junctions.  Junctions are read from the live
+        :class:`Junctions` handler on the parent OMRAT instance.
+        """
+        from compute.junction_transitions import (
+            DEFAULT_TIME_WINDOW_S,
+            transition_counts_from_passages,
+        )
+        handler = getattr(self.omrat, 'junctions', None)
+        if handler is None or not handler.registry:
+            return {}
+        if self.db is None:
+            return {}
+        seg_table = self.get_segment_data_from_table()
+        # First fetch passages once per leg so junctions sharing legs
+        # don't query the database twice.
+        leg_ids: set[str] = set()
+        for j in handler.registry.values():
+            for leg_id in j.legs:
+                leg_ids.add(leg_id)
+        passages_by_leg: dict[str, dict[str, list[float]]] = {}
+        for leg_id in leg_ids:
+            leg_d = seg_table.get(str(leg_id))
+            if leg_d is None:
+                passages_by_leg[leg_id] = {}
+                continue
+            passages_by_leg[leg_id] = self.fetch_passages_for_leg(leg_d)
+        # Build per-junction count tables by restricting the global
+        # passage map to the legs that touch each junction.
+        out: dict[str, dict[str, dict[str, int]]] = {}
+        window = (
+            DEFAULT_TIME_WINDOW_S if time_window_s is None
+            else float(time_window_s)
+        )
+        for jid, j in handler.registry.items():
+            local = {
+                leg_id: passages_by_leg.get(leg_id, {})
+                for leg_id in j.legs
+            }
+            out[jid] = transition_counts_from_passages(
+                local, time_window_s=window,
+            )
+        return out
+
     def get_segment_data_from_table(self) -> dict[str, dict[str, str]]:
         """Extract segment data from the QTableWidget (twRouteList)."""
         segment_data: dict[str, dict[str, str]] = {}

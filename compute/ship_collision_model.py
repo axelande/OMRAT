@@ -18,6 +18,11 @@ from compute.basic_equations import (
     get_bend_collision_candidates,
 )
 from compute.data_preparation import get_distribution
+from geometries.junctions import (
+    Junction,
+    deflection_deg,
+    junction_id_for_point,
+)
 
 
 class ShipCollisionModelMixin:
@@ -130,6 +135,92 @@ class ShipCollisionModelMixin:
         if p1 is None or p2 is None:
             return False
         return abs(p1[0] - p2[0]) < tol and abs(p1[1] - p2[1]) < tol
+
+    # ------------------------------------------------------------------
+    # Junction-matrix lookup helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _junction_at_point(
+        junctions: dict[str, Junction] | None,
+        pt: tuple[float, float] | None,
+    ) -> Junction | None:
+        """Return the junction registered at ``pt`` if any."""
+        if not junctions or pt is None:
+            return None
+        j = junctions.get(junction_id_for_point(pt))
+        if j is not None:
+            return j
+        # Tolerant fallback for stored coords that round differently.
+        for cand in junctions.values():
+            if abs(cand.point[0] - pt[0]) < 1e-6 and abs(cand.point[1] - pt[1]) < 1e-6:
+                return cand
+        return None
+
+    @staticmethod
+    def _junction_conflict_factor(
+        junction: Junction | None,
+        leg1_id: str,
+        leg2_id: str,
+    ) -> float:
+        """Fraction of the leg-pair (q1, q2) flow that conflicts at the junction.
+
+        Defined as ``1 - T[leg1->leg2] * T[leg2->leg1]``.
+
+        Reasoning: when 100% of leg1 traffic continues onto leg2 *and*
+        100% of leg2 traffic continues onto leg1, the only encounter at
+        the junction is a head-on/overtaking exchange that the per-leg
+        models already capture; so the crossing/merging adjustment is 0.
+        Any divergence (some traffic going elsewhere) re-introduces a
+        junction-level conflict, hence the multiplicative complement.
+        Returns 1.0 when no junction is registered (legacy behaviour).
+        """
+        if junction is None or not junction.transitions:
+            return 1.0
+        l1, l2 = str(leg1_id), str(leg2_id)
+        m12 = float(junction.transitions.get(l1, {}).get(l2, 0.0))
+        m21 = float(junction.transitions.get(l2, {}).get(l1, 0.0))
+        f = 1.0 - m12 * m21
+        return max(0.0, min(1.0, f))
+
+    @staticmethod
+    def _coerce_junctions(
+        raw: Any,
+    ) -> dict[str, Junction] | None:
+        """Accept either a live registry or a serialised junctions dict.
+
+        Returns ``None`` when no junctions are supplied, so callers can
+        keep the legacy (matrix-free) code path with a single
+        ``if junctions is None`` check.
+        """
+        if not raw:
+            return None
+        # Already a registry of Junction objects.
+        from geometries.junctions import Junction as _J
+        sample = next(iter(raw.values()))
+        if isinstance(sample, _J):
+            return raw  # type: ignore[return-value]
+        # Serialised form (dict of dicts).
+        from geometries.junctions import deserialize_junctions as _de
+        return _de(raw)
+
+    @staticmethod
+    def _junction_outward_bearing(
+        junction: Junction,
+        leg_id: str,
+        segment_data: dict[str, Any],
+    ) -> float | None:
+        """Bearing from the junction toward leg's far endpoint."""
+        seg = (segment_data or {}).get(leg_id) or {}
+        sp = ShipCollisionModelMixin._parse_point(seg.get('Start_Point', ''))
+        ep = ShipCollisionModelMixin._parse_point(seg.get('End_Point', ''))
+        if sp is None or ep is None:
+            return None
+        side = junction.legs.get(str(leg_id))
+        far = ep if side == 'start' else sp if side == 'end' else None
+        if far is None:
+            return None
+        return ShipCollisionModelMixin._calc_bearing(junction.point, far)
 
     # ------------------------------------------------------------------
     # Collision-type sub-methods
@@ -342,29 +433,37 @@ class ShipCollisionModelMixin:
         pc_bend: float,
         length_intervals: list[dict],
         by_cell: dict[str, float] | None = None,
+        junctions: dict[str, Junction] | None = None,
+        leg_id: str | None = None,
+        segment_data: dict[str, Any] | None = None,
     ) -> float:
         """Calculate bend collision frequency for a single leg.
 
-        Bend collisions occur at waypoints where a ship fails to turn.
-        Only calculated when ``bend_angle > 5 degrees``.
+        Two paths:
+
+        * **Legacy** — when no junction is registered at the leg's end,
+          uses the optional ``bend_angle`` field on ``seg_info`` (default
+          0.0) and a single-bend calculation.
+
+        * **Junction-aware** — when a junction registry is provided and
+          a junction is registered at the leg's end, iterates over the
+          junction's transition rows for this leg and accumulates bend
+          frequency for each (this_leg -> other_leg) continuation whose
+          deflection exceeds 5 degrees.  Per-pair traffic is the
+          leg-total flow times the matrix share for that continuation.
 
         If ``by_cell`` is provided, the bend total is distributed across the
         cells contributing traffic on this leg in proportion to their share
         of total frequency.
-
-        Returns the total bend collision frequency for this leg.
         """
         leg_bend = 0.0
         dir_keys = list(leg_dirs.keys())
 
-        # Simplified: use average ship dimensions and traffic for this leg
+        # Aggregate per-leg flows for both paths.
         avg_freq = 0.0
         avg_length = 150.0
         avg_beam = 25.0
         count = 0
-        # Cell-level traffic shares for downstream apportionment.  Keys are
-        # ``"{loa_i}_{type_j}"``, values are total annual frequency on this
-        # leg (summed over both directions).
         cell_freqs: dict[str, float] = {}
         for dir_key in dir_keys:
             dir_data = leg_dirs.get(dir_key, {})
@@ -380,21 +479,62 @@ class ShipCollisionModelMixin:
                         cell_key = f"{loa_i}_{type_j}"
                         cell_freqs[cell_key] = cell_freqs.get(cell_key, 0.0) + q
 
-        # Bend collisions should only be calculated when there's an actual bend
-        # at a waypoint between consecutive legs. Default to 0 (no bend).
-        # Only calculate if segment_data explicitly specifies a bend_angle > 5 degrees.
+        if avg_freq <= 0:
+            return leg_bend
+
+        p_no_turn = 0.01  # Probability of failing to turn at bend
+
+        # ---- Junction-aware path -------------------------------------
+        end_pt = self._parse_point(seg_info.get('End_Point', ''))
+        junction = self._junction_at_point(junctions, end_pt)
+        if (
+            junction is not None
+            and leg_id is not None
+            and segment_data is not None
+            and junction.transitions
+        ):
+            row = junction.transitions.get(str(leg_id), {})
+            in_bearing = self._junction_outward_bearing(
+                junction, str(leg_id), segment_data,
+            )
+            if in_bearing is not None and row:
+                for out_leg, share in row.items():
+                    if share <= 0 or out_leg == str(leg_id):
+                        continue
+                    out_bearing = self._junction_outward_bearing(
+                        junction, str(out_leg), segment_data,
+                    )
+                    if out_bearing is None:
+                        continue
+                    bend_angle_deg = deflection_deg(in_bearing, out_bearing)
+                    if bend_angle_deg <= 5.0:
+                        continue
+                    bend_angle_rad = bend_angle_deg * np.pi / 180.0
+                    q_pair = avg_freq * float(share)
+                    n_g_bend = get_bend_collision_candidates(
+                        Q=q_pair,
+                        P_no_turn=p_no_turn,
+                        L=avg_length,
+                        B=avg_beam,
+                        theta=bend_angle_rad,
+                    )
+                    leg_bend += n_g_bend * pc_bend
+                if by_cell is not None and leg_bend > 0.0 and avg_freq > 0.0:
+                    for cell_key, cf in cell_freqs.items():
+                        share_cell = leg_bend * (cf / avg_freq)
+                        by_cell[cell_key] = by_cell.get(cell_key, 0.0) + share_cell
+                return leg_bend
+
+        # ---- Legacy path: use seg_info['bend_angle'] -----------------
         bend_angle_deg = float(seg_info.get('bend_angle', 0.0))
         bend_angle_rad = bend_angle_deg * np.pi / 180.0
-
-        # Only calculate bend collision if there's a meaningful angle change (>5 degrees)
-        if avg_freq > 0 and bend_angle_deg > 5.0:
-            p_no_turn = 0.01  # Probability of failing to turn at bend
+        if bend_angle_deg > 5.0:
             n_g_bend = get_bend_collision_candidates(
                 Q=avg_freq,
                 P_no_turn=p_no_turn,
                 L=avg_length,
                 B=avg_beam,
-                theta=bend_angle_rad
+                theta=bend_angle_rad,
             )
             leg_bend += n_g_bend * pc_bend
             if by_cell is not None and leg_bend > 0.0 and avg_freq > 0.0:
@@ -415,6 +555,7 @@ class ShipCollisionModelMixin:
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None = None,
         by_cell_crossing: dict[str, float] | None = None,
         by_cell_merging: dict[str, float] | None = None,
+        junctions: dict[str, Junction] | None = None,
     ) -> float:
         """Calculate crossing collision frequency between all leg pairs.
 
@@ -459,6 +600,19 @@ class ShipCollisionModelMixin:
                 elif self._points_match(s1_end, s2_start) or self._points_match(s1_end, s2_end):
                     shared_pt = s1_end
                 if shared_pt is None:
+                    crossing_pairs_processed += 1
+                    continue
+
+                # Junction-aware conflict factor: when a registered
+                # junction at the shared waypoint has a transition
+                # matrix, scale the leg-pair contribution by the share
+                # of traffic that actually conflicts there.  Defaults
+                # to 1.0 (legacy behaviour) when no matrix is present.
+                junction = self._junction_at_point(junctions, shared_pt)
+                conflict_factor = self._junction_conflict_factor(
+                    junction, leg1_key, leg2_key,
+                )
+                if conflict_factor <= 0.0:
                     crossing_pairs_processed += 1
                     continue
 
@@ -560,7 +714,7 @@ class ShipCollisionModelMixin:
                                             B1=b1, B2=b2,
                                             theta=crossing_angle_rad
                                         )
-                                        contrib = n_g_crossing * pc_crossing
+                                        contrib = n_g_crossing * pc_crossing * conflict_factor
                                         total_crossing += contrib
                                         if by_waypoint is not None and shared_pt is not None:
                                             by_waypoint[shared_pt] = by_waypoint.get(shared_pt, 0.0) + contrib
@@ -647,6 +801,12 @@ class ShipCollisionModelMixin:
         traffic_data = data.get('traffic_data', {})
         segment_data = data.get('segment_data', {})
         pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
+        # Junction registry is optional.  Accepted as either a
+        # ``dict[str, Junction]`` (live handler state) or as the
+        # serialised dict-of-dicts used by ``.omrat`` storage; the
+        # latter is converted on the fly so headless callers can
+        # pass plain JSON-loaded data without touching the handler.
+        junctions = self._coerce_junctions(data.get('junctions'))
 
         if not traffic_data or not segment_data:
             self.ship_collision_prob = 0.0
@@ -716,6 +876,9 @@ class ShipCollisionModelMixin:
             leg_bend = self._calc_bend_collisions(
                 leg_dirs, seg_info, pc_bend, length_intervals,
                 by_cell=by_cell_bend,
+                junctions=junctions,
+                leg_id=leg_key,
+                segment_data=segment_data,
             )
 
             # Store leg results
@@ -758,6 +921,7 @@ class ShipCollisionModelMixin:
             by_leg_pair=crossing_by_pair,
             by_cell_crossing=by_cell_crossing,
             by_cell_merging=by_cell_merging,
+            junctions=junctions,
         )
         for pt, contrib in crossing_by_wp.items():
             rec = by_waypoint.setdefault(pt, {'crossing': 0.0, 'bend': 0.0})
