@@ -36,9 +36,18 @@ class TrafficDirectionData(BaseModel):
     Ship_heights_meters: List[List[float]] = Field(alias="Ship heights (meters)")
     Ship_Beam_meters: List[List[float]] = Field(alias="Ship Beam (meters)")
 
-class TrafficLeg(BaseModel):
-    East_going: TrafficDirectionData = Field(alias="East going")
-    West_going: TrafficDirectionData = Field(alias="West going")
+class TrafficLeg(RootModel[Dict[str, TrafficDirectionData]]):
+    """A leg's traffic data, keyed by direction label.
+
+    The direction labels are derived from the leg's compass bearing in
+    ``HandleQGISIface.update_segment_data`` and may be any of the four
+    pairs ``(N going, S going)``, ``(E going, W going)``, ``(S going,
+    N going)``, ``(W going, E going)``.  An earlier schema only
+    accepted ``East going`` / ``West going`` and silently failed to
+    load any project drawn with a north-south leg -- this RootModel
+    accepts whatever directions the bearing logic emits.
+    """
+    pass
 
 class TrafficData(RootModel[Dict[str, TrafficLeg]]):
     pass

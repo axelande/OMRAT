@@ -287,6 +287,138 @@ class HandleQGISIface:
         self.cur_route_id = 1
         self.leg_dirs = {}
 
+    def reload_legs_from_segment_data(self) -> None:
+        """Tear down all leg vector layers and rebuild them from ``segment_data``.
+
+        Used by the route-validation pass after merges or splits have
+        mutated ``segment_data``: simply rewriting the dict isn't enough
+        because (a) the line layers on the canvas still draw the old
+        geometry and (b) ``GatherData.get_segment_tbl`` reads endpoints
+        back from ``twRouteList`` on save and would silently overwrite
+        the merged values.
+
+        Reuses ``OMRAT.load_lines`` to recreate the leg vector layers
+        from the in-memory dict; rebuilds the route table rows
+        directly so the actual ``Width`` and ``Leg_name`` values are
+        preserved (``save_route`` would hardcode ``5000`` and
+        ``LEG_{id}_{route}``).
+        """
+        widget = self.omrat.main_widget
+        if widget is None:
+            return
+
+        # Disconnect geometry-changed signals on the existing layers.
+        for obj in list(self.buffer_edits):
+            try:
+                obj.geometryChanged.disconnect()
+            except Exception:
+                pass
+        self.buffer_edits = []
+        # Remove the existing leg layers from the QGIS project.
+        for layer in list(self.vector_layers):
+            try:
+                eb = layer.editBuffer()
+                if eb is not None:
+                    try:
+                        eb.geometryChanged.disconnect()
+                    except TypeError:
+                        pass
+                QgsProject.instance().removeMapLayer(layer.id())
+            except Exception:
+                pass
+        self.vector_layers = []
+        # Tear down the tangent layer too -- ``ensure_tangent_layer``
+        # rebuilds it on demand inside ``create_offset_lines``.
+        if self.tangent_layer is not None:
+            try:
+                QgsProject.instance().removeMapLayer(self.tangent_layer.id())
+            except Exception:
+                pass
+            self.tangent_layer = None
+
+        # Disconnect itemChanged so the bulk repopulation below does
+        # not spam the width-change handler; reconnect after the
+        # rebuild.
+        prev_item_changed = self.item_changed_connected
+        if prev_item_changed:
+            try:
+                widget.twRouteList.itemChanged.disconnect(self.on_width_changed)
+            except TypeError:
+                pass
+            self.item_changed_connected = False
+        widget.twRouteList.setRowCount(0)
+
+        segment_data = getattr(self.omrat, 'segment_data', {}) or {}
+
+        # Rebuild the leg vector layers via the same path used on file
+        # load -- one source of truth for the layer construction.
+        self.omrat.load_lines({'segment_data': segment_data})
+
+        # Rebuild table rows directly, preserving width and leg name.
+        max_id = 0
+        for seg_id, seg in segment_data.items():
+            sp = self._parse_wkt_xy(seg.get('Start_Point'))
+            ep = self._parse_wkt_xy(seg.get('End_Point'))
+            if sp is None or ep is None:
+                continue
+            try:
+                fid = int(str(seg_id))
+                if fid > max_id:
+                    max_id = fid
+            except ValueError:
+                continue
+            try:
+                route_id = int(seg.get('Route_Id', 1))
+            except (TypeError, ValueError):
+                route_id = 1
+            try:
+                width = float(seg.get('Width', 5000))
+            except (TypeError, ValueError):
+                width = 5000.0
+            leg_name = str(seg.get('Leg_name', f'LEG_{fid}_{route_id}'))
+
+            row_id = widget.twRouteList.rowCount()
+            widget.twRouteList.setRowCount(row_id + 1)
+            widget.twRouteList.setItem(row_id, 0, QTableWidgetItem(str(fid)))
+            widget.twRouteList.setItem(row_id, 1, QTableWidgetItem(str(route_id)))
+            widget.twRouteList.setItem(row_id, 2, QTableWidgetItem(leg_name))
+            widget.twRouteList.setItem(
+                row_id, 3, QTableWidgetItem(self.format_wkt(QgsPoint(sp[0], sp[1]))),
+            )
+            widget.twRouteList.setItem(
+                row_id, 4, QTableWidgetItem(self.format_wkt(QgsPoint(ep[0], ep[1]))),
+            )
+            widget.twRouteList.setItem(row_id, 5, QTableWidgetItem(f"{int(width)}"))
+            btn = QPushButton("Update AIS")
+            btn.clicked.connect(
+                lambda _checked=False, k=str(seg_id): self.omrat.ais.update_legs(k)
+            )
+            widget.twRouteList.setCellWidget(row_id, 6, btn)
+
+            # Refresh the offset / tangent line for this leg.
+            try:
+                self.create_offset_lines(
+                    QgsPointXY(sp[0], sp[1]),
+                    QgsPointXY(ep[0], ep[1]),
+                    width / 2,
+                    fid,
+                )
+            except Exception:
+                pass
+
+        # Bump the leg-id counter past the highest current id so future
+        # interactive draws don't collide.
+        self.segment_id = max(max_id, self.segment_id)
+
+        # Reconnect the width-changed handler.
+        if prev_item_changed and not self.item_changed_connected:
+            widget.twRouteList.itemChanged.connect(self.on_width_changed)
+            self.item_changed_connected = True
+
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is not None:
+            canvas.refresh()
+
     def on_geometry_changed(self, fid:int, geom:QgsGeometry):
         """Handle geometry changes for a feature."""
         # Get the segment ID from the feature's attributes

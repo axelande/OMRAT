@@ -175,6 +175,35 @@ class ValidationOutcome:
     skipped: int = 0
 
 
+def _hide_dock_for_prompts(omrat: "OMRAT"):
+    """Temporarily hide the OMRAT dock so the prompts don't cover the canvas.
+
+    Returns the original visibility state so :func:`_restore_dock` can
+    bring the dock back at the end of the validation pass.
+    """
+    dock = getattr(omrat, 'main_widget', None)
+    if dock is None or not hasattr(dock, 'isVisible'):
+        return None
+    was_visible = dock.isVisible()
+    if was_visible:
+        try:
+            dock.hide()
+        except Exception:
+            pass
+    return was_visible
+
+
+def _restore_dock(omrat: "OMRAT", was_visible) -> None:
+    if was_visible:
+        dock = getattr(omrat, 'main_widget', None)
+        if dock is not None:
+            try:
+                dock.show()
+                dock.raise_()
+            except Exception:
+                pass
+
+
 def run_validation_pass(
     omrat: "OMRAT",
     *,
@@ -187,13 +216,31 @@ def run_validation_pass(
     "X waypoints merged, Y crossings split" toast.  ``show_dialog`` is
     a hook for tests so they can drive the UI without spinning up Qt
     event loops.
+
+    The OMRAT dock is hidden while the prompts are showing (it
+    otherwise covers the very canvas the user needs to see when
+    deciding which waypoint to keep) and restored at the end.
+
+    After all merges / splits have been applied, the leg vector
+    layers, route table, and offset lines are torn down and rebuilt
+    from ``segment_data`` -- without that, the QGIS canvas would still
+    draw the old geometry and ``GatherData.get_segment_tbl`` would
+    later overwrite the merged endpoints from the stale table cells.
     """
     out = ValidationOutcome()
     sd = getattr(omrat, 'segment_data', {}) or {}
     td = getattr(omrat, 'traffic_data', {}) or {}
     report = validate_routes(sd, tol_frac=tol_frac)
 
-    parent = getattr(omrat, 'main_widget', None)
+    parent = None  # not omrat.main_widget -- the parent gets hidden below
+
+    # Hide the dock only when there's actually something to prompt
+    # about (so a no-op validation pass does not flicker the UI).
+    needs_prompt = bool(report.close_pairs or report.intersections)
+    dock_was_visible = (
+        _hide_dock_for_prompts(omrat) if (needs_prompt and show_dialog is None)
+        else None
+    )
 
     def _show_merge(pair: CloseWaypointPair) -> _MergeChoice:
         if show_dialog is not None:
@@ -211,26 +258,43 @@ def run_validation_pass(
         dlg.exec()
         return dlg.accepted_split()
 
-    # Process merges first — they may collapse a candidate intersection
-    # into a junction, which the second pass will skip naturally.
-    for pair in report.close_pairs:
-        choice = _show_merge(pair)
-        if choice.target is None:
-            out.skipped += 1
-            continue
-        moved = apply_waypoint_merge(sd, pair, choice.target)
-        if moved > 0:
-            out.merges_applied += 1
+    try:
+        # Process merges first — they may collapse a candidate intersection
+        # into a junction, which the second pass will skip naturally.
+        for pair in report.close_pairs:
+            choice = _show_merge(pair)
+            if choice.target is None:
+                out.skipped += 1
+                continue
+            moved = apply_waypoint_merge(sd, pair, choice.target)
+            if moved > 0:
+                out.merges_applied += 1
 
-    # Re-run intersection detection on the (possibly mutated) data so
-    # any merge-resolved crossings disappear from the list.
-    fresh_intersections = validate_routes(sd, tol_frac=tol_frac).intersections
-    for hit in fresh_intersections:
-        if not _show_split(hit):
-            out.skipped += 1
-            continue
-        apply_intersection_split(sd, hit, traffic_data=td)
-        out.splits_applied += 1
+        # Re-run intersection detection on the (possibly mutated) data so
+        # any merge-resolved crossings disappear from the list.
+        fresh_intersections = validate_routes(sd, tol_frac=tol_frac).intersections
+        for hit in fresh_intersections:
+            if not _show_split(hit):
+                out.skipped += 1
+                continue
+            apply_intersection_split(sd, hit, traffic_data=td)
+            out.splits_applied += 1
+    finally:
+        _restore_dock(omrat, dock_was_visible)
+
+    # Refresh canvas layers, route table, and tangent lines so the
+    # mutated segment_data is reflected on screen *and* survives the
+    # next save (GatherData reads endpoints from twRouteList).
+    if out.merges_applied or out.splits_applied:
+        qgis_geoms = getattr(omrat, 'qgis_geoms', None)
+        if qgis_geoms is not None and hasattr(qgis_geoms, 'reload_legs_from_segment_data'):
+            try:
+                qgis_geoms.reload_legs_from_segment_data()
+            except Exception:  # nosec B110
+                # Reloading is best-effort -- a failure here means the
+                # dict is updated but the UI is stale; better that than
+                # losing the merge entirely.
+                pass
 
     # Refresh the junction registry after the structural edits so the
     # transition matrices have correct leg references.
