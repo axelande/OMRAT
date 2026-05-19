@@ -21,6 +21,5 @@ class ShipCategories:
             # there are no ``ok`` / ``cancel`` signals.
             self.buttonBox.accepted.connect(self.commit_changes)
             self.buttonBox.rejected.connect(self.discard_changes)
-        # ``exec_`` exists in PyQt5 but was dropped in PyQt6 (QGIS 4).
-        # ``exec`` is present in both, so prefer that.
+
         self.scw.exec()

@@ -191,3 +191,18 @@ class IwrapIOMixin:
         self.traffic.traffic_data = self.traffic_data
         self.traffic.update_direction_select()
         self.traffic.update_traffic_tbl('segment')
+        # Stamp the write-once import baseline from the just-loaded
+        # IWRAP geometry, so the audit report can flag later waypoint
+        # nudges.  Only fills entries that aren't already present.
+        imported = getattr(self, 'segments_imported', None)
+        if isinstance(imported, dict):
+            for sid, seg in (self.segment_data or {}).items():
+                if str(sid) in imported:
+                    continue
+                sp = seg.get('Start_Point') if isinstance(seg, dict) else None
+                ep = seg.get('End_Point') if isinstance(seg, dict) else None
+                if sp and ep:
+                    imported[str(sid)] = {
+                        'Start_Point': str(sp),
+                        'End_Point': str(ep),
+                    }

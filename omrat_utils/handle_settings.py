@@ -24,30 +24,18 @@ from compute.basic_equations import (
     SHIP_TYPE_NAMES,
     default_blackout_by_ship_type,
 )
+from compute.iwrap_defaults import default_drift_values
 
 class DriftSettings:
     def __init__(self, parent):
         self.parent = parent
         self.dsw = DriftSettingsWidget(None)
         self.repair = Repair(self)
-        rose = {'0': .125, '45': .125, '90': .125, '135': .125, '180': .125, '225': .125, '270': .125, '315': .125}
-        repair: dict[str,str|float|bool] = {'func': "",
-                  'std': .95,
-                  'loc': .2,
-                  'scale': .85,
-                  'use_lognormal': True}
-        # Per-ship-type blackout rate (events/ship-year).  IWRAP-compatible
-        # defaults: 1.0 for most types, 0.1 for RoRo / Passenger.
-        blackout_by_ship_type = default_blackout_by_ship_type()
-        # This is set here as default values, however it is overwritten while loading user data.
         # drift.speed is stored in KNOTS throughout (matches IWRAP import at
         # compute/iwrap_convertion.py:1154 and the cascade at
         # compute/drifting_model.py:2084).
-        self.drift_values:dict[str, Any] = {'drift_p': 1, 'anchor_p': .70,'anchor_d': 7, 'speed': 1.0,
-                            'start_from': 'leg_center',
-                            'squat_mode': 'average_speed',
-                                            'rose': rose, 'repair': repair,
-                                            'blackout_by_ship_type': blackout_by_ship_type}
+        self.drift_values: dict[str, Any] = default_drift_values()
+        self.drift_values['blackout_by_ship_type'] = default_blackout_by_ship_type()
         # The blackout-by-ship-type table is created lazily when the dialog
         # is shown (see _ensure_blackout_table).
         self._blackout_table: QTableWidget | None = None

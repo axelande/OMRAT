@@ -290,11 +290,21 @@ def run_validation_pass(
         if qgis_geoms is not None and hasattr(qgis_geoms, 'reload_legs_from_segment_data'):
             try:
                 qgis_geoms.reload_legs_from_segment_data()
-            except Exception:  # nosec B110
-                # Reloading is best-effort -- a failure here means the
-                # dict is updated but the UI is stale; better that than
-                # losing the merge entirely.
-                pass
+            except Exception as exc:  # nosec B110
+                # A failure here leaves the UI half-rebuilt (vector
+                # layers + table rows wiped, no rebuild) so the user
+                # sees "all legs disappeared" with no obvious cause.
+                # Log loudly instead of swallowing silently.
+                try:
+                    import traceback
+                    from qgis.core import Qgis, QgsMessageLog
+                    QgsMessageLog.logMessage(
+                        f"reload_legs_from_segment_data failed: {exc}\n"
+                        f"{traceback.format_exc()}",
+                        "OMRAT", Qgis.Critical,
+                    )
+                except Exception:
+                    pass
 
     # Refresh the junction registry after the structural edits so the
     # transition matrices have correct leg references.

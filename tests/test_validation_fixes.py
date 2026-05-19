@@ -154,6 +154,87 @@ def test_validation_pass_skips_reload_when_nothing_changed():
     qgis_geoms.reload_legs_from_segment_data.assert_not_called()
 
 
+def test_parse_wkt_xy_accepts_freshly_drawn_wkt_format():
+    """``_parse_wkt_xy`` must round-trip the ``QgsPoint.asWkt()`` shape
+    that ``update_segment_data`` writes for freshly-drawn legs.
+
+    Regression: previously the parser only accepted ``"lon lat"`` and
+    returned None for ``"Point (lon lat)"`` -- that combined with a
+    missing ``Segment_Id`` to wipe the canvas + route table during the
+    post-merge reload (silent ``except`` swallowed the KeyError, OMRAT
+    log stayed empty, user saw "all legs disappeared")."""
+    from geometries.handle_qgis_iface import HandleQGISIface as H
+    assert H._parse_wkt_xy('Point (14.0 55.0)') == (14.0, 55.0)
+    assert H._parse_wkt_xy('POINT(14.0 55.0)') == (14.0, 55.0)
+    assert H._parse_wkt_xy('14.0 55.0') == (14.0, 55.0)
+    assert H._parse_wkt_xy('14.0,55.0') == (14.0, 55.0)
+    assert H._parse_wkt_xy(None) is None
+    assert H._parse_wkt_xy('garbage') is None
+
+
+def test_leg_name_uses_route_then_segment_ordering():
+    """``Leg_name`` must read ``LEG_{route_id}_{segment_id}`` -- not the
+    other way round -- so route 2's first leg shows as ``LEG_2_4``
+    (segments are a global counter) rather than ``LEG_4_2``.
+
+    Regression: every generation site (canvas label, table cell, fresh
+    segment_data dict, table-rebuild fallback, load_lines feature
+    attribute) had the two ids transposed.
+    """
+    import inspect
+    from geometries.handle_qgis_iface import HandleQGISIface
+    src = inspect.getsource(HandleQGISIface)
+    # The correct ordering is route first, segment second.
+    assert "f'LEG_{self.cur_route_id}_{self.segment_id}'" in src or \
+           'f"LEG_{self.cur_route_id}_{self.segment_id}"' in src, src
+    # And the old transposed form should be gone.
+    assert "LEG_{self.segment_id}_{self.cur_route_id}" not in src
+    assert "LEG_{fid}_{route_id}" not in src
+
+
+def test_stop_route_advances_qgis_geoms_route_id(monkeypatch):
+    """``stop_route`` must bump the attribute that leg-drawing actually
+    reads -- ``qgis_geoms.cur_route_id`` -- so the next "Add route"
+    starts at route 2.  Previously it bumped a dead ``omrat.cur_route_id``
+    that nothing read, leaving every new leg stamped Route_Id=1.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    import omrat as omrat_mod
+    # Stub the QGIS map-tool class so we don't need a live canvas.
+    monkeypatch.setattr(omrat_mod, 'QgsMapToolPan', lambda canvas: MagicMock())
+    qg = SimpleNamespace(vector_layers=[], cur_route_id=1, current_start_point=object())
+    iface = MagicMock()
+    iface.mapCanvas.return_value = MagicMock()
+    iface.actionPan.return_value = None
+    fake = SimpleNamespace(
+        main_widget=MagicMock(),
+        qgis_geoms=qg,
+        iface=iface,
+    )
+    omrat_mod.OMRAT.stop_route(fake)
+    assert qg.cur_route_id == 2
+    assert qg.current_start_point is None
+    # And calling it again advances further.
+    omrat_mod.OMRAT.stop_route(fake)
+    assert qg.cur_route_id == 3
+
+
+def test_freshly_drawn_segment_data_has_segment_id():
+    """``update_segment_data`` must populate ``Segment_Id`` so the post-
+    merge ``load_lines`` rebuild does not crash with KeyError on a
+    project where the user has just drawn legs (segment_data round-trips
+    through twRouteList -> get_segment_tbl only on save)."""
+    import inspect
+    from geometries.handle_qgis_iface import HandleQGISIface
+    src = inspect.getsource(HandleQGISIface.update_segment_data)
+    # Look for the new-leg dict literal that previously omitted the key.
+    assert "'Segment_Id'" in src, (
+        "update_segment_data must include 'Segment_Id' in the new-leg "
+        "dict so load_lines can render it after a validation-pass merge."
+    )
+
+
 def test_validation_pass_calls_reload_after_split():
     from omrat_utils.route_validation_ui import run_validation_pass
     sd = {

@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" font-family="Arial, sans-serif">
+  <defs>
+    <marker id="thArrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
+    </marker>
+    <marker id="thArrowRed" markerWidth="9" markerHeight="6" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#C62828"/>
+    </marker>
+    <marker id="thArrowGrn" markerWidth="9" markerHeight="6" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 9 3, 0 6" fill="#2E7D32"/>
+    </marker>
+    <marker id="thDot" markerWidth="6" markerHeight="6" refX="3" refY="3">
+      <circle cx="3" cy="3" r="2.5" fill="#1976D2"/>
+    </marker>
+  </defs>
+
+  <text x="450" y="28" text-anchor="middle" font-size="20" font-weight="bold" fill="#1a1a2e">
+    TDKC threshold parameters
+  </text>
+  <text x="450" y="48" text-anchor="middle" font-size="12" fill="#444">
+    What `min_sed_m` and `min_svd_kn` actually measure
+  </text>
+
+  <!-- ============================================================ -->
+  <!-- LEFT PANEL: SED                                              -->
+  <!-- ============================================================ -->
+  <rect x="20" y="70" width="420" height="320" rx="8" fill="#f5f9ff" stroke="#1976D2" stroke-width="1.5"/>
+  <text x="230" y="95" text-anchor="middle" font-size="14" font-weight="bold" fill="#0D47A1">
+    Synchronized Euclidean Distance (SED)
+  </text>
+  <text x="230" y="112" text-anchor="middle" font-size="11" fill="#444">
+    min_sed_m -- how far the candidate ping is from
+  </text>
+  <text x="230" y="126" text-anchor="middle" font-size="11" fill="#444">
+    where it WOULD be at its timestamp on a straight line.
+  </text>
+
+  <!-- Candidate kept-pings: P1 (left) and P3 (right) -->
+  <g fill="#1976D2" stroke="#fff" stroke-width="1.5">
+    <circle cx="80"  cy="300" r="7"/>
+    <circle cx="390" cy="180" r="7"/>
+  </g>
+  <text x="80"  y="320" text-anchor="middle" font-size="11" fill="#0D47A1" font-weight="bold">P1</text>
+  <text x="390" y="200" text-anchor="middle" font-size="11" fill="#0D47A1" font-weight="bold">P3</text>
+  <text x="80"  y="335" text-anchor="middle" font-size="9" fill="#555">t = 0 s</text>
+  <text x="390" y="215" text-anchor="middle" font-size="9" fill="#555">t = 60 s</text>
+
+  <!-- Hypothetical interpolated point on the chord at t=30s -->
+  <line x1="80" y1="300" x2="390" y2="180" stroke="#90CAF9" stroke-width="2" stroke-dasharray="6 4"/>
+  <g fill="#90CAF9" stroke="#fff" stroke-width="1">
+    <circle cx="235" cy="240" r="5"/>
+  </g>
+  <text x="235" y="262" text-anchor="middle" font-size="9" fill="#0D47A1">
+    interpolated at t=30s
+  </text>
+
+  <!-- Actual ping P2 -- the candidate to discard.  Off the chord. -->
+  <g fill="#C62828" stroke="#fff" stroke-width="1.5">
+    <circle cx="180" cy="195" r="6"/>
+  </g>
+  <text x="180" y="183" text-anchor="middle" font-size="11" fill="#C62828" font-weight="bold">P2</text>
+  <text x="180" y="170" text-anchor="middle" font-size="9" fill="#555">actual at t=30s</text>
+
+  <!-- SED line: perpendicular from P2 to the interpolated point -->
+  <line x1="180" y1="195" x2="235" y2="240" stroke="#C62828" stroke-width="2" marker-end="url(#thArrowRed)"/>
+  <text x="195" y="225" font-size="11" fill="#C62828" font-weight="bold">SED</text>
+
+  <!-- Decision text -->
+  <text x="230" y="360" text-anchor="middle" font-size="11" fill="#333">
+    SED &lt; min_sed_m  -&gt; drop P2 (straight line is "good enough")
+  </text>
+  <text x="230" y="376" text-anchor="middle" font-size="11" fill="#333">
+    SED &gt;= min_sed_m -&gt; keep P2 (turn is significant)
+  </text>
+
+  <!-- ============================================================ -->
+  <!-- RIGHT PANEL: SVD                                             -->
+  <!-- ============================================================ -->
+  <rect x="460" y="70" width="420" height="320" rx="8" fill="#f3fff5" stroke="#388E3C" stroke-width="1.5"/>
+  <text x="670" y="95" text-anchor="middle" font-size="14" font-weight="bold" fill="#1B5E20">
+    Synchronized Velocity Difference (SVD)
+  </text>
+  <text x="670" y="112" text-anchor="middle" font-size="11" fill="#444">
+    min_svd_kn -- difference between the ping's reported
+  </text>
+  <text x="670" y="126" text-anchor="middle" font-size="11" fill="#444">
+    velocity and the velocity implied by the chord.
+  </text>
+
+  <!-- Two anchor pings (kept) -->
+  <g fill="#1B5E20" stroke="#fff" stroke-width="1.5">
+    <circle cx="510" cy="280" r="6"/>
+    <circle cx="820" cy="200" r="6"/>
+  </g>
+  <text x="510" y="300" text-anchor="middle" font-size="11" fill="#1B5E20" font-weight="bold">P1</text>
+  <text x="820" y="220" text-anchor="middle" font-size="11" fill="#1B5E20" font-weight="bold">P3</text>
+
+  <!-- Chord-implied velocity vector at midpoint (green) -->
+  <line x1="660" y1="245" x2="730" y2="227" stroke="#2E7D32" stroke-width="3" marker-end="url(#thArrowGrn)"/>
+  <text x="660" y="265" font-size="10" fill="#2E7D32">v_chord = 8.0 kn</text>
+
+  <!-- Candidate ping P2 with reported velocity vector (red, faster + slightly off-direction) -->
+  <g fill="#C62828" stroke="#fff" stroke-width="1.5">
+    <circle cx="660" cy="245" r="6"/>
+  </g>
+  <text x="660" y="232" text-anchor="middle" font-size="11" fill="#C62828" font-weight="bold">P2</text>
+
+  <line x1="660" y1="245" x2="780" y2="200" stroke="#C62828" stroke-width="3" marker-end="url(#thArrowRed)"/>
+  <text x="745" y="220" font-size="10" fill="#C62828">v_AIS = 12.5 kn</text>
+
+  <!-- SVD label -->
+  <rect x="495" y="320" width="320" height="22" rx="3" fill="#fffde7" stroke="#fbc02d" stroke-width="1"/>
+  <text x="655" y="336" text-anchor="middle" font-size="12" fill="#5d4037" font-weight="bold">
+    SVD = |v_AIS - v_chord| = 4.5 kn
+  </text>
+
+  <!-- Decision text -->
+  <text x="670" y="360" text-anchor="middle" font-size="11" fill="#333">
+    SVD &lt; min_svd_kn  -&gt; drop P2 (speed change is jitter)
+  </text>
+  <text x="670" y="376" text-anchor="middle" font-size="11" fill="#333">
+    SVD &gt;= min_svd_kn -&gt; keep P2 (genuine accel/decel)
+  </text>
+
+  <!-- ============================================================ -->
+  <!-- Footer note                                                  -->
+  <!-- ============================================================ -->
+  <text x="450" y="410" text-anchor="middle" font-size="11" fill="#444">
+    A ping is dropped only if BOTH SED &lt; min_sed_m AND SVD &lt; min_svd_kn -- so either turn or accel is enough to keep it.
+  </text>
+</svg>

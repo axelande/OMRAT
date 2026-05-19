@@ -128,7 +128,13 @@ class DriftingReportBuilderMixin:
         cat_key = f"{ship_type}-{ship_size}"
         scat = rec['ship_categories'].setdefault(cat_key, {'allision': 0.0, 'grounding': 0.0, 'freq': 0.0})
         scat[event] += contrib
-        scat['freq'] += freq
+        # ``freq`` is the cell's annual ships/year — invariant across
+        # the per-obstacle-edge calls that share the same (leg, dir,
+        # angle, cat).  Accumulating with += inflates by the obstacle-
+        # edge count and produces nonsensical "Annual Frequency" values
+        # in the breakdown table.  Risk math is unaffected (it uses
+        # ``freq`` once via ``base`` in drifting_model.py).
+        scat['freq'] = freq
 
         # Per-structure per leg-direction accumulation (allision only)
         try:

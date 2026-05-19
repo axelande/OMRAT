@@ -74,7 +74,33 @@ class GatherData:
         # Persist the junction transition matrices.  Empty dict is fine
         # — the load path falls back to geometric defaults if missing.
         self.data['junctions'] = self.get_junctions_for_save()
+        # Write-once snapshot of imported segment endpoints.  See
+        # ``omrat_utils/audit_report.py`` for how this is consumed.
+        self.data['segments_imported'] = self.get_segments_imported_for_save()
         return self.data
+
+    def get_segments_imported_for_save(self) -> dict[str, dict[str, str]]:
+        """Snapshot endpoints captured at import / first-digitize time.
+
+        Seeds from the current ``segment_data`` for any leg that has no
+        recorded import — so legacy projects (saved before the audit
+        feature) get a baseline on first save instead of staying empty.
+        Once stamped, an entry is never overwritten.
+        """
+        existing = dict(getattr(self.p, 'segments_imported', {}) or {})
+        for sid, seg in (self.p.segment_data or {}).items():
+            if sid in existing:
+                continue
+            sp = seg.get('Start_Point') if isinstance(seg, dict) else None
+            ep = seg.get('End_Point') if isinstance(seg, dict) else None
+            if sp and ep:
+                existing[str(sid)] = {
+                    'Start_Point': str(sp),
+                    'End_Point': str(ep),
+                }
+        # Mirror back so subsequent saves see the seeded baseline.
+        self.p.segments_imported = existing
+        return existing
 
     def get_junctions_for_save(self) -> dict[str, Any]:
         """Snapshot the junction registry for the .omrat file."""
@@ -281,6 +307,17 @@ class GatherData:
         self.p.segment_data = data['segment_data']
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']
+        # Load the write-once segments_imported snapshot.  Absent on
+        # legacy files — ``get_all_for_save`` seeds it on next save.
+        imported_raw = data.get('segments_imported') or {}
+        self.p.segments_imported = {
+            str(sid): {
+                'Start_Point': str(rec.get('Start_Point', '')),
+                'End_Point': str(rec.get('End_Point', '')),
+            }
+            for sid, rec in imported_raw.items()
+            if isinstance(rec, dict)
+        }
         for key, item in data['segment_data'].items():
             self.p.segment_data[key]['dist1'] = np.array(item['dist1'])
             self.p.segment_data[key]['dist2'] = np.array(item['dist2'])

@@ -132,7 +132,7 @@ class HandleQGISIface:
                 self.cur_route_id,
                 self.current_start_point.asWkt(),
                 point.asWkt(),
-                f"LEG_{self.segment_id}_{self.cur_route_id}"  # Label value
+                f"LEG_{self.cur_route_id}_{self.segment_id}"  # Label value
             ])
             # Style the layer
             self.style_layer(vl)
@@ -301,7 +301,7 @@ class HandleQGISIface:
         from the in-memory dict; rebuilds the route table rows
         directly so the actual ``Width`` and ``Leg_name`` values are
         preserved (``save_route`` would hardcode ``5000`` and
-        ``LEG_{id}_{route}``).
+        ``LEG_{route}_{id}``).
         """
         widget = self.omrat.main_widget
         if widget is None:
@@ -375,7 +375,7 @@ class HandleQGISIface:
                 width = float(seg.get('Width', 5000))
             except (TypeError, ValueError):
                 width = 5000.0
-            leg_name = str(seg.get('Leg_name', f'LEG_{fid}_{route_id}'))
+            leg_name = str(seg.get('Leg_name', f'LEG_{route_id}_{fid}'))
 
             row_id = widget.twRouteList.rowCount()
             widget.twRouteList.setRowCount(row_id + 1)
@@ -556,7 +556,7 @@ class HandleQGISIface:
         item3 = QTableWidgetItem(f'{point1.asWkt(precision=5).split("(")[1].split(")")[0]}')
         item4 = QTableWidgetItem(f'{point2.asWkt(precision=5).split("(")[1].split(")")[0]}')
         item5 = QTableWidgetItem(f'5000')  # Default width
-        item6 = QTableWidgetItem(f'LEG_{self.segment_id}_{self.cur_route_id}')  # Leg name
+        item6 = QTableWidgetItem(f'LEG_{self.cur_route_id}_{self.segment_id}')  # Leg name
 
         # Add items to the table
         self.omrat.main_widget.twRouteList.setItem(row_id, 0, item1)
@@ -626,8 +626,19 @@ class HandleQGISIface:
                                                                                      self.current_start_point.y()).asWkt(),
                                                 'End_Point': point.asWkt(),
                                                 'Dirs': dirs, 'Width': 5000, 'line_length': dist,
-                                                'Route_Id': self.cur_route_id, 
-                                                'Leg_name': f'LEG_{self.segment_id}_{self.cur_route_id}'}
+                                                'Route_Id': self.cur_route_id,
+                                                'Segment_Id': self.segment_id,
+                                                'Leg_name': f'LEG_{self.cur_route_id}_{self.segment_id}'}
+            # Stamp the write-once import baseline for the audit report.
+            imported = getattr(self.omrat, 'segments_imported', None)
+            if isinstance(imported, dict) and f'{self.segment_id}' not in imported:
+                imported[f'{self.segment_id}'] = {
+                    'Start_Point': QgsPoint(
+                        self.current_start_point.x(),
+                        self.current_start_point.y(),
+                    ).asWkt(),
+                    'End_Point': point.asWkt(),
+                }
         self.leg_dirs[f'{self.segment_id}'] = dirs
         main_widget.cbTrafficSelectSeg.addItem(f'{self.segment_id}')
         self.omrat.traffic.c_seg = f'{self.segment_id}'
@@ -738,12 +749,18 @@ class HandleQGISIface:
     def _parse_wkt_xy(text: str | None) -> tuple[float, float] | None:
         """Parse the OMRAT segment-table point format ``"lon lat"``.
 
-        Tolerant of leading/trailing whitespace and of comma-separated
-        forms.  Returns ``None`` for missing / malformed input.
+        Tolerant of leading/trailing whitespace, of comma-separated forms,
+        and of the full WKT shapes ``"Point (lon lat)"`` /
+        ``"POINT(lon lat)"`` that ``update_segment_data`` writes for
+        freshly-drawn legs via ``QgsPoint.asWkt()``.  Returns ``None`` for
+        missing / malformed input.
         """
         if not isinstance(text, str):
             return None
-        parts = text.replace(',', ' ').split()
+        s = text.strip()
+        if '(' in s and ')' in s:
+            s = s.split('(', 1)[1].split(')', 1)[0]
+        parts = s.replace(',', ' ').split()
         if len(parts) < 2:
             return None
         try:

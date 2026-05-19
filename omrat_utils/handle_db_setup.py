@@ -140,6 +140,9 @@ class IntroPage(QWizardPage):
         layout.addWidget(intro)
 
         btn_row = QHBoxLayout()
+        btn_help = QPushButton("Open full guide (Database setup &amp; AIS ingestion)")
+        btn_help.clicked.connect(self._open_help_page)
+        btn_row.addWidget(btn_help)
         btn_docker = QPushButton("Open Docker quickstart (README)")
         btn_docker.clicked.connect(self._open_docker_readme)
         btn_row.addWidget(btn_docker)
@@ -147,6 +150,33 @@ class IntroPage(QWizardPage):
         layout.addLayout(btn_row)
 
         layout.addStretch(1)
+
+    def _open_help_page(self) -> None:
+        """Open the in-plugin Sphinx help page for database setup.
+
+        Prefers the built HTML at ``help/build/html/database_setup.html``;
+        falls back to the RST source so the page is still readable on
+        installs that didn't ship the build output.
+        """
+        plugin_root = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..")
+        )
+        candidates = (
+            os.path.join(plugin_root, "help", "build", "html", "database_setup.html"),
+            os.path.join(plugin_root, "help", "source", "database_setup.rst"),
+            os.path.join(plugin_root, "docs", "database_setup.md"),
+        )
+        for path in candidates:
+            if os.path.isfile(path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+                return
+        QMessageBox.information(
+            self,
+            "Database setup guide",
+            "The bundled help page was not found in this install.\n\n"
+            "Visit the OMRAT repository for setup instructions:\n"
+            "https://github.com/axelande/OMRAT",
+        )
 
     def _open_docker_readme(self) -> None:
         # README sits at <repo>/docker/README.md.  Resolve relative to this

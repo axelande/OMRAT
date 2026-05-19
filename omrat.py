@@ -23,8 +23,8 @@
 """
 from typing import Any, Callable
 from functools import partial
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaType
-from qgis.PyQt.QtGui import QIcon, QAction, QCloseEvent
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaType, QUrl
+from qgis.PyQt.QtGui import QIcon, QAction, QCloseEvent, QDesktopServices
 from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
 from qgis._core import QgsVectorDataProvider
 from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject,
@@ -119,7 +119,10 @@ class OMRAT(
         self.segment_id = 0
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
         self.segment_data: dict[str, Any] = {}
-        self.cur_route_id = 1
+        # Write-once snapshot of segment endpoints at first creation.
+        # Audit report diffs the live ``segment_data`` against this to
+        # surface waypoint moves that no other input reveals.
+        self.segments_imported: dict[str, dict[str, str]] = {}
         self.main_widget = OMRATMainWidget(plugin=self)
         self.qgis_geoms: HandleQGISIface = HandleQGISIface(self)
         self.drift_settings: DriftSettings = DriftSettings(self)
@@ -358,19 +361,12 @@ class OMRAT(
         # --- 2. Clear internal data structures ---
         self.traffic_data = {}
         self.segment_data = {}
+        self.segments_imported = {}
         self.segment_id = 0
-        self.cur_route_id = 1
 
         # Reset drift settings to defaults
-        rose = {'0': .125, '45': .125, '90': .125, '135': .125,
-                '180': .125, '225': .125, '270': .125, '315': .125}
-        repair: dict[str, str | float | bool] = {
-            'func': '', 'std': .95, 'loc': .2, 'scale': .85, 'use_lognormal': True
-        }
-        default_drift: dict[str, Any] = {
-            'drift_p': 1, 'anchor_p': .95, 'anchor_d': 7,
-            'speed': 1 * 3600 / 1852, 'rose': rose, 'repair': repair
-        }
+        from compute.iwrap_defaults import default_drift_values
+        default_drift = default_drift_values()
         self.drift_values = default_drift
         self.drift_settings.drift_values = default_drift
 
@@ -576,7 +572,16 @@ class OMRAT(
         self.segment_id = 0
         crs = self.iface.mapCanvas().mapSettings().destinationCrs().authid()
         for key, seg_data in data["segment_data"].items():
-            name = f"Segment {seg_data['Route_Id']} - {seg_data['Segment_Id']}"
+            # Freshly-drawn legs may not have Segment_Id / Route_Id in the
+            # dict yet (those are filled in by GatherData.get_segment_tbl
+            # on save).  Fall back to the dict key and route 1 so the
+            # validation-pass reload doesn't KeyError mid-rebuild and
+            # wipe the canvas + route table.
+            seg_id = seg_data.get('Segment_Id', key)
+            route_id = seg_data.get('Route_Id', 1)
+            seg_data.setdefault('Segment_Id', seg_id)
+            seg_data.setdefault('Route_Id', route_id)
+            name = f"Segment {route_id} - {seg_id}"
             vl = QgsVectorLayer(f"LineString?crs=EPSG:4326", name, "memory")
             QgsProject.instance().addMapLayer(vl)
             
@@ -595,8 +600,8 @@ class OMRAT(
             start = self.point4326_from_wkt(seg_data["Start_Point"], crs)
             end = self.point4326_from_wkt(seg_data["End_Point"], crs)
             fet.setGeometry(QgsLineString([start, end]))
-            fet.setAttributes([seg_data["Segment_Id"], seg_data["Route_Id"], seg_data["Start_Point"], 
-                               seg_data["End_Point"], f"LEG_{seg_data['Segment_Id']}_{seg_data['Route_Id']}"])
+            fet.setAttributes([seg_data["Segment_Id"], seg_data["Route_Id"], seg_data["Start_Point"],
+                               seg_data["End_Point"], f"LEG_{seg_data['Route_Id']}_{seg_data['Segment_Id']}"])
             self.qgis_geoms.style_layer(vl)
             # Ensure feature id matches Segment_Id so geometry edits update correct row
             try:
@@ -879,8 +884,11 @@ class OMRAT(
                 layer.commitChanges()  # Save changes
             layer.triggerRepaint()  # Ensure the layer is refreshed
 
-        # Clear the current start point and increment the route ID
-        self.cur_route_id += 1
+        # Advance the route id on the leg-drawing handler -- that's the
+        # attribute the next "Add route" pass actually reads when it
+        # stamps Route_Id / Leg_name on freshly-drawn legs.
+        self.qgis_geoms.cur_route_id += 1
+        self.qgis_geoms.current_start_point = None
 
         # Set the active tool to "Pan Map"
         canvas: QgsMapCanvas | None = self.iface.mapCanvas()
@@ -910,6 +918,15 @@ class OMRAT(
         if getattr(self, 'junctions', None) is not None:
             self.junctions.rebuild_from_segments(prefer_user=True)
         open_junction_dialog(self)
+
+    _DOCS_BASE_URL = "https://axelande.github.io/OMRAT/"
+
+    def _open_docs_url(self, page: str) -> None:
+        """Open a page of the published Sphinx docs in the user's browser."""
+        QDesktopServices.openUrl(QUrl(self._DOCS_BASE_URL + page))
+
+    def _open_external_url(self, url: str) -> None:
+        QDesktopServices.openUrl(QUrl(url))
 
 
     def update_ais(self) -> None:
@@ -987,7 +1004,6 @@ class OMRAT(
             fileMenu = menubar.addMenu('File')
             SettingMenu = menubar.addMenu('Settings')
             ConsequenceMenu = menubar.addMenu('Consequence')
-            analyse_sen_Menu = menubar.addMenu('Analyse sensitivity')
             HelpMenu = menubar.addMenu('Help')
             
             # mnuSub1 = viewMenu.addMenu('Sub-menu')
@@ -1018,6 +1034,31 @@ class OMRAT(
             ConsequenceMenu.addAction(
                 "Catastrophe levels...",
                 self.consequence.run_catastrophe_levels_dialog,
+            )
+            HelpMenu.addAction(
+                "Documentation home",
+                partial(self._open_docs_url, ""),
+            )
+            HelpMenu.addAction(
+                "Quickstart",
+                partial(self._open_docs_url, "quickstart.html"),
+            )
+            HelpMenu.addAction(
+                "User guide",
+                partial(self._open_docs_url, "user_guide.html"),
+            )
+            HelpMenu.addAction(
+                "Database setup && AIS ingestion",
+                partial(self._open_docs_url, "database_setup.html"),
+            )
+            HelpMenu.addAction(
+                "Theory",
+                partial(self._open_docs_url, "theory.html"),
+            )
+            HelpMenu.addSeparator()
+            HelpMenu.addAction(
+                "Report a bug (GitHub issues)",
+                partial(self._open_external_url, "https://github.com/axelande/OMRAT/issues"),
             )
             #self.main_widget.actionSave_project.clicked.connect(self.save_work)
             #self.main_widget.actionOpen_project.clicked.connect(self.load_work)

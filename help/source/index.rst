@@ -40,6 +40,8 @@ Pick the path that fits what you're trying to do.
      - Read
    * - run OMRAT for the first time on the supplied example project
      - :ref:`quickstart`
+   * - set up an AIS database so OMRAT can pull traffic for legs
+     - :ref:`database-setup`
    * - learn what each tab of the plugin does
      - :ref:`user_guide`
    * - understand **what** the risk numbers mean
@@ -83,6 +85,7 @@ Contents
 
    overview
    installation
+   database_setup
    quickstart
    quickstart_from_scratch
 

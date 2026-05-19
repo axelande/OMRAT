@@ -277,7 +277,7 @@ class DriftingReportMixin:
                 except Exception:
                     pass
                 md_lines.append(
-                    f"| {legdir_key} | {disp} | {float(vals.get('freq', 0.0)):.2f} | {float(vals.get('allision', 0.0)):.3e} | {float(vals.get('grounding', 0.0)):.3e} |"
+                    f"| {legdir_key} | {disp} | {float(vals.get('freq', 0.0)):.0f} | {float(vals.get('allision', 0.0)):.3e} | {float(vals.get('grounding', 0.0)):.3e} |"
                 )
 
         md_lines.append("")

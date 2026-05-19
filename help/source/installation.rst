@@ -22,6 +22,10 @@ Optional:
 
 - **psycopg2** -- for PostgreSQL/AIS database connectivity (only needed
   if you import traffic from a remote AIS database).
+- **aissegments** and **aisdb** -- needed for the in-plugin AIS
+  ingestion pipeline (Database setup wizard).  Listed in
+  ``requirements.txt`` and installed automatically by qpip; see
+  :ref:`database-setup` for the full ingestion workflow.
 
 
 Installing the Plugin (recommended)

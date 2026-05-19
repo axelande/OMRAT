@@ -210,6 +210,21 @@ def build_full_report_markdown(
     md.append("")
 
     # ------------------------------------------------------------------
+    # 1b. Choices & Deltas — auto-derived audit section.
+    # ------------------------------------------------------------------
+    try:
+        from omrat_utils.audit_report import build_choices_and_deltas_markdown
+        audit_md = build_choices_and_deltas_markdown(data or {})
+        if audit_md:
+            md.append("---")
+            md.append("")
+            md.append(audit_md)
+            md.append("")
+    except Exception as exc:  # never let audit break the report
+        md.append(f"_Audit section unavailable: {exc}_")
+        md.append("")
+
+    # ------------------------------------------------------------------
     # 2. Drifting (verbatim from generate_drifting_report_markdown).
     # ------------------------------------------------------------------
     if drifting_md:

@@ -2,6 +2,9 @@ numpy
 pandas
 pytest
 pytest-cov
+# Security linter; ``tools/run_bandit.py`` is the canonical entry point
+# and is run in CI before any plugins.qgis.org upload.
+bandit>=1.7
 # pytest-qgis: pinned to axelande's fork (the upstream PyPI release lags
 # behind and doesn't yet include the fixes this CI needs).  Swap the
 # ``@main`` suffix for a tag (``@v1.2.3``) or commit SHA once a stable

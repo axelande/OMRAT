@@ -76,7 +76,7 @@ class VisualizationMixin:
             drifting_report=getattr(self, 'drifting_report', None),
             accident_kind='allision',
         )
-        dialog.exec()  # ``exec_`` was dropped in PyQt6 (QGIS 4).
+        dialog.exec()
 
     def run_powered_allision_visualization(self, data: dict[str, Any]) -> None:
         """Show an interactive Cat II powered allision visualisation dialog.

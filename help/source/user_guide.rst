@@ -166,6 +166,13 @@ If you have access to an AIS database:
 
 The query time is shown in the QGIS log panel.
 
+.. note::
+
+   No AIS database yet?  See :ref:`database-setup` for the end-to-end
+   guide: standing up the PostGIS schema, ingesting raw NMEA / CSV
+   files through the **Database setup wizard**, and verifying the
+   tables before clicking **Update AIS** in OMRAT.
+
 
 Depths tab
 ===========
@@ -461,6 +468,10 @@ AIS connection
    Values are stored in the project file; the password is stored in
    plain text, so treat ``.omrat`` files as sensitive if you fill
    this in.
+
+This dialog only stores credentials.  To stand up the database itself,
+ingest raw AIS files, and verify that segments are queryable, see
+:ref:`database-setup`.
 
 
 File menu

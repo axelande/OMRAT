@@ -157,6 +157,19 @@ class JunctionsModel(RootModel[Dict[str, JunctionModel]]):
     pass
 
 
+class ImportedSegmentEndpoints(BaseModel):
+    """Write-once snapshot of a leg's geometry as it was first created
+    (IWRAP import / first canvas digitize).  Diffed against the live
+    ``segment_data`` by the audit report to expose silent waypoint moves.
+    """
+    Start_Point: str
+    End_Point: str
+
+
+class SegmentsImported(RootModel[Dict[str, ImportedSegmentEndpoints]]):
+    pass
+
+
 class RootModelSchema(BaseModel):
     pc: PC
     drift: Drift
@@ -167,3 +180,4 @@ class RootModelSchema(BaseModel):
     ship_categories: Optional[ShipCategoriesModel] = None
     consequence: Optional[ConsequenceModel] = None
     junctions: Optional[JunctionsModel] = None
+    segments_imported: Optional[SegmentsImported] = None

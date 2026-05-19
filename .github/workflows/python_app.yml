@@ -49,3 +49,20 @@ jobs:
           export PYTHONPATH=\$PYTHONPATH:/app:/usr/share/qgis/python/plugins && \
           xvfb-run -s '+extension GLX -screen 0 1024x768x24' python3 -m pytest tests -s
         "
+
+  bandit:
+    # Security check on the files that ship to plugins.qgis.org.
+    # Fails on any medium- or high-severity finding.  See
+    # ``tools/run_bandit.py`` for the targets list (mirrors pb_tool.cfg)
+    # and the rationale behind the scoping.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        run: python -m pip install --upgrade pip "bandit>=1.7"
+      - name: Run bandit (gate on medium+ findings)
+        run: python tools/run_bandit.py

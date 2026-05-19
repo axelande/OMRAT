@@ -62,7 +62,7 @@ def mock_dsw():
     mock_widget.deleteLater = MagicMock()
     # For run
     dsw.show = MagicMock()
-    dsw.exec_ = MagicMock()
+    dsw.exec = MagicMock()
     dsw.findChild.return_value = MagicMock()
     dsw.pbTestRepair.clicked.connect = MagicMock()
     dsw.rbLogNormal.toggled.connect = MagicMock()

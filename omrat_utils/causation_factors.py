@@ -5,22 +5,14 @@ if TYPE_CHECKING:
 
 from qgis.PyQt.QtWidgets import QDialogButtonBox
 
+from compute.iwrap_defaults import default_pc_values
 from ui.causation_factor_widget import CausationFactorsWidget
 
 class CausationFactors:
     def __init__(self, parent: "OMRAT") -> None:
         self.p = parent
         self.cfw = CausationFactorsWidget()
-        self.data: dict[str, float] = {
-            'p_pc': 1.6E-4,      # Powered causation factor
-            'd_pc': 1,           # Drifting causation factor
-            'headon': 4.9E-5,    # Head-on collision causation factor (Fujii)
-            'overtaking': 1.1E-4, # Overtaking collision causation factor (Fujii)
-            'crossing': 1.3E-4,  # Crossing collision causation factor (Pedersen)
-            'bend': 1.3E-4,      # Bend collision causation factor (Pedersen)
-            'grounding': 1.6E-4, # Grounding causation factor
-            'allision': 1.9E-4   # Allision causation factor (Fujii)
-        }
+        self.data: dict[str, float] = default_pc_values()
         
     def commit_changes(self):
         # Powered and drifting causation factors
@@ -58,5 +50,4 @@ class CausationFactors:
         self.buttonBox: QDialogButtonBox | None = self.cfw.findChild(QDialogButtonBox, 'buttonBox')
         if isinstance(self.buttonBox, QDialogButtonBox):
             self.buttonBox.accepted.connect(self.commit_changes)
-        # PyQt6 (QGIS 4) dropped ``exec_``; ``exec`` exists in both.
         self.cfw.exec()

@@ -721,7 +721,7 @@ class RunHistoryMixin:
             'Delete from history + remove .gpkg file',
             lambda: self._delete_runs(run_ids, delete_gpkg=True),
         )
-        menu.exec_(tw.viewport().mapToGlobal(pos))
+        menu.exec(tw.viewport().mapToGlobal(pos))
 
     def _add_selected_run_to_map(self) -> None:
         """Load the selected run's per-run GeoPackage onto the canvas."""
