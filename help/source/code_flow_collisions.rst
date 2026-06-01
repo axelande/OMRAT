@@ -82,7 +82,11 @@ Data pulled from ``data``
      - Use
    * - ``traffic_data[leg][dir]['Frequency (ships/year)']``
      - Per-LOA, per-type frequency matrix.  Same structure as the
-       drifting model uses.
+       drifting model uses.  Values are read **after**
+       :func:`compute.data_preparation.apply_traffic_scaling` has
+       multiplied each cell by its ``Scaling (%) / 100`` -- so the
+       "easy option" global / per-row scaling on the Traffic tab is
+       inherited transparently.
    * - ``traffic_data[leg][dir]['Speed (knots)']``
      - Per-cell speed.  A cell can hold a scalar or a list; the code
        averages lists.

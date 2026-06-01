@@ -599,23 +599,38 @@ def capture_tabs(plugin) -> None:
     dock = configure_dock(plugin)
     tabs: QtWidgets.QTabWidget = dock.tabWidget
 
+    # ``traffic_width`` widens the dock just for the Traffic-tab shot --
+    # the new Scaling-controls group box on the left of the matrix needs
+    # ~260 extra px, so without the override the matrix gets a scrollbar
+    # and the screenshot looks clipped.  Other tabs stay at DOCK_WIDTH.
     tab_map = [
-        # (tab index, output filename, extra delay ms)
-        (0, 'ui_tab_route', 0),
-        (1, 'ui_tab_traffic', 0),
-        (2, 'ui_tab_depths', 0),
-        (3, 'ui_tab_objects', 0),
-        (4, 'ui_tab_results', 0),          # Run Analysis tab = Results
-        (5, 'ui_tab_drift_analysis', 0),
+        # (tab index, output filename, extra delay ms, width override or None)
+        (0, 'ui_tab_route', 0, None),
+        (1, 'ui_tab_traffic', 0, DOCK_WIDTH + 260),
+        (2, 'ui_tab_depths', 0, None),
+        (3, 'ui_tab_objects', 0, None),
+        (4, 'ui_tab_results', 0, None),          # Run Analysis tab = Results
+        (5, 'ui_tab_drift_analysis', 0, None),
     ]
 
     # Distributions aren't a separate tab -- they live inside Route_tab.
     # We alias the Route shot to ui_tab_distributions so docs that point
     # at that filename still resolve to a meaningful screenshot.
-    for idx, name, extra in tab_map:
+    for idx, name, extra, width_override in tab_map:
         tabs.setCurrentIndex(idx)
+        if width_override is not None and width_override != dock.width():
+            dock.resize(width_override, DOCK_HEIGHT)
+            _process(150)
+        elif width_override is None and dock.width() != DOCK_WIDTH:
+            dock.resize(DOCK_WIDTH, DOCK_HEIGHT)
+            _process(150)
         _process(250 + extra)
         grab_widget(dock, name)
+    # Restore the default width so subsequent capture passes
+    # (settings dialogs etc.) start from a known state.
+    if dock.width() != DOCK_WIDTH:
+        dock.resize(DOCK_WIDTH, DOCK_HEIGHT)
+        _process(150)
 
     tabs.setCurrentIndex(0)
     _process(200)
@@ -767,17 +782,44 @@ def capture_canvas_and_results(plugin, run_model: bool = False) -> None:
 
     else:
         # Dry screenshots: populate a convincing fake result set so the
-        # "after run" slots aren't blank.  The doc reader won't be able
-        # to tell this was a synthetic number without looking at the
-        # rest of the state, and a real run can always overwrite.
-        dock.LEPDriftAllision.setText('1.148e-01')
-        dock.LEPDriftingGrounding.setText('8.330e-03')
-        dock.LEPPoweredGrounding.setText('3.100e-05')
-        dock.LEPPoweredAllision.setText('1.700e-06')
-        dock.LEPHeadOnCollision.setText('4.900e-07')
-        dock.LEPOvertakingCollision.setText('1.100e-06')
-        dock.LEPCrossingCollision.setText('0.000e+00')
-        dock.LEPMergingCollision.setText('0.000e+00')
+        # "after run" slots aren't blank.  Writes go straight to
+        # ``TWAccidentResults`` because the legacy ``LEP*`` line-edit
+        # shims are only created by ``_setup_accident_results_table``
+        # inside ``OMRAT.run()`` -- and ``run()`` is the toolbar-icon
+        # handler, which this batch script bypasses.
+        #
+        # Synthetic numbers per row, in the same order as
+        # ``AccidentResultsMixin._ACCIDENT_ROWS``.  A real run can
+        # always overwrite.
+        fake_probs = [
+            '1.148e-01',  # Drifting allision
+            '8.330e-03',  # Drifting grounding
+            '1.700e-06',  # Powered allision
+            '3.100e-05',  # Powered grounding
+            '1.100e-06',  # Overtaking
+            '4.900e-07',  # Head-on
+            '0.000e+00',  # Crossing
+            '0.000e+00',  # Merging
+        ]
+        try:
+            # Make sure the table is configured + the legacy LE shims
+            # exist; idempotent.  Plugin attaches the mixin to itself,
+            # so the bound method lives on the plugin, not the dock.
+            setup = getattr(plugin, '_setup_accident_results_table', None)
+            if callable(setup):
+                setup()
+        except Exception as exc:
+            print(f'  WARN: accident-results setup failed: {exc}')
+
+        tw = getattr(dock, 'TWAccidentResults', None)
+        if tw is not None and tw.rowCount() >= len(fake_probs):
+            from qgis.PyQt import QtWidgets as _qtw
+            for row, txt in enumerate(fake_probs):
+                tw.setItem(row, 1, _qtw.QTableWidgetItem(txt))
+        else:
+            print('  WARN: TWAccidentResults missing / unconfigured; '
+                  'ui_results_filled will show empty cells')
+
         _process(200)
         dock.tabWidget.setCurrentIndex(4)
         grab_widget(dock, 'ui_results_filled')

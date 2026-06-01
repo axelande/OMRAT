@@ -250,9 +250,19 @@ Traffic data is stored in a nested dictionary::
        'Draught (meters)':       [[float, ...], ...],
        'Ship heights (meters)':  [[float, ...], ...],
        'Ship Beam (meters)':     [[float, ...], ...],
+       'Scaling (%)':            [[float, ...], ...],  # per-cell frequency multiplier (default 100)
    }
 
 Each value is a 2D array indexed by ``[ship_type_index][ship_size_index]``.
+
+``Scaling (%)`` is applied once at the top of ``CalculationTask.run``
+via ``compute.data_preparation.apply_traffic_scaling`` -- it
+multiplies every ``Frequency (ships/year)`` cell by
+``Scaling / 100`` (in place on the deep-copied compute data dict).
+Every downstream model reads the post-scaling Frequency, so the
+per-row "follow global" / global-spinbox UI on the Traffic tab is
+inherited by ship-ship, powered, drifting and consequence without
+any per-model code change.
 
 Segment Data
 ------------

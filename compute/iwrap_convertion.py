@@ -1633,15 +1633,18 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
                 num_types = len(omrat_ship_types_full)
                 num_intervals = len(parsed_intervals)
 
-                def create_empty_matrix():
-                    return [[0.0 for _ in range(num_intervals)] for _ in range(num_types)]
+                def create_empty_matrix(fill: float = 0.0):
+                    return [[fill for _ in range(num_intervals)] for _ in range(num_types)]
 
+                # ``Scaling (%)`` defaults to 100 so an imported IWRAP
+                # project computes identically to the source.
                 east_data = {
                     'Frequency (ships/year)': create_empty_matrix(),
                     'Speed (knots)': create_empty_matrix(),
                     'Draught (meters)': create_empty_matrix(),
                     'Ship heights (meters)': create_empty_matrix(),
                     'Ship Beam (meters)': create_empty_matrix(),
+                    'Scaling (%)': create_empty_matrix(100.0),
                 }
 
                 west_data = {
@@ -1650,6 +1653,7 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
                     'Draught (meters)': create_empty_matrix(),
                     'Ship heights (meters)': create_empty_matrix(),
                     'Ship Beam (meters)': create_empty_matrix(),
+                    'Scaling (%)': create_empty_matrix(100.0),
                 }
 
                 # Fill in data from IWRAP traffic distributions

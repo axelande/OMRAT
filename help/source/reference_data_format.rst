@@ -25,7 +25,7 @@ Top-level layout
 
 An ``.omrat`` file is a single JSON object.  The top-level keys are:
 
-.. code-block:: json
+.. code-block:: text
 
    {
      "pc":              { ... causation factors ... },
@@ -34,7 +34,8 @@ An ``.omrat`` file is a single JSON object.  The top-level keys are:
      "segment_data":    { ... per-leg geometry + distributions + ai ... },
      "depths":          [ [id, depth_m, wkt_polygon], ... ],
      "objects":         [ [id, height_m, wkt_polygon], ... ],
-     "ship_categories": { ... type names + LOA bins ... }
+     "ship_categories": { ... type names + LOA bins ... },
+     "traffic_scaling": { ... global multiplier + per-row follow flags ... }
    }
 
 Some optional keys are also emitted by the plugin when present:
@@ -89,7 +90,7 @@ project reopens with its last result visible.
 ``drift`` -- drifting model parameters
 ========================================
 
-.. code-block:: json
+.. code-block:: text
 
    "drift": {
      "drift_p": 1.0,
@@ -150,7 +151,7 @@ project reopens with its last result visible.
 ``traffic_data`` -- traffic matrix per leg/direction
 ====================================================
 
-.. code-block:: json
+.. code-block:: text
 
    "traffic_data": {
      "1": {
@@ -159,7 +160,8 @@ project reopens with its last result visible.
          "Speed (knots)":           [[0, 10, ...], [...], ...],
          "Draught (meters)":        [[0, 5.0, ...], [...], ...],
          "Ship heights (meters)":   [[0, 18.0, ...], [...], ...],
-         "Ship Beam (meters)":      [[0, 22.0, ...], [...], ...]
+         "Ship Beam (meters)":      [[0, 22.0, ...], [...], ...],
+         "Scaling (%)":             [[100, 100, ...], [...], ...]
        },
        "West going": { ... }
      },
@@ -174,6 +176,46 @@ that's ``(21, 15)``.
 
 Cells can be ``""``, ``0``, or a numeric value.  Empty cells are
 treated as zero and skipped in the inner loops.
+
+``Scaling (%)`` is a per-cell **frequency multiplier in percent**
+(default ``100`` -- no scaling).  Applied once at the top of
+:meth:`compute.calculation_task.CalculationTask.run` via
+:func:`compute.data_preparation.apply_traffic_scaling`:
+``Q_effective = Q * Scaling / 100``.  Every model reads
+``Frequency (ships/year)`` afterwards, so the multiplier is inherited
+by ship-ship, powered, drifting, and consequence in one shot.  AIS
+refresh + IWRAP import never overwrite this column, so a saved
+``+30 %`` survives every traffic update.
+
+
+``traffic_scaling`` -- project-level scaling state
+====================================================
+
+.. code-block:: text
+
+   "traffic_scaling": {
+     "global_percent": 130.0,
+     "follow_global": [true, false, true, true, ...]
+   }
+
+Companion to the per-cell ``Scaling (%)`` matrices in ``traffic_data``.
+
+* ``global_percent`` -- the value of the **Global scaling [%]** spinbox
+  on the Traffic tab.  Re-broadcast into the per-cell matrix whenever
+  it changes, but only for ship-type rows whose ``follow_global`` flag
+  is ``true``.  Compute never reads this number directly -- it reads
+  the per-cell matrix that the broadcast has already updated.
+* ``follow_global`` -- one boolean per ship-type row.  ``true`` means
+  "this type's Scaling cells track the global spinbox".  Toggling a
+  row ``true -> false`` keeps the current cell values; toggling
+  ``false -> true`` re-broadcasts the current global.  **Editing a
+  Scaling cell manually auto-unticks the row** -- the typed value is
+  the explicit "I want this row at X %" signal.
+
+Optional -- legacy projects pre-date this feature.  The legacy
+normaliser in :class:`omrat_utils.storage.Storage` seeds the block
+with ``global_percent = 100.0`` and ``follow_global = []`` (the
+empty list grows back to ``n_ship_types`` on first save).
 
 
 ``segment_data`` -- per-leg geometry and parameters
@@ -261,7 +303,7 @@ Lateral distribution
 
 A flat array of ``[id, depth_m, wkt_polygon]`` triples:
 
-.. code-block:: json
+.. code-block:: text
 
    "depths": [
      ["d1",  "5.0",  "POLYGON((14.08 55.22, ...))"],
@@ -303,7 +345,7 @@ height filter).
 ``ship_categories`` -- type + LOA bin definitions
 ====================================================
 
-.. code-block:: json
+.. code-block:: text
 
    "ship_categories": {
      "types": [
@@ -334,7 +376,7 @@ When a project is saved **after** a successful run, the risk results
 are written into the same file for convenience.  They are NOT inputs
 -- loading a file ignores them; **Run Model** overwrites them.
 
-.. code-block:: json
+.. code-block:: text
 
    "results": {
      "drifting_allision_prob": 1.148e-01,

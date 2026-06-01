@@ -272,3 +272,244 @@ class TestUnload:
         traffic.unload()  # first call
         # Second call: signals already disconnected -> TypeError caught.
         traffic.unload()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Scaling (%) -- the "easy option" frequency multiplier
+# ---------------------------------------------------------------------------
+
+class TestScalingDefaultsAndShape:
+    def test_create_empty_dict_seeds_scaling_at_100(self, traffic):
+        """``Scaling (%)`` is a sibling of Frequency etc. and defaults to
+        100 in every cell, so a project compute identically until the
+        user touches it."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        scaling = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert scaling == [[100.0, 100.0], [100.0, 100.0]]
+
+    def test_create_empty_dict_keeps_frequency_at_zero(self, traffic):
+        """Sanity-check the existing Frequency default didn't regress when
+        Scaling was added to the variable list."""
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        freq = traffic.traffic_data['L1']['East']['Frequency (ships/year)']
+        assert freq == [[0, 0], [0, 0]]
+
+    def test_ensure_scaling_present_seeds_missing(self, traffic):
+        """Legacy projects have no Scaling matrix; ensure_scaling_present
+        adds a default-100 matrix shaped from Frequency."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.traffic_data['L1'] = {
+            'East': {
+                'Frequency (ships/year)': [[5.0, 0.0], [0.0, 0.0]],
+            },
+        }
+        traffic.ensure_scaling_present()
+        assert traffic.traffic_data['L1']['East'][SCALING_VAR] == [
+            [100.0, 100.0], [100.0, 100.0],
+        ]
+
+    def test_ensure_scaling_present_leaves_existing_alone(self, traffic):
+        """An already-edited Scaling matrix must not be overwritten."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.traffic_data['L1'] = {
+            'East': {
+                'Frequency (ships/year)': [[5.0, 0.0], [0.0, 0.0]],
+                SCALING_VAR: [[130.0, 100.0], [100.0, 100.0]],
+            },
+        }
+        traffic.ensure_scaling_present()
+        assert traffic.traffic_data['L1']['East'][SCALING_VAR] == [
+            [130.0, 100.0], [100.0, 100.0],
+        ]
+
+    def test_ensure_scaling_present_pads_undersized_rows(self, traffic):
+        """If columns were added since save, the existing rows are padded
+        with 100 -- new bins default to no scaling."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        # Freq has 2 cols; existing Scaling has 1 -> right-pad to 2.
+        traffic.traffic_data['L1'] = {
+            'East': {
+                'Frequency (ships/year)': [[5.0, 0.0], [0.0, 0.0]],
+                SCALING_VAR: [[130.0], [100.0]],
+            },
+        }
+        traffic.ensure_scaling_present()
+        scaling = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert scaling[0] == [130.0, 100.0]
+        assert scaling[1] == [100.0, 100.0]
+
+
+class TestEnsureFollowGlobal:
+    def test_seeds_default_true_per_row(self, traffic):
+        traffic.set_table_headings()
+        traffic.ensure_follow_global()
+        flags = traffic._project_scaling()['follow_global']
+        assert flags == [True, True]
+
+    def test_extends_when_more_types(self, traffic):
+        traffic.set_table_headings()
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 100.0,
+            'follow_global': [False],
+        }
+        traffic.ensure_follow_global(n_types=3)
+        flags = traffic._project_scaling()['follow_global']
+        # Existing False preserved, new rows default True.
+        assert flags == [False, True, True]
+
+    def test_truncates_when_fewer_types(self, traffic):
+        traffic.set_table_headings()
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 100.0,
+            'follow_global': [True, False, True, False],
+        }
+        traffic.ensure_follow_global(n_types=2)
+        flags = traffic._project_scaling()['follow_global']
+        assert flags == [True, False]
+
+
+class TestApplyGlobalScaling:
+    def test_broadcasts_to_all_ticked_rows(self, traffic):
+        """A global value floods every (seg, dir, type, len) cell of
+        types whose ``follow_global`` bit is True."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East', 'West'])
+        traffic.ensure_follow_global()
+        # Default is [True, True]; broadcast 130 should hit both rows.
+        traffic.apply_global_scaling(value=130.0, refresh_table=False)
+        for direction in ('East', 'West'):
+            mat = traffic.traffic_data['L1'][direction][SCALING_VAR]
+            assert mat == [[130.0, 130.0], [130.0, 130.0]]
+        # And the project-level state remembers the new global.
+        assert traffic._project_scaling()['global_percent'] == pytest.approx(130.0)
+
+    def test_skips_unticked_rows(self, traffic):
+        """A row whose checkbox is unticked keeps its existing values."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        # Untick row 0 (Cargo) -- it must remain at 100 even after
+        # broadcasting 130.  Row 1 (Tanker) follows the global.
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 100.0,
+            'follow_global': [False, True],
+        }
+        traffic.apply_global_scaling(value=130.0, refresh_table=False)
+        mat = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert mat[0] == [100.0, 100.0]   # unticked row left alone
+        assert mat[1] == [130.0, 130.0]   # ticked row follows global
+
+    def test_default_value_pulled_from_project_scaling(self, traffic):
+        """``value=None`` falls back to the stored global_percent."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        # Pretend main_widget is missing the spinbox so the fallback
+        # path is taken (project_scaling.global_percent).
+        traffic.omrat.main_widget = None
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 75.0,
+            'follow_global': [True, True],
+        }
+        traffic.apply_global_scaling(value=None, refresh_table=False)
+        mat = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert mat == [[75.0, 75.0], [75.0, 75.0]]
+
+
+class TestFollowGlobalToggle:
+    def test_newly_ticked_row_rebroadcasts_global(self, traffic):
+        """Toggling a row from unticked -> ticked pushes the current
+        global value back into that row's cells."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 150.0,
+            'follow_global': [False, False],
+        }
+        # Both rows currently at 100; row 0 has been edited but never
+        # broadcast.  Tick row 1 -> row 1 should jump to 150.
+        traffic._on_follow_global_toggled(1, True)
+        mat = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert mat[0] == [100.0, 100.0]  # still unticked
+        assert mat[1] == [150.0, 150.0]
+        assert traffic._project_scaling()['follow_global'] == [False, True]
+
+    def test_untick_only_flips_the_flag(self, traffic):
+        """Unticking a row leaves the cell values where they are; the
+        user keeps whatever the global last broadcast (no surprise
+        zeros)."""
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 130.0,
+            'follow_global': [True, True],
+        }
+        traffic.apply_global_scaling(value=130.0, refresh_table=False)
+        traffic._on_follow_global_toggled(0, False)
+        mat = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert mat[0] == [130.0, 130.0]  # cell values stay
+        assert traffic._project_scaling()['follow_global'] == [False, True]
+
+
+class TestScalingCellEditedUnticks:
+    def test_manual_edit_unticks_the_row(self, traffic):
+        """Editing a cell in the Scaling view is the "manual override"
+        signal -- the row's follow_global flag flips off so future
+        global broadcasts skip it."""
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 100.0,
+            'follow_global': [True, True],
+        }
+        # Simulate the spinbox.valueChanged callback for row 0.
+        traffic._on_scaling_cell_edited(0, 130.0)
+        assert traffic._project_scaling()['follow_global'] == [False, True]
+
+    def test_edit_on_already_unticked_row_is_noop(self, traffic):
+        """If the row is already manual, an edit must not flip anything
+        else and must not raise."""
+        traffic.set_table_headings()
+        traffic.omrat.traffic_scaling = {
+            'global_percent': 100.0,
+            'follow_global': [False, True],
+        }
+        traffic._on_scaling_cell_edited(0, 130.0)  # already False
+        assert traffic._project_scaling()['follow_global'] == [False, True]
+
+
+class TestSaveRoundTripsScalingValues:
+    """Editing the Scaling table and calling ``save`` must persist the
+    typed values back into ``traffic_data`` -- the same path Frequency
+    uses, so a 130 % entry survives a save / re-open."""
+
+    def test_save_stores_scaling_doublespinbox_values(self, traffic):
+        from qgis.PyQt.QtWidgets import QDoubleSpinBox
+        from omrat_utils.handle_traffic import SCALING_VAR
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        # Install QDoubleSpinBoxes in every cell with known scaling values.
+        values = [[130.5, 100.0], [50.0, 200.0]]
+        for r in range(2):
+            for c in range(2):
+                sb = QDoubleSpinBox()
+                sb.setRange(0.0, 100000.0)
+                sb.setDecimals(1)
+                sb.setValue(values[r][c])
+                traffic.dw.twTrafficData.setCellWidget(r, c, sb)
+        traffic.c_seg = 'L1'
+        traffic.c_di = 'East'
+        traffic.last_var = SCALING_VAR
+        traffic.save()
+        stored = traffic.traffic_data['L1']['East'][SCALING_VAR]
+        assert stored[0][0] == pytest.approx(130.5)
+        assert stored[1][1] == pytest.approx(200.0)

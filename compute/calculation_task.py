@@ -81,6 +81,15 @@ class CalculationTask(QgsTask):
         )
 
         try:
+            # Apply the project-level traffic-scaling matrix *before* any
+            # model touches Q.  ``self.data['traffic_data']`` is already
+            # a deep copy made in ``GatherData.get_all_for_save``, so the
+            # mutation here cannot leak back into the live UI state.
+            # Missing scaling cells default to 100% -- legacy projects
+            # compute exactly as before.
+            from compute.data_preparation import apply_traffic_scaling
+            apply_traffic_scaling(self.data)
+
             # Inject progress callback into the calculation
             if hasattr(self.calc, 'set_progress_callback'):
                 def progress_wrapper(completed: int, total: int, message: str) -> bool:

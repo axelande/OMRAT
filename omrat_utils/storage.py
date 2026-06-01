@@ -127,7 +127,7 @@ class Storage:
             seg.setdefault('dist1', [])
             seg.setdefault('dist2', [])
         out['segment_data'] = segs
-        # traffic_data ensure Ship Beam (meters)
+        # traffic_data ensure Ship Beam (meters) + Scaling (%)
         td = out.get('traffic_data', {}) or {}
         for leg_id, dirs in td.items():
             for dir_name, dir_data in dirs.items():
@@ -141,7 +141,39 @@ class Storage:
                         except Exception:
                             beam.append([])
                     dir_data['Ship Beam (meters)'] = beam
+                # Seed Scaling (%) as a default-100 matrix shaped from
+                # Frequency.  Existing matrices are left alone (only
+                # padded if the shape changed since save).
+                freq = dir_data.get('Frequency (ships/year)', [])
+                existing = dir_data.get('Scaling (%)')
+                tgt_rows = len(freq) if freq else 0
+                tgt_cols = len(freq[0]) if (tgt_rows and hasattr(freq[0], '__len__')) else 0
+                if not isinstance(existing, list) or len(existing) != tgt_rows:
+                    dir_data['Scaling (%)'] = [
+                        [100.0] * tgt_cols for _ in range(tgt_rows)
+                    ]
+                else:
+                    for r in range(tgt_rows):
+                        if r >= len(existing) or not isinstance(existing[r], list):
+                            existing[r] = [100.0] * tgt_cols
+                            continue
+                        row_list = existing[r]
+                        if len(row_list) < tgt_cols:
+                            row_list.extend([100.0] * (tgt_cols - len(row_list)))
+                        elif len(row_list) > tgt_cols:
+                            del row_list[tgt_cols:]
         out['traffic_data'] = td
+        # Seed the project-level traffic-scaling state on legacy projects
+        # that pre-date the scaling feature.
+        scaling_block = out.get('traffic_scaling')
+        if not isinstance(scaling_block, dict):
+            out['traffic_scaling'] = {
+                'global_percent': 100.0,
+                'follow_global': [],
+            }
+        else:
+            scaling_block.setdefault('global_percent', 100.0)
+            scaling_block.setdefault('follow_global', [])
         # drift defaults
         drift = out.get('drift', {}) or {}
         repair = drift.get('repair', {}) or {}

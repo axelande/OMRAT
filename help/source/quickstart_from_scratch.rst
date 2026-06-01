@@ -9,6 +9,19 @@ This chapter shows the same workflow but **starting with a blank
 QGIS project**: how to draw your first leg, set its width, bring in
 depth and object data, and produce a first risk number.
 
+.. note::
+
+   A real-world project usually pulls its traffic counts from a
+   PostGIS AIS database via the **Update AIS** / **Update all
+   distributions** buttons -- not from manual entry.  Setting that
+   database up (schema, raw-NMEA / CSV ingestion, vessel-lookup
+   table, AIS connection settings) is its own multi-step task and is
+   covered end-to-end in :ref:`database-setup`.  If you'll need real
+   AIS traffic for your project, **read that chapter first** so the
+   database is ready before you reach the Traffic tab step below;
+   otherwise you'll either fill the matrix in by hand or come back
+   later.
+
 .. contents:: In this chapter
    :local:
    :depth: 1

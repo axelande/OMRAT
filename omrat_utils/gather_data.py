@@ -74,6 +74,17 @@ class GatherData:
         # Persist the junction transition matrices.  Empty dict is fine
         # — the load path falls back to geometric defaults if missing.
         self.data['junctions'] = self.get_junctions_for_save()
+        # Persist the project-level traffic-scaling state (global spinbox
+        # + per-type "follow global" booleans).  The per-cell ``Scaling
+        # (%)`` matrices ride inside ``traffic_data`` already.
+        from omrat_utils.handle_traffic import _default_traffic_scaling
+        scaling = getattr(self.p, 'traffic_scaling', None)
+        if not isinstance(scaling, dict):
+            scaling = _default_traffic_scaling()
+        self.data['traffic_scaling'] = {
+            'global_percent': float(scaling.get('global_percent', 100.0)),
+            'follow_global': [bool(x) for x in scaling.get('follow_global', [])],
+        }
         # Write-once snapshot of imported segment endpoints.  See
         # ``omrat_utils/audit_report.py`` for how this is consumed.
         self.data['segments_imported'] = self.get_segments_imported_for_save()
@@ -304,6 +315,36 @@ class GatherData:
         # __init__; update it too so cbTrafficDirectionSelect gets populated.
         if hasattr(self.p, 'traffic') and self.p.traffic is not None:
             self.p.traffic.traffic_data = self.p.traffic_data
+        # Project-level traffic-scaling state (global spinbox + follow-global
+        # flags).  Optional on legacy projects -- the normalizer + the
+        # Traffic helpers default it to 100% / all-ticked.
+        from omrat_utils.handle_traffic import _default_traffic_scaling
+        scaling_block = data.get('traffic_scaling')
+        if isinstance(scaling_block, dict):
+            try:
+                gp = float(scaling_block.get('global_percent', 100.0))
+            except (TypeError, ValueError):
+                gp = 100.0
+            flags = [bool(x) for x in scaling_block.get('follow_global', [])]
+            self.p.traffic_scaling = {'global_percent': gp, 'follow_global': flags}
+        else:
+            self.p.traffic_scaling = _default_traffic_scaling()
+        # Reflect the loaded global value in the UI spinbox (if it exists).
+        sb = getattr(self.p.main_widget, 'dsbGlobalTrafficScaling', None)
+        if sb is not None:
+            try:
+                sb.blockSignals(True)
+                sb.setValue(float(self.p.traffic_scaling['global_percent']))
+            finally:
+                sb.blockSignals(False)
+        traffic = getattr(self.p, 'traffic', None)
+        # The two scaling helpers live on the real ``Traffic`` instance
+        # only -- regression tests stub ``self.p.traffic`` with a
+        # ``SimpleNamespace``, so guard with ``hasattr`` before calling.
+        if traffic is not None and hasattr(traffic, 'ensure_scaling_present'):
+            traffic.ensure_scaling_present()
+        if traffic is not None and hasattr(traffic, 'populate_scaling_checkboxes'):
+            traffic.populate_scaling_checkboxes()
         self.p.segment_data = data['segment_data']
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']

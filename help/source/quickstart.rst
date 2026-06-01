@@ -11,6 +11,17 @@ result.  Every concept used here (leg, obstacle, traffic cell, drift
 corridor, causation factor, ...) is defined in :ref:`concepts`, and
 every tab is documented in detail in :ref:`user_guide`.
 
+.. note::
+
+   This quickstart uses the **bundled example project**, which already
+   has its traffic matrix populated -- you can produce a risk number
+   without an AIS database at all.  If you want to run OMRAT against
+   your **own** route, you'll either fill in the Traffic tab by hand
+   or pull live counts from a PostGIS AIS database.  The end-to-end
+   guide to standing up that database -- schema, raw-NMEA / CSV
+   ingestion, vessel-lookup table, and the **Update AIS** button --
+   is :ref:`database-setup`.  Read it before you start a real project.
+
 .. contents:: In this chapter
    :local:
    :depth: 1

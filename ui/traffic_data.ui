@@ -77,6 +77,11 @@
           <string>Ship heights (meters)</string>
          </property>
         </item>
+        <item>
+         <property name="text">
+          <string>Scaling (%)</string>
+         </property>
+        </item>
        </widget>
       </item>
      </layout>

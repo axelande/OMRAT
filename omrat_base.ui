@@ -943,12 +943,131 @@ QToolTip {
                 <string>Ship heights (meters)</string>
                </property>
               </item>
+              <item>
+               <property name="text">
+                <string>Scaling (%)</string>
+               </property>
+              </item>
              </widget>
             </item>
            </layout>
           </item>
           <item>
-           <widget class="QTableWidget" name="twTrafficData"/>
+           <layout class="QHBoxLayout" name="hlTrafficBody">
+            <item>
+             <widget class="QGroupBox" name="gbScalingControls">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Fixed" vsizetype="Expanding">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>260</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Traffic scaling controls.  Untick the title to collapse this panel and reclaim the space.</string>
+              </property>
+              <property name="title">
+               <string>Traffic scaling</string>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="checked">
+               <bool>false</bool>
+              </property>
+              <layout class="QVBoxLayout" name="vlScalingControlsOuter">
+               <item>
+                <widget class="QWidget" name="wScalingContent" native="true">
+                 <property name="visible">
+                  <bool>false</bool>
+                 </property>
+                 <layout class="QVBoxLayout" name="vlScalingContent">
+                  <property name="leftMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="rightMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="topMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="bottomMargin">
+                   <number>0</number>
+                  </property>
+                  <item>
+                   <widget class="QLabel" name="lbGlobalScaling">
+                    <property name="text">
+                     <string>Global scaling [%]</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QDoubleSpinBox" name="dsbGlobalTrafficScaling">
+                    <property name="toolTip">
+                     <string>Multiplier applied to Frequency for every ship-type row whose "Follow global" checkbox is ticked.  Editing a cell in the Scaling (%) view auto-unticks that row so the typed value sticks.</string>
+                    </property>
+                    <property name="suffix">
+                     <string> %</string>
+                    </property>
+                    <property name="decimals">
+                     <number>1</number>
+                    </property>
+                    <property name="minimum">
+                     <double>0.000000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>100000.000000000000000</double>
+                    </property>
+                    <property name="value">
+                     <double>100.000000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="pbResetTrafficScaling">
+                    <property name="text">
+                     <string>Reset all to 100%</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="lbFollowGlobalHeader">
+                    <property name="text">
+                     <string>Follow global per ship type:</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <layout class="QVBoxLayout" name="vlFollowGlobalCheckboxes"/>
+                  </item>
+                  <item>
+                   <spacer name="verticalSpacerScalingControls">
+                    <property name="orientation">
+                     <enum>Qt::Vertical</enum>
+                    </property>
+                    <property name="sizeHint" stdset="0">
+                     <size>
+                      <width>20</width>
+                      <height>40</height>
+                     </size>
+                    </property>
+                   </spacer>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTableWidget" name="twTrafficData"/>
+            </item>
+           </layout>
           </item>
          </layout>
         </widget>

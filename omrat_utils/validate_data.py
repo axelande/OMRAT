@@ -35,6 +35,12 @@ class TrafficDirectionData(BaseModel):
     Draught_meters: List[List[float]] = Field(alias="Draught (meters)")
     Ship_heights_meters: List[List[float]] = Field(alias="Ship heights (meters)")
     Ship_Beam_meters: List[List[float]] = Field(alias="Ship Beam (meters)")
+    # Per-(ship_type, length_idx) frequency multiplier in percent.  Default
+    # is 100 (no scaling).  Optional so legacy ``.omrat`` files validate; the
+    # legacy normalizer in ``storage.py`` fills in 100% matrices on load.
+    Scaling_percent: Optional[List[List[float]]] = Field(
+        default=None, alias="Scaling (%)",
+    )
 
 class TrafficLeg(RootModel[Dict[str, TrafficDirectionData]]):
     """A leg's traffic data, keyed by direction label.
@@ -170,6 +176,25 @@ class SegmentsImported(RootModel[Dict[str, ImportedSegmentEndpoints]]):
     pass
 
 
+class TrafficScalingModel(BaseModel):
+    """Project-level traffic scaling state.
+
+    Pairs with the per-(seg, dir, ship_type, length_idx) ``Scaling (%)``
+    matrices in ``traffic_data``.
+
+    * ``global_percent`` -- the UI's single "global scaling" spinbox value.
+      Saved so the value persists across reopens; it's also broadcast into
+      the per-cell matrix whenever ``follow_global`` is True for that row,
+      so compute never reads ``global_percent`` directly.
+    * ``follow_global`` -- one bool per ship-type row.  ``True`` means
+      "this row's cells track the global spinbox"; toggling the global
+      re-broadcasts.  ``False`` means "leave my values alone."  Editing a
+      cell manually auto-unticks the row (so the user's number sticks).
+    """
+    global_percent: float = 100.0
+    follow_global: List[bool] = Field(default_factory=list)
+
+
 class RootModelSchema(BaseModel):
     pc: PC
     drift: Drift
@@ -181,3 +206,4 @@ class RootModelSchema(BaseModel):
     consequence: Optional[ConsequenceModel] = None
     junctions: Optional[JunctionsModel] = None
     segments_imported: Optional[SegmentsImported] = None
+    traffic_scaling: Optional[TrafficScalingModel] = None

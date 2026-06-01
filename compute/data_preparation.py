@@ -16,6 +16,64 @@ from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
 
+SCALING_KEY = 'Scaling (%)'
+FREQ_KEY = 'Frequency (ships/year)'
+
+
+def apply_traffic_scaling(data: dict[str, Any]) -> None:
+    """Multiply every ``Frequency (ships/year)`` cell by its ``Scaling (%)`` / 100.
+
+    Mutates ``data['traffic_data']`` **in place**.  Callers must hand in
+    a deep-copy of the live UI state (the calculation pipeline already
+    does this via :meth:`omrat_utils.gather_data.GatherData.get_all_for_save`),
+    so the user's stored Q values stay untouched.
+
+    The scaling matrix is per ``(seg, dir, ship_type, length_idx)`` and
+    defaults to 100% (no-op) wherever it is missing -- so projects saved
+    before scaling existed still compute identically.
+    """
+    traffic = data.get('traffic_data') or {}
+    if not isinstance(traffic, dict):
+        return
+    for _seg, dirs in traffic.items():
+        if not isinstance(dirs, dict):
+            continue
+        for _di, var in dirs.items():
+            if not isinstance(var, dict):
+                continue
+            freq = var.get(FREQ_KEY)
+            if freq is None:
+                continue
+            scaling = var.get(SCALING_KEY)
+            for i, row in enumerate(freq):
+                if not hasattr(row, '__iter__'):
+                    continue
+                for j, q in enumerate(row):
+                    factor = 1.0
+                    if scaling is not None and i < len(scaling):
+                        s_row = scaling[i]
+                        if hasattr(s_row, '__iter__') and j < len(s_row):
+                            try:
+                                factor = float(s_row[j]) / 100.0
+                            except (TypeError, ValueError):
+                                factor = 1.0
+                    if factor == 1.0:
+                        continue
+                    # Pass through cells that aren't a finite number --
+                    # downstream models treat '' as 0 and use ``np.inf``
+                    # as a "no data" sentinel; we mustn't quietly turn
+                    # either into something else.
+                    if q == '' or q is None:
+                        continue
+                    try:
+                        q_val = float(q)
+                    except (TypeError, ValueError):
+                        continue
+                    if not np.isfinite(q_val):
+                        continue
+                    row[j] = q_val * factor
+
+
 def _is_qgis_available() -> bool:
     """Return True only when a real (non-mocked) QGIS environment is active.
 

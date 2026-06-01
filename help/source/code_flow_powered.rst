@@ -105,7 +105,10 @@ Both phases consume ``data``:
        :ref:`code-flow-drifting`).
    * - ``traffic_data[leg][dir]['Frequency (ships/year)'] / 'Speed (knots)'``
      - Per-cell frequency and speed; speed is averaged if the cell
-       holds a list.
+       holds a list.  Frequency is read **after**
+       :func:`compute.data_preparation.apply_traffic_scaling` has
+       applied the per-cell ``Scaling (%)`` multiplier (see the
+       :ref:`reference-data-format` chapter).
    * - ``traffic_data[leg][dir]['Draught (meters)']`` (grounding only)
      - Selects the depth bin.
    * - ``traffic_data[leg][dir]['Ship heights (meters)']`` (allision

@@ -119,6 +119,13 @@ class OMRAT(
         self.segment_id = 0
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
         self.segment_data: dict[str, Any] = {}
+        # Project-level traffic scaling -- global spinbox value + per-row
+        # "follow global" bool list.  Compute reads the per-cell matrix
+        # in ``traffic_data[...]['Scaling (%)']`` (kept in sync by the
+        # broadcast logic in ``omrat_utils.handle_traffic``); this dict
+        # is only the UI's bookkeeping for the global control.
+        from omrat_utils.handle_traffic import _default_traffic_scaling
+        self.traffic_scaling: dict[str, Any] = _default_traffic_scaling()
         # Write-once snapshot of segment endpoints at first creation.
         # Audit report diffs the live ``segment_data`` against this to
         # surface waypoint moves that no other input reveals.
@@ -361,6 +368,8 @@ class OMRAT(
         # --- 2. Clear internal data structures ---
         self.traffic_data = {}
         self.segment_data = {}
+        from omrat_utils.handle_traffic import _default_traffic_scaling
+        self.traffic_scaling = _default_traffic_scaling()
         self.segments_imported = {}
         self.segment_id = 0
 

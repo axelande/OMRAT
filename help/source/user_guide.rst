@@ -151,6 +151,44 @@ Variables
    * - Ship Beam (meters)
      - m
      - Ship-ship collision geometry.
+   * - Scaling (%)
+     - percent
+     - Per-cell **frequency multiplier** applied just before risk
+       integration.  ``100`` = no scaling (default).  See
+       *Scaling traffic up or down* below.
+
+Scaling traffic up or down
+--------------------------
+
+The Traffic tab has an **easy option** for bumping all (or some) of
+the traffic up or down by a percentage -- useful for "what if the
+forecast goes up 30 %?" sensitivities without editing every cell.
+
+All scaling controls live in a **Traffic scaling** group box to the
+left of the matrix.  The box is **collapsible and starts collapsed**
+so the matrix gets the full width on first open -- tick its title
+checkbox to expand the controls, untick again to fold them away.
+
+* **Global scaling [%]** spinbox inside the group is the master
+  multiplier.  ``130`` means *every ticked ship-type row gets its
+  Scaling (%) cells set to 130*, so :math:`Q_{effective} = Q \cdot
+  1.30` for those rows.
+* **Follow global per ship type** is the list of checkboxes below
+  the spinbox -- one per ship type.  Tick (default) = "follow the
+  global"; untick = "leave this row's values alone".  Use it to
+  exclude e.g. passenger traffic from a cargo-forecast bump.
+* Switch the **variable** dropdown to ``Scaling (%)`` to see and edit
+  the per-cell values directly.  Typing a value into a cell
+  **auto-unticks** that ship-type row -- the typed number is treated
+  as your explicit override and survives future global changes.
+* **Reset all to 100 %** clears every override: all checkboxes
+  re-tick, the global snaps to ``100``, every cell goes back to
+  ``100``.
+
+The scaling matrix is per-leg / per-direction, but the global
+broadcast covers every leg + direction at once.  AIS refresh and
+IWRAP import only overwrite Frequency -- never Scaling -- so a saved
+``+30 %`` survives every traffic update.
 
 Importing from AIS
 ------------------

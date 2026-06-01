@@ -120,6 +120,60 @@ class TestTrafficDataNormalisation:
                 == [[20.0]])
 
 
+class TestScalingMigration:
+    """Legacy projects pre-date the ``Scaling (%)`` column.  They must
+    still load and compute identically; the normaliser seeds 100% in
+    every cell and adds the project-level ``traffic_scaling`` block."""
+
+    def test_missing_scaling_column_backfilled_with_100(self, storage):
+        data = {
+            'traffic_data': {
+                '1': {
+                    'East going': {
+                        'Frequency (ships/year)': [[10.0, 20.0], [0.0, 5.0]],
+                        'Speed (knots)': [[10.0, 12.0], [5.0, 7.0]],
+                    },
+                },
+            },
+        }
+        out = storage._normalize_legacy_to_schema(data)
+        scaling = out['traffic_data']['1']['East going']['Scaling (%)']
+        assert scaling == [[100.0, 100.0], [100.0, 100.0]]
+
+    def test_existing_scaling_left_alone_but_padded(self, storage):
+        """Edited Scaling cells keep their values; new bins added since
+        the save use the 100% default."""
+        data = {
+            'traffic_data': {
+                '1': {
+                    'East going': {
+                        'Frequency (ships/year)': [[10.0, 20.0], [0.0, 5.0]],
+                        'Scaling (%)': [[130.0], [50.0]],  # missing 2nd col
+                    },
+                },
+            },
+        }
+        out = storage._normalize_legacy_to_schema(data)
+        scaling = out['traffic_data']['1']['East going']['Scaling (%)']
+        assert scaling[0] == [130.0, 100.0]
+        assert scaling[1] == [50.0, 100.0]
+
+    def test_traffic_scaling_block_seeded_when_missing(self, storage):
+        out = storage._normalize_legacy_to_schema({'traffic_data': {}})
+        assert out['traffic_scaling'] == {
+            'global_percent': 100.0, 'follow_global': [],
+        }
+
+    def test_existing_traffic_scaling_kept(self, storage):
+        data = {
+            'traffic_data': {},
+            'traffic_scaling': {'global_percent': 130.0, 'follow_global': [True, False]},
+        }
+        out = storage._normalize_legacy_to_schema(data)
+        assert out['traffic_scaling']['global_percent'] == 130.0
+        assert out['traffic_scaling']['follow_global'] == [True, False]
+
+
 # ---------------------------------------------------------------------------
 # drift.repair: use_lognormal/Normal migration + dist_type
 # ---------------------------------------------------------------------------

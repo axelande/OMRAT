@@ -88,11 +88,17 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.DistributionWidget: QtWidgets.QLayout
 
         #Traffic
-        self.cbTrafficSelectSeg: QtWidgets.QComboBox     
-        self.cbSelectType: QtWidgets.QComboBox     
-        self.cbTrafficDirectionSelect: QtWidgets.QComboBox  
-        self.twTrafficData: QtWidgets.QTableWidget   
-        
+        self.cbTrafficSelectSeg: QtWidgets.QComboBox
+        self.cbSelectType: QtWidgets.QComboBox
+        self.cbTrafficDirectionSelect: QtWidgets.QComboBox
+        self.twTrafficData: QtWidgets.QTableWidget
+        self.dsbGlobalTrafficScaling: QtWidgets.QDoubleSpinBox
+        self.pbResetTrafficScaling: QtWidgets.QPushButton
+        self.gbScalingControls: QtWidgets.QGroupBox
+        self.wScalingContent: QtWidgets.QWidget
+        self.vlFollowGlobalCheckboxes: QtWidgets.QVBoxLayout
+
+
         # Depths
         self.pbAddSimpleDepth: QtWidgets.QPushButton
         self.pbLoadDepth: QtWidgets.QPushButton
@@ -180,7 +186,11 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         for combo_box in self.findChildren(QtWidgets.QComboBox):
             combo_box.setMinimumHeight(32)
 
-        for spin_box in self.findChildren(QtWidgets.QSpinBox):
+        # QDoubleSpinBox does *not* inherit QSpinBox, so iterate the
+        # shared base class (QAbstractSpinBox) to cover both -- otherwise
+        # double-spinboxes are squashed under the project font and clip
+        # their text.
+        for spin_box in self.findChildren(QtWidgets.QAbstractSpinBox):
             spin_box.setMinimumHeight(32)
 
         for button in self.findChildren(QtWidgets.QPushButton):

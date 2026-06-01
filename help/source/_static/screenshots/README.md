@@ -78,7 +78,11 @@ script writes all of them except `ui_drift_corridor.png` when
 - [ ] `ui_dock_tabs_annotated.png`  *(the script writes the dock;
   add callouts in an image editor afterwards)*
 - [ ] `ui_tab_route.png`
-- [ ] `ui_tab_traffic.png`
+- [ ] `ui_tab_traffic.png` *(re-capture after the 0.12 release added
+  the **Traffic scaling** group box -- old shot pre-dates the
+  collapsible scaling panel + the **Scaling (%)** variable entry.
+  The capture script widens the dock for this one shot so the panel
+  and the matrix both fit.)*
 - [ ] `ui_tab_depths.png`
 - [ ] `ui_tab_objects.png`
 - [ ] `ui_tab_distributions.png`  *(same content as Route tab; the
