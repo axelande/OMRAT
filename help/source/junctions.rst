@@ -17,7 +17,7 @@ OMRAT models this with a per-junction **transition matrix**
 
 .. math::
 
-   T[\text{in\_leg}][\text{out\_leg}] = \text{share of traffic continuing onto out\_leg}
+   T[L_{\text{in}}][L_{\text{out}}] = \text{share of traffic continuing from } L_{\text{in}} \text{ to } L_{\text{out}}
 
 where each row sums to 1.0.  Rows are populated from one of three
 sources, in order of preference:

@@ -307,6 +307,41 @@ class OMRAT(
         except Exception:
             return ''
 
+    def _restore_opentopo_api_key(self) -> None:
+        """Populate the OpenTopography API key field from QSettings.
+
+        The key lives in ``omrat/opentopo_api_key`` -- QGIS-profile
+        scope, so it survives plugin reloads, QGIS restarts, and
+        plugin upgrades.  Each user enters it once via the Depths tab;
+        we never commit a personal key into the plugin source.
+        """
+        le = getattr(self.main_widget, 'LEOpenTopoAPIKey', None)
+        if le is None:
+            return
+        try:
+            saved = QSettings().value('omrat/opentopo_api_key', '', type=str)
+        except Exception:
+            saved = ''
+        if saved:
+            # Block textChanged while we restore so we don't trigger a
+            # spurious re-save of the same value.
+            blocker = le.blockSignals(True)
+            try:
+                le.setText(saved)
+            finally:
+                le.blockSignals(blocker)
+        try:
+            le.textChanged.connect(self._on_opentopo_api_key_changed)
+        except Exception:
+            pass
+
+    def _on_opentopo_api_key_changed(self, text: str) -> None:
+        """Persist the API key to QSettings on every edit."""
+        try:
+            QSettings().setValue('omrat/opentopo_api_key', text or '')
+        except Exception:
+            pass
+
     def show_error_popup(self, message: str, function_name: str) -> None:
         """Surface an error in the QGIS message bar.
 
@@ -1176,6 +1211,10 @@ class OMRAT(
                     )
                 self._restore_output_dir()
                 self._update_run_model_enabled()
+                # OpenTopography API key: restore from QSettings and
+                # save on edit so each user enters it once instead of
+                # baking it into the plugin source.
+                self._restore_opentopo_api_key()
             except Exception as exc:
                 QgsMessageLog.logMessage(
                     f'Could not wire output-folder picker: {exc}',
