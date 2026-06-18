@@ -82,6 +82,41 @@ the geometry-change signal and:
 The recomputed values are included in project save and in IWRAP XML
 export, so map geometry and exported model stay in sync.
 
+Junctions, crossings and merging
+--------------------------------
+
+Crossing and merging collisions arise wherever two or more legs meet
+or cross.  OMRAT models the meeting point as a **junction** carrying a
+transition matrix that says how traffic from each inbound leg splits
+across the outbound legs.  There is no separate "add crossing" action
+in the UI:
+
+* Snap two leg endpoints together (or share a common waypoint when
+  digitising) and OMRAT registers a junction automatically on save.
+* Legs that cross *in the middle* (true X intersections, no shared
+  endpoint) are detected when you click **Update all distributions**;
+  you'll be prompted to split each crossing into four sub-legs that
+  meet at a new junction.  Splitting also offers to copy the parent
+  legs' traffic onto the sub-legs.
+* Open **Settings -> Junction transition matrix...** to inspect or
+  edit how traffic distributes at each junction.  Rows default from
+  geometry (deflection-angle heuristic) and are overwritten by AIS
+  counts when a database is connected; user edits stick.
+
+See :ref:`junctions` for the math and the AIS-vs-geometry-vs-user
+hierarchy.
+
+Saving the route
+----------------
+
+The on-canvas leg layers in the QGIS Layers panel are *memory layers*
+and disappear when you close QGIS.  The persistent source of truth is
+the project file: **File -> Save .omrat** writes the route (start /
+end / width / dirs / bearing) plus traffic / depths / objects /
+distributions to a single JSON file.  **File -> Open .omrat** rebuilds
+the leg layers from that JSON, so there is no separate "save layer"
+step.
+
 What flows downstream
 ----------------------
 
@@ -284,11 +319,19 @@ How objects drive the calculation
 ---------------------------------
 
 * **Drifting allision:** any ship that drifts into the polygon
-  contributes, regardless of height.  No clearance check -- a drifting
-  ship has no way to recover.
+  contributes, regardless of height.  There is deliberately no
+  clearance check -- a drifting ship has no propulsion and cannot
+  steer away from a structure, so it will impact *something* on its
+  drift trajectory whether or not its superstructure clears the deck
+  of a bridge.  If you want every passing ship counted against an
+  object (e.g. wind-turbine foundations, bridge piers), simply set
+  the object's ``height`` to ``0``.
 * **Powered allision:** ``ship_height < object_height`` passes under
-  (no collision).  Otherwise the standard Cat II probability formula
-  applies.
+  (no collision) -- the powered ship is assumed to clear the
+  structure's deck.  Otherwise the standard Cat II probability
+  formula applies.  Set ``object_height = 0`` to disable the
+  clearance check and count every powered ship as well (typical for
+  wind farms and full-height piers).
 
 
 Distributions tab
@@ -386,8 +429,15 @@ or collide on.
    polygon closer to the leg.
 
 
-Results tab
-===========
+Run Analysis tab (Results)
+==========================
+
+.. note::
+
+   This is the tab labelled **Run Analysis** in the dock widget.  The
+   heading "Results" is the historic name and is still used in some
+   reference material -- they are the same tab.
+
 
 .. figure:: _static/screenshots/ui_tab_results.png
    :width: 90%

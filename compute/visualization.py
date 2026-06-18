@@ -30,6 +30,30 @@ from geometries.get_powered_overlap import (
 from ui.show_geom_res import ShowGeomRes
 
 
+# Default size for the powered / drifting matplotlib visualisation
+# dialogs.  The .ui file ships with 721x534 which crams a 14x12-inch
+# figure into a postage stamp; resizing at runtime overrides that
+# without having to edit the .ui.
+_VIZ_DIALOG_DEFAULT_SIZE = (1400, 900)
+_VIZ_DIALOG_MIN_SIZE = (900, 600)
+
+
+def _prepare_viz_dialog(dialog) -> None:
+    """Apply a larger default size + size grip to a visualisation dialog.
+
+    The visualisation `.ui` is shared with the collision breakdown popup
+    which deliberately stays small; we expand here so the matplotlib
+    canvas has room to breathe and the user can drag the corner to grow
+    further.
+    """
+    try:
+        dialog.resize(*_VIZ_DIALOG_DEFAULT_SIZE)
+        dialog.setMinimumSize(*_VIZ_DIALOG_MIN_SIZE)
+        dialog.setSizeGripEnabled(True)
+    except Exception:
+        pass
+
+
 class VisualizationMixin:
     """Mixin providing interactive visualisation dialogs.
 
@@ -64,6 +88,7 @@ class VisualizationMixin:
 
         # Create and show dialog
         dialog = ShowGeomRes(self.p.main_widget)
+        _prepare_viz_dialog(dialog)
         DriftingOverlapVisualizer.show_in_dialog(
             dialog,
             transformed_lines,
@@ -93,6 +118,7 @@ class VisualizationMixin:
             max_draft = 15.0
 
         dialog = ShowGeomRes(self.p.main_widget)
+        _prepare_viz_dialog(dialog)
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="allision", max_draft=max_draft,
         )
@@ -113,6 +139,7 @@ class VisualizationMixin:
             max_draft = 15.0
 
         dialog = ShowGeomRes(self.p.main_widget)
+        _prepare_viz_dialog(dialog)
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="grounding", max_draft=max_draft,
         )
@@ -170,6 +197,7 @@ class VisualizationMixin:
         longest_length = max(line.length for line in transformed_lines)
         objects_gdf = [gpd.GeoDataFrame(geometry=[obj]) for obj in transformed_objects]
         dialog = ShowGeomRes(self.p.main_widget)
+        _prepare_viz_dialog(dialog)
         DriftingOverlapVisualizer.show_in_dialog(
             dialog,
             transformed_lines,

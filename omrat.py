@@ -668,9 +668,29 @@ class OMRAT(
             self.qgis_geoms.label_layer(vl)
             vl.updateExtents()
             
-            # Validate geometry
+            # Validate geometry.  An invalid geometry used to silently
+            # `continue` -- the layer was already added to the project
+            # but no feature was ever appended, so the QGIS layer panel
+            # showed an empty layer with no clue why.  Surface it
+            # loudly and remove the orphan so the layer-count visible
+            # to the user matches the route table.
             if not fet.geometry().isGeosValid():
-                print(f"Invalid geometry for segment {seg_data['Segment_Id']}")
+                msg = (
+                    f"Invalid geometry for segment "
+                    f"{seg_data.get('Segment_Id')} (route "
+                    f"{seg_data.get('Route_Id')}): start="
+                    f"{seg_data.get('Start_Point')!r} end="
+                    f"{seg_data.get('End_Point')!r}.  Layer not added."
+                )
+                print(msg)
+                try:
+                    QgsMessageLog.logMessage(msg, "OMRAT", Qgis.Warning)
+                except Exception:
+                    pass
+                try:
+                    QgsProject.instance().removeMapLayer(vl.id())
+                except Exception:
+                    pass
                 continue
             # Keep layer editable and connect geometry change handler
             edit_buffer = vl.editBuffer()

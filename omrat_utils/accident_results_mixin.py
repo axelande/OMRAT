@@ -26,12 +26,59 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qgis.core import Qgis, QgsMessageLog
-from qgis.PyQt.QtWidgets import QMessageBox
+from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtGui import QCursor
+from qgis.PyQt.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from omrat_utils.run_history_mixin import _qt_enum
 
 if TYPE_CHECKING:
     pass
+
+
+class _ViewProgress:
+    """Wait cursor + indeterminate QProgressDialog for the View slots.
+
+    The matplotlib build for powered/drifting visualisations runs on
+    the UI thread, so the user otherwise sees a frozen window after
+    clicking View.  We paint the dialog via processEvents() before the
+    work starts so the click is visibly acknowledged.
+    """
+
+    def __init__(self, parent, label: str):
+        self._parent = parent
+        self._label = label
+        self._dlg: QProgressDialog | None = None
+        self._cursor_set = False
+
+    def __enter__(self):
+        try:
+            QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+            self._cursor_set = True
+            self._dlg = QProgressDialog(
+                f"Building {self._label} visualization...",
+                None, 0, 0, self._parent,
+            )
+            self._dlg.setWindowTitle("OMRAT")
+            self._dlg.setWindowModality(Qt.WindowModal)
+            self._dlg.setMinimumDuration(0)
+            self._dlg.setCancelButton(None)
+            self._dlg.show()
+            QApplication.processEvents()
+        except Exception:
+            pass
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if self._dlg is not None:
+                self._dlg.close()
+                self._dlg = None
+        finally:
+            if self._cursor_set:
+                QApplication.restoreOverrideCursor()
+                self._cursor_set = False
+        return False
 
 
 class AccidentResultsMixin:
@@ -437,7 +484,7 @@ class AccidentResultsMixin:
         spec = self._VIEW_DISPATCH.get(slot_name)
         if spec is None:
             return
-        method_name, _label, breakdown_key = spec
+        method_name, label, breakdown_key = spec
 
         run = self._require_single_selected_run()
         if run is None:
@@ -462,14 +509,23 @@ class AccidentResultsMixin:
         method = getattr(self.calc, method_name, None)
         if not callable(method):
             return
-        if method_name == 'run_collision_breakdown_dialog':
-            self._invoke_collision_breakdown(
-                method, breakdown_key, collision_report,
+        # All early-return paths cleared: actual build starts here.  Show
+        # a wait cursor + indeterminate progress so the user gets
+        # immediate feedback that the click registered.  The
+        # visualisation still runs on the UI thread; processEvents
+        # paints the dialog before the freeze.
+        with self._view_progress(label):
+            if method_name == 'run_collision_breakdown_dialog':
+                self._invoke_collision_breakdown(
+                    method, breakdown_key, collision_report,
+                )
+                return
+            self._invoke_drift_or_powered_visualiser(
+                method, data, drifting_report,
             )
-            return
-        self._invoke_drift_or_powered_visualiser(
-            method, data, drifting_report,
-        )
+
+    def _view_progress(self, label: str):
+        return _ViewProgress(self.main_widget, label)
 
     def _invoke_collision_breakdown(
         self, method, breakdown_key, collision_report,

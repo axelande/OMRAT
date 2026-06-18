@@ -27,6 +27,7 @@ from omrat_utils.consequence_defaults import (
     default_spill_probability,
     reshape_oil_onboard,
 )
+from omrat_utils.widgets import NoWheelDoubleSpinBox
 
 if TYPE_CHECKING:
     from omrat import OMRAT
@@ -282,7 +283,7 @@ class Consequence:
             tw.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         for r in range(len(types)):
             for c in range(len(col_labels)):
-                spin = QDoubleSpinBox()
+                spin = NoWheelDoubleSpinBox()
                 spin.setRange(0.0, 10_000_000.0)
                 spin.setDecimals(2)
                 spin.setSingleStep(10.0)
@@ -404,7 +405,7 @@ class Consequence:
             tw.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         for r in range(len(ACCIDENT_TYPES)):
             for c in range(len(SPILL_LEVELS)):
-                spin = QDoubleSpinBox()
+                spin = NoWheelDoubleSpinBox()
                 spin.setRange(0.0, cell_max)
                 spin.setDecimals(decimals)
                 spin.setSingleStep(single_step)
@@ -456,7 +457,7 @@ class Consequence:
             row = tw.rowCount()
             tw.insertRow(row)
             tw.setItem(row, 0, QTableWidgetItem('New level'))
-            spin = QDoubleSpinBox()
+            spin = NoWheelDoubleSpinBox()
             spin.setRange(0.0, 10_000_000.0)
             spin.setDecimals(2)
             spin.setSingleStep(50.0)
@@ -530,7 +531,7 @@ class Consequence:
         tw.verticalHeader().setVisible(False)
         for r, level in enumerate(levels):
             tw.setItem(r, 0, QTableWidgetItem(str(level.get('name', ''))))
-            spin = QDoubleSpinBox()
+            spin = NoWheelDoubleSpinBox()
             spin.setRange(0.0, 10_000_000.0)
             spin.setDecimals(2)
             spin.setSingleStep(50.0)

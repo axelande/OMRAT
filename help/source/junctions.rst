@@ -100,11 +100,25 @@ alone.
 Editing a matrix manually
 ==========================
 
-Open **Settings > Junction transition matrix...**.  The combo box
-lists every junction in the project, labelled with its id, location,
-and the legs meeting there.  The grid below has rows for inbound
-legs and columns for outbound legs; the diagonal is fixed (a leg
-cannot transition to itself), and each cell is a percentage spinbox.
+Open **Settings > Junction transition matrix...** to inspect or edit
+the per-junction transition matrices.
+
+.. figure:: _static/screenshots/ui_settings_junction_matrix.png
+   :width: 90%
+   :alt: The Junction transition matrix dialog showing the picker
+         combo, source label, and percentage spinbox grid.
+
+   The Junction transition matrix dialog.  The combo at the top picks
+   one junction (labelled with the ``LEG_{route}_{leg}`` names of
+   every leg meeting there); the **Source** label shows whether the
+   matrix came from AIS, geometry heuristics, or a user edit.
+
+The picker combo lists every junction in the project; each entry is
+just the comma-separated leg names that meet at that point, so the
+grid headers below it use the matching names.  The grid has rows for
+inbound legs and columns for outbound legs; the diagonal is fixed
+(a leg cannot transition to itself), and each cell is a percentage
+spinbox.
 
 Click **Save row** to commit your edits for the currently displayed
 junction.  Values are normalised to sum to 1.0 on save (so you don't

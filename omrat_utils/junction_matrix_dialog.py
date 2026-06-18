@@ -14,7 +14,7 @@ without a Qt event loop — the dialog construction itself is wrapped in
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
@@ -29,20 +29,61 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from omrat_utils.widgets import NoWheelDoubleSpinBox
+
 if TYPE_CHECKING:
     from omrat import OMRAT
     from geometries.junctions import Junction
 
 
-def _format_junction_label(junction: "Junction") -> str:
-    """Pretty label for the junction picker combo."""
-    legs = ", ".join(sorted(junction.legs.keys()))
-    return (
-        f"{junction.junction_id}  ({junction.point[0]:.4f}, "
-        f"{junction.point[1]:.4f})  "
-        f"[{junction.degree()} legs: {legs}]  "
-        f"[source={junction.source}]"
-    )
+# Resolver signature: leg_id -> display label (e.g. "LEG_1_3").
+LegNameResolver = Callable[[str], str]
+
+
+def _identity_name(leg_id: str) -> str:
+    return leg_id
+
+
+def build_leg_name_resolver(
+    segment_data: dict[str, Any] | None,
+) -> LegNameResolver:
+    """Return a function mapping a leg id to its ``LEG_{route}_{leg}`` name.
+
+    Falls back to the bare leg id when the segment is missing or the
+    expected fields aren't populated -- keeps the dialog robust against
+    legacy projects and tests that don't supply ``segment_data``.
+    """
+    if not segment_data:
+        return _identity_name
+
+    def _resolve(leg_id: str) -> str:
+        seg = segment_data.get(leg_id) or segment_data.get(str(leg_id))
+        if not isinstance(seg, dict):
+            return str(leg_id)
+        name = seg.get('Leg_name')
+        if name:
+            return str(name)
+        route = seg.get('Route_Id')
+        seg_id = seg.get('Segment_Id', leg_id)
+        if route is not None:
+            return f"LEG_{route}_{seg_id}"
+        return str(leg_id)
+
+    return _resolve
+
+
+def _format_junction_label(
+    junction: "Junction",
+    name_for: LegNameResolver = _identity_name,
+) -> str:
+    """Pretty label for the junction picker combo.
+
+    Shows only the leg names involved in the junction (e.g.
+    ``"LEG_1_1, LEG_2_1"``).  The junction coordinate and matrix source
+    are surfaced separately by the dialog (``lbl_source``) so they
+    don't clutter the picker.
+    """
+    return ", ".join(name_for(lid) for lid in sorted(junction.legs.keys()))
 
 
 def matrix_from_table(
@@ -72,14 +113,15 @@ def populate_table(
     table: QTableWidget,
     leg_ids: list[str],
     transitions: dict[str, dict[str, float]],
+    name_for: LegNameResolver = _identity_name,
 ) -> None:
     """Render the junction's leg ids as headers and pre-fill spinboxes."""
     n = len(leg_ids)
     table.clear()
     table.setRowCount(n)
     table.setColumnCount(n)
-    table.setHorizontalHeaderLabels([f"-> {lid}" for lid in leg_ids])
-    table.setVerticalHeaderLabels([f"from {lid}" for lid in leg_ids])
+    table.setHorizontalHeaderLabels([f"-> {name_for(lid)}" for lid in leg_ids])
+    table.setVerticalHeaderLabels([f"from {name_for(lid)}" for lid in leg_ids])
     for r, in_leg in enumerate(leg_ids):
         row = transitions.get(in_leg) or {}
         for c, out_leg in enumerate(leg_ids):
@@ -89,7 +131,7 @@ def populate_table(
                 cell.setTextAlignment(int(Qt.AlignCenter))
                 table.setItem(r, c, cell)
                 continue
-            spin = QDoubleSpinBox()
+            spin = NoWheelDoubleSpinBox()
             spin.setRange(0.0, 100.0)
             spin.setDecimals(2)
             spin.setSuffix(" %")
@@ -106,6 +148,13 @@ class JunctionMatrixDialog(QDialog):
         self.omrat = omrat
         self.setWindowTitle("Junction transition matrix")
         self.resize(640, 480)
+
+        # Resolver for pretty leg names (``LEG_{route}_{leg}``) used in
+        # the picker combo and table headers.  Built once at dialog
+        # open so the lookup is cheap per render; segment_data won't
+        # change while the modal dialog is up.
+        segment_data = getattr(omrat, 'segment_data', None) or {}
+        self._name_for: LegNameResolver = build_leg_name_resolver(segment_data)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
@@ -149,7 +198,9 @@ class JunctionMatrixDialog(QDialog):
         # Sort by id so the picker stays stable across project loads.
         self._junction_ids = sorted(handler.registry.keys())
         for jid in self._junction_ids:
-            self.cmb.addItem(_format_junction_label(handler.registry[jid]))
+            self.cmb.addItem(
+                _format_junction_label(handler.registry[jid], self._name_for),
+            )
 
     def _on_junction_changed(self, index: int) -> None:
         if 0 <= index < len(self._junction_ids):
@@ -161,7 +212,7 @@ class JunctionMatrixDialog(QDialog):
         j = handler.registry[jid]
         self.lbl_source.setText(f"Source: {j.source}")
         leg_ids = sorted(j.legs.keys())
-        populate_table(self.table, leg_ids, j.transitions)
+        populate_table(self.table, leg_ids, j.transitions, self._name_for)
 
     def _save_current(self) -> None:
         handler = getattr(self.omrat, 'junctions', None)

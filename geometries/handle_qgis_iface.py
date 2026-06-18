@@ -98,14 +98,15 @@ class HandleQGISIface:
 
     def create_line(self, point: QgsPoint):
         """Create a line layer, style it, label it, and create offset lines."""
-        # Create the memory layer
-        vl = QgsVectorLayer("LineString?crs=EPSG:4326", "Segment", "memory")
+        # Increment segment ID so the layer name carries the leg id from
+        # the moment it appears in the QGIS layer panel (rather than
+        # only after a save -> reload round-trip).
+        self.segment_id += 1
+        layer_name = f"Segment {self.cur_route_id} - {self.segment_id}"
+        vl = QgsVectorLayer("LineString?crs=EPSG:4326", layer_name, "memory")
         if not vl.isValid():
             print("Error: Line layer is not valid")
             return
-
-        # Increment segment ID
-        self.segment_id += 1
 
         # Add the layer to the project
         QgsProject.instance().addMapLayer(vl)

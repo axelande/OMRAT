@@ -19,6 +19,7 @@ from scipy import stats
 
 from ui.traffic_data_widget import TrafficDataWidget
 from geometries import isint
+from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox
 
 
 WidgetType = Union[QLineEdit, QSpinBox, QDoubleSpinBox]
@@ -120,7 +121,7 @@ class Traffic:
                 pass
         for row in range(len(types)):
             for col in range(len(sizes)):
-                item = QSpinBox()
+                item = NoWheelSpinBox()
                 item.setMaximum(100000)
                 self.dw.twTrafficData.setCellWidget(row, col, item)
         # Keep the per-type "follow global" checkboxes + the follow_global
@@ -178,7 +179,7 @@ class Traffic:
                     # a wide-range double spinbox -- ``isint(100.0)`` is
                     # True so the generic dispatch below would otherwise
                     # truncate fractional percentages on edit.
-                    item = QDoubleSpinBox()
+                    item = NoWheelDoubleSpinBox()
                     item.setRange(0.0, 100000.0)
                     item.setSuffix(' %')
                     item.setDecimals(1)
@@ -195,21 +196,21 @@ class Traffic:
                     )
                     self._scaling_cell_signals.append((item, row))
                 elif val == '':
-                    item = QSpinBox()
+                    item = NoWheelSpinBox()
                     val = 0
                     item.setValue(val)
                 elif val == np.inf:
-                    item = QSpinBox()
+                    item = NoWheelSpinBox()
                     item.setEnabled(False)
                     val = 0
                     item.setValue(val)
                 elif isint(val):
-                    item = QSpinBox()
+                    item = NoWheelSpinBox()
                     item.setMaximum(100000)
                     val = int(val)
                     item.setValue(val)
                 else:
-                    item = QDoubleSpinBox()
+                    item = NoWheelDoubleSpinBox()
                     val = float(val)
                     item.setValue(val)
                 self.dw.twTrafficData.setCellWidget(row, col, item)
