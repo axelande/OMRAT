@@ -6,7 +6,8 @@ from qgis.PyQt.QtCore import QVariant
 from qgis.PyQt.QtWidgets import QFileDialog, QTableWidgetItem, QTableWidget
 from qgis._core import QgsVectorDataProvider
 from qgis.core import (QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsFeatureRequest, QgsField,
-                       QgsFillSymbol, QgsGraduatedSymbolRenderer, QgsRendererRange)
+                       QgsFillSymbol, QgsGraduatedSymbolRenderer, QgsRendererRange,
+                       QgsCoordinateReferenceSystem, QgsCoordinateTransform)
 from qgis.PyQt.QtGui import QColor
 import requests
 import processing
@@ -513,10 +514,25 @@ class OObject:
         target_list.append(layer)
         return layer
 
+    def _wgs84_transform(self, layer: QgsVectorLayer) -> QgsCoordinateTransform | None:
+        # Object/depth WKTs are stored as EPSG:4326 throughout OMRAT, so a
+        # shapefile in any other CRS must be reprojected before its WKT is
+        # extracted -- otherwise projected meters land in the table and the
+        # calculation later fails the forward-transform check.
+        src = layer.crs()
+        if not src.isValid() or src.authid() == 'EPSG:4326':
+            return None
+        wgs84 = QgsCoordinateReferenceSystem('EPSG:4326')
+        return QgsCoordinateTransform(src, wgs84, QgsProject.instance().transformContext())
+
     def _populate_table(self, layer: QgsVectorLayer, table_widget, attr_name: str) -> None:
         row_index = table_widget.rowCount()
+        tr = self._wgs84_transform(layer)
         for feature in layer.getFeatures():
             geom = feature.geometry()
+            if tr is not None:
+                geom = QgsGeometry(geom)
+                geom.transform(tr)
             wkt: str = geom.asWkt(precision=5)
             value = feature.attribute(attr_name) if attr_name in layer.fields().names() else 0.0
 
@@ -548,10 +564,15 @@ class OObject:
             print(f"Ogiltigt lager: Loaded Depths")
             return
 
+        tr = self._wgs84_transform(temp_layer)
+
         # Extract features and add to consolidated layer + table
         row_index = self.p.main_widget.twDepthList.rowCount()
         for feature in temp_layer.getFeatures():
             geom = feature.geometry()
+            if tr is not None:
+                geom = QgsGeometry(geom)
+                geom.transform(tr)
             wkt = geom.asWkt(precision=5)
             value = feature.attribute("depth") if "depth" in temp_layer.fields().names() else 0.0
 

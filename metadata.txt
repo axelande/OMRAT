@@ -23,6 +23,7 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.12.1 (2026-06-17) - Added notifiers in QGIS message bar
   Version 0.12.0 (2026-06-01) - Added the possibility to scale the AIS traffic
   Version 0.11.2 (2026-05-19) - Updated documentation and help section, renamed the LEG to reflect the routes.
   Version 0.11.1 - Minor code comments updates and some checks regarding junctions.

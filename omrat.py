@@ -68,6 +68,7 @@ from omrat_utils.accident_results_mixin import AccidentResultsMixin
 from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin
 from omrat_utils.iwrap_io_mixin import IwrapIOMixin
 from omrat_utils.run_history_mixin import RunHistoryMixin
+from omrat_utils.notifier import MessageBarNotifier
 
 
 class OMRAT(
@@ -94,6 +95,16 @@ class OMRAT(
         self.testing = testing
         # initialize plugin directory
         self.plugin_dir = os.path.dirname(__file__)
+        # Notifier (message-bar) wired up early so even early-init
+        # failures surface through the QGIS message bar rather than a
+        # blocking modal.  Tracker URL is read from metadata.txt so the
+        # "Let us know" button always points at the live issue tracker.
+        self.notifier = MessageBarNotifier(
+            iface=self.iface,
+            plugin_name='OMRAT',
+            tracker_url=self._read_tracker_url(),
+            parent=self.iface.mainWindow() if not self.testing else None,
+        )
         if not self.testing:
             # initialize locale
             locale: str = QSettings().value('locale/userLocale')[0:2]
@@ -286,7 +297,34 @@ class OMRAT(
                 pass
         self._history_layers.clear()
 
-    def show_error_popup(self, message: str, function_name:str) -> None:
+    def _read_tracker_url(self) -> str:
+        """Read the `tracker` field from metadata.txt for the Let-us-know button."""
+        try:
+            import configparser
+            cp = configparser.ConfigParser()
+            cp.read(os.path.join(self.plugin_dir, 'metadata.txt'), encoding='utf-8')
+            return cp.get('general', 'tracker', fallback='')
+        except Exception:
+            return ''
+
+    def show_error_popup(self, message: str, function_name: str) -> None:
+        """Surface an error in the QGIS message bar.
+
+        Kept as a method (not a free function) so the ~50 legacy call
+        sites in mixins/utilities continue to work.  Internally the bar
+        notifier handles rendering, Details/Open-logs/Let-us-know
+        buttons, and logging -- no more blocking QMessageBox.
+        """
+        # Stash function_name in the log payload so log readers can still
+        # trace where the error came from.
+        log_message = f"{function_name}: {message}"
+        if getattr(self, 'notifier', None) is not None:
+            from omrat_utils.errors import OmratError
+            self.notifier.display_exception(
+                OmratError(log_message=log_message, user_message=message)
+            )
+            return
+        # Fallback for the (unlikely) pre-notifier window during __init__.
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Critical)
         msg_box.setWindowTitle(self.tr(f"Failure in {function_name}"))
@@ -491,6 +529,14 @@ class OMRAT(
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
+        # Drop any pending OMRAT message-bar items so they don't outlive
+        # the plugin (a Plugin Reloader cycle would otherwise leave stale
+        # toasts referencing torn-down callbacks).
+        try:
+            self.notifier.dismiss_all()
+        except Exception:
+            pass
+
         # Disconnect project cleared signal
         try:
             QgsProject.instance().cleared.disconnect(self._on_project_cleared)

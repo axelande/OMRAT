@@ -343,6 +343,35 @@ class TestPopulateTable:
         assert tbl.rowCount() == 1
         assert tbl.item(0, 1).text() == '7.5'
 
+    def test_reprojects_non_wgs84_shapefile_to_4326(self, obj):
+        # Regression: a shapefile in UTM (here EPSG:32640) used to land
+        # in twObjectList with projected metres, which then blew up the
+        # calculation's forward-transform check.  _populate_table must
+        # reproject to EPSG:4326 before writing WKT into the table.
+        from qgis.core import QgsVectorLayer, QgsFeature, QgsGeometry
+        layer = QgsVectorLayer("Polygon?crs=EPSG:32640", "utm_objs", "memory")
+        prov = layer.dataProvider()
+        feat = QgsFeature(layer.fields())
+        # Roughly the UTM coords from the reported bug -- a small square.
+        feat.setGeometry(QgsGeometry.fromWkt(
+            'POLYGON((604000 6199000, 604500 6199000, '
+            '604500 6199500, 604000 6199500, 604000 6199000))'
+        ))
+        prov.addFeature(feat)
+
+        tbl = obj.p.main_widget.twObjectList
+        tbl.setRowCount(0); tbl.setColumnCount(3)
+        obj._populate_table(layer, tbl, 'object')
+        assert tbl.rowCount() == 1
+        wkt = tbl.item(0, 2).text()
+        # Pluck any number from the WKT and check they're in lon/lat range.
+        import re
+        nums = [float(n) for n in re.findall(r'-?\d+\.\d+|-?\d+', wkt)]
+        assert nums, f'no coordinates parsed from {wkt!r}'
+        assert all(-180.0 <= n <= 180.0 for n in nums), (
+            f'WKT still in projected CRS: {wkt!r}'
+        )
+
 
 class TestLoadLayer:
     def test_invalid_returns_none(self, obj):
