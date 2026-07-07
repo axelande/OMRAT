@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 import numpy as np
-from qgis.core import QgsProject
+from qgis.core import QgsApplication, QgsProject
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QMessageBox, QTableWidget
 from shapely import wkt
@@ -330,8 +330,13 @@ class AIS:
         multiplier = self._YEAR_SECONDS / coverage_s
         return multiplier, coverage_s, gap_s
 
-    def update_legs(self, key:str|None=None):
-        """Update AIS data for all legs or a specific leg."""
+    def update_legs(self, key: str | None = None) -> None:
+        """Launch a background task to fetch AIS data for all legs or one leg.
+
+        All database queries and data processing run in a QgsTask so the UI
+        stays responsive.  Results are applied back to plugin state and the UI
+        is updated in the task's ``finished()`` callback (main thread).
+        """
         if self.db is None:
             QMessageBox.information(
                 self.omrat.main_widget,
@@ -343,66 +348,46 @@ class AIS:
                 ),
             )
             return
-        segment_data: dict[str, dict[str, str]] = self.get_segment_data_from_table()
-        if key is None:
-            legs: dict_items[str, dict[str, str]] = segment_data.items()
-        else:
-            legs = [[key, segment_data[key]]] # type: ignore
-        # Compute the annualisation multiplier once per refresh — it's
-        # a property of the database's overall coverage, not per-leg.
-        # When the user hasn't enabled the option, OR the query fails /
-        # the table is empty, we silently fall back to 1.0 (no scaling).
-        multiplier = 1.0
-        if self.recalc_to_full_year:
-            info = self.compute_year_multiplier()
-            if info is not None:
-                multiplier, coverage_s, gap_s = info
-                QMessageBox.information(
-                    self.omrat.main_widget,
-                    self.omrat.tr("Annualised AIS frequency"),
-                    self.omrat.tr(
-                        f"Coverage: {coverage_s / 3600:.1f} h "
-                        f"(skipped {gap_s / 3600:.1f} h of gaps > 12 h).\n"
-                        f"Multiplier: {multiplier:.2f}x "
-                        f"({self._YEAR_SECONDS / 3600:.0f} h / "
-                        f"{coverage_s / 3600:.1f} h)."
-                    ),
+
+        # Collect everything that requires the main thread before launching.
+        seg_table: dict[str, dict[str, str]] = self.get_segment_data_from_table()
+        legs: dict[str, dict[str, str]] = (
+            {key: seg_table[key]} if key is not None else dict(seg_table)
+        )
+        if not legs:
+            return
+
+        # Ensure leg_dirs is populated for each leg we'll fetch.
+        for leg_key in legs:
+            if leg_key not in self.omrat.qgis_geoms.leg_dirs:
+                self.omrat.qgis_geoms.leg_dirs[leg_key] = (
+                    self.omrat.segment_data[leg_key]["Dirs"]
                 )
-        for leg_key, leg_d in legs:
-            if leg_key not in self.omrat.qgis_geoms.leg_dirs.keys():
-                # Use the current leg_key to look up segment direction labels
-                self.omrat.qgis_geoms.leg_dirs[leg_key] = self.omrat.segment_data[leg_key]["Dirs"]
-            dirs = self.omrat.qgis_geoms.leg_dirs[leg_key]
-            self.omrat.traffic.create_empty_dict(leg_key, dirs)
-            start_p = wkt.loads(f"Point ({leg_d['Start_Point']})")
-            assert isinstance(start_p, Point)
-            end_p = wkt.loads(f"Point ({leg_d['End_Point']})")
-            assert isinstance(end_p, Point)
-            pl = get_pl(self.db, lat1=start_p.y,
-                        lat2=end_p.y,
-                        lon1=start_p.x,
-                        lon2=end_p.x, 
-                        l_width=float(leg_d['Width']))
-            try:
-                ais_data = self.run_sql(pl)
-            except Exception as e:
-                self.omrat.show_error_popup(str(e), "AIS.update_legs")
-                return
-            sql = f"""select degrees(ST_Azimuth(ST_Point({start_p.x}, {start_p.y})::geography, 
-            ST_Point({end_p.x}, {end_p.y})::geography))
-            """
-            _, leg_bearing = cast(tuple[bool, list[list[Any]]], self.db.execute_and_return(sql, return_error=True))
-            line1, line2 = self.update_ais_data(
-                leg_key, ais_data, leg_bearing[0][0], dirs,
-                multiplier=multiplier,
-            )
-            self.convert_list2avg()
-            self.update_dist_data(line1, line2, leg_key)
-            key = leg_key
-        if key is not None:
-            self.omrat.main_widget.leNormMean1_1.setText('')
-            self.omrat.distributions.run_update_plot(key)
-            self.omrat.main_widget.cbTrafficSelectSeg.setCurrentIndex(self.omrat.main_widget.cbTrafficSelectSeg.count()-1)
+        leg_dirs = {k: list(v) for k, v in self.omrat.qgis_geoms.leg_dirs.items()}
+
+        # Traffic matrix dimensions (read from UI table once, passed to task).
+        tw = self.omrat.main_widget.twTrafficData
+        rows = tw.rowCount()
+        cols = tw.columnCount()
+
+        from omrat_utils.ais_update_task import AisUpdateTask
+        task = AisUpdateTask(
+            ais=self,
+            legs=legs,
+            seg_table=seg_table,
+            rows=rows,
+            cols=cols,
+            variables=list(self.omrat.traffic.variables),
+            var_defaults=dict(self.omrat.traffic._var_cell_defaults),
+            leg_dirs=leg_dirs,
+        )
+
+        # Disable the main update button for the duration of the task.
+        btn = getattr(self.omrat.main_widget, 'pbUpdateAIS', None)
+        if btn is not None:
+            btn.setEnabled(False)
+
+        QgsApplication.taskManager().addTask(task)
         
     def convert_list2avg(self):
         for key1 in self.omrat.traffic.traffic_data.keys():
@@ -715,12 +700,18 @@ class AIS:
     def compute_junction_transitions(
         self,
         time_window_s: float | None = None,
+        seg_table: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, dict[str, dict[str, int]]]:
         """Build a ``{junction_id: {in_leg: {out_leg: count}}}`` table from AIS.
 
         Returns an empty dict if the database is offline or the project
         has no junctions.  Junctions are read from the live
         :class:`Junctions` handler on the parent OMRAT instance.
+
+        ``seg_table`` may be pre-supplied (e.g. by a background task that
+        already read the route table on the main thread) to avoid accessing
+        the UI widget from a non-main thread.  When ``None`` the method reads
+        the table itself (original behaviour, requires main thread).
         """
         from compute.junction_transitions import (
             DEFAULT_TIME_WINDOW_S,
@@ -731,7 +722,8 @@ class AIS:
             return {}
         if self.db is None:
             return {}
-        seg_table = self.get_segment_data_from_table()
+        if seg_table is None:
+            seg_table = self.get_segment_data_from_table()
         # First fetch passages once per leg so junctions sharing legs
         # don't query the database twice.
         leg_ids: set[str] = set()

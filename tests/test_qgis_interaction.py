@@ -35,7 +35,9 @@ def test_create_line(omrat):
 
     # Check that the line layer was created and added to the project
     assert len(omrat.qgis_geoms.vector_layers) == 2
-    assert QgsProject.instance().mapLayersByName("Segment")
+    route_id = omrat.qgis_geoms.cur_route_id
+    seg_id = omrat.qgis_geoms.segment_id
+    assert QgsProject.instance().mapLayersByName(f"Segment {route_id} - {seg_id}")
 
 
 def test_create_offset_lines(omrat):

@@ -290,8 +290,10 @@ class ShipCollisionModelMixin:
                 if loa_i < len(beam1) and type_j < len(beam1[loa_i]):
                     b_list = beam1[loa_i][type_j]
                     if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
-                        b1 = float(np.mean(b_list))
-                    elif isinstance(b_list, (int, float)):
+                        b1_raw = float(np.mean(b_list))
+                        if np.isfinite(b1_raw):
+                            b1 = b1_raw
+                    elif isinstance(b_list, (int, float)) and np.isfinite(float(b_list)):
                         b1 = float(b_list)
 
                 # Iterate over dir2 ship categories
@@ -316,8 +318,10 @@ class ShipCollisionModelMixin:
                         if loa_k < len(beam2) and type_l < len(beam2[loa_k]):
                             b_list = beam2[loa_k][type_l]
                             if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
-                                b2 = float(np.mean(b_list))
-                            elif isinstance(b_list, (int, float)):
+                                b2_raw = float(np.mean(b_list))
+                                if np.isfinite(b2_raw):
+                                    b2 = b2_raw
+                            elif isinstance(b_list, (int, float)) and np.isfinite(float(b_list)):
                                 b2 = float(b_list)
 
                         # Calculate head-on collision candidates using loaded lateral distributions
@@ -393,8 +397,10 @@ class ShipCollisionModelMixin:
                     if loa_i < len(beam) and type_j < len(beam[loa_i]):
                         b_list = beam[loa_i][type_j]
                         if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
-                            b = float(np.mean(b_list))
-                        elif isinstance(b_list, (int, float)):
+                            b_raw = float(np.mean(b_list))
+                            if np.isfinite(b_raw):
+                                b = b_raw
+                        elif isinstance(b_list, (int, float)) and np.isfinite(float(b_list)):
                             b = float(b_list)
 
                     ship_cells.append((loa_i, type_j, q, v_ms, b))
@@ -679,8 +685,10 @@ class ShipCollisionModelMixin:
                                 if loa_i < len(beam1_arr) and type_j < len(beam1_arr[loa_i]):
                                     b_list = beam1_arr[loa_i][type_j]
                                     if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
-                                        b1 = float(np.mean(b_list))
-                                    elif isinstance(b_list, (int, float)):
+                                        b1_raw = float(np.mean(b_list))
+                                        if np.isfinite(b1_raw):
+                                            b1 = b1_raw
+                                    elif isinstance(b_list, (int, float)) and np.isfinite(float(b_list)):
                                         b1 = float(b_list)
 
                                 for loa_k in range(len(freq2) if hasattr(freq2, '__len__') else 0):
@@ -703,8 +711,10 @@ class ShipCollisionModelMixin:
                                         if loa_k < len(beam2_arr) and type_l < len(beam2_arr[loa_k]):
                                             b_list = beam2_arr[loa_k][type_l]
                                             if isinstance(b_list, (list, np.ndarray)) and len(b_list) > 0:
-                                                b2 = float(np.mean(b_list))
-                                            elif isinstance(b_list, (int, float)):
+                                                b2_raw = float(np.mean(b_list))
+                                                if np.isfinite(b2_raw):
+                                                    b2 = b2_raw
+                                            elif isinstance(b_list, (int, float)) and np.isfinite(float(b_list)):
                                                 b2 = float(b_list)
 
                                         n_g_crossing = get_crossing_collision_candidates(

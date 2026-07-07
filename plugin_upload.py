@@ -7,7 +7,15 @@
 
 import sys
 import getpass
-import xmlrpc.client
+
+# Harden ``xmlrpc.client`` against XML attacks (XXE, billion-laughs,
+# external-entity expansion).  ``monkey_patch`` swaps stdlib's parser
+# for defusedxml's; required by the QGIS plugin security-scanning
+# policy (https://plugins.qgis.org/docs/security-scanning) and
+# silences bandit B411 below.
+import defusedxml.xmlrpc
+defusedxml.xmlrpc.monkey_patch()
+import xmlrpc.client  # nosec B411 -- defusedxml.xmlrpc.monkey_patch() applied above
 from optparse import OptionParser
 
 standard_library.install_aliases()

@@ -160,6 +160,11 @@ class HandleQGISIface:
 
             # Update segment data and save the route
             self.update_segment_data(point)
+
+            # Auto-split both legs if the new one crosses an existing leg.
+            if self._auto_split_on_intersection(str(self.segment_id), point, vl):
+                return
+
             self.vector_layers.append(vl)
 
             # Ensure the layer is in editing mode before connecting the signal
@@ -287,6 +292,98 @@ class HandleQGISIface:
         self.segment_id = 0
         self.cur_route_id = 1
         self.leg_dirs = {}
+
+    def _auto_split_on_intersection(
+        self,
+        new_leg_id: str,
+        endpoint: QgsPoint,
+        orphan_layer: "QgsVectorLayer | None" = None,
+    ) -> bool:
+        """Split any existing leg that the newly added leg crosses.
+
+        When a true X-intersection is found the two legs are replaced by
+        four sub-legs meeting at the crossing point, the canvas and route
+        table are rebuilt, and the junction registry is refreshed.
+
+        ``orphan_layer`` is the transient vector layer created for the new
+        leg before we knew a split was needed; it is removed from the QGIS
+        project before ``reload_legs_from_segment_data`` recreates everything.
+
+        Returns ``True`` if at least one split was applied so the caller can
+        return early (skipping the normal post-draw bookkeeping that
+        ``reload_legs_from_segment_data`` already handles).
+        """
+        from geometries.route_validation import (
+            _segments_intersect,
+            apply_intersection_split,
+            LegIntersection,
+        )
+
+        sd = self.omrat.segment_data
+        new_leg = sd.get(new_leg_id)
+        if not isinstance(new_leg, dict):
+            return False
+
+        new_start = self._parse_wkt_xy(new_leg.get('Start_Point'))
+        new_end = self._parse_wkt_xy(new_leg.get('End_Point'))
+        if new_start is None or new_end is None:
+            return False
+
+        intersections: list[LegIntersection] = []
+        for other_id, other_leg in list(sd.items()):
+            if other_id == new_leg_id or not isinstance(other_leg, dict):
+                continue
+            other_start = self._parse_wkt_xy(other_leg.get('Start_Point'))
+            other_end = self._parse_wkt_xy(other_leg.get('End_Point'))
+            if other_start is None or other_end is None:
+                continue
+            # Shared endpoint == junction, not a crossing.
+            if new_start in (other_start, other_end) or new_end in (other_start, other_end):
+                continue
+            hit = _segments_intersect(new_start, new_end, other_start, other_end)
+            if hit is None:
+                continue
+            t1, t2, pt = hit
+            intersections.append(LegIntersection(
+                leg1_id=new_leg_id, leg2_id=other_id, point=pt, t1=t1, t2=t2,
+            ))
+
+        if not intersections:
+            return False
+
+        td = getattr(self.omrat, 'traffic_data', None)
+        for ix in intersections:
+            apply_intersection_split(sd, ix, traffic_data=td)
+
+        # Remove the transient layer that was already added to the QGIS
+        # project — reload_legs_from_segment_data recreates all legs from
+        # the now-mutated segment_data.
+        if orphan_layer is not None:
+            try:
+                QgsProject.instance().removeMapLayer(orphan_layer.id())
+            except Exception:
+                pass
+
+        self.reload_legs_from_segment_data()
+
+        # Set start point for the next interactive leg draw.
+        self.current_start_point = QgsPointXY(endpoint.x(), endpoint.y())
+        self.point_layer = None
+
+        # Sync the traffic segment combo box from the rebuilt route table.
+        traffic = getattr(self.omrat, 'traffic', None)
+        if traffic is not None and hasattr(traffic, 'fill_cbTrafficSelectSeg'):
+            try:
+                traffic.fill_cbTrafficSelectSeg()
+            except Exception:
+                pass
+
+        # Rebuild junction registry so new crossing node gets a matrix.
+        handler = getattr(self.omrat, 'junctions', None)
+        if handler is not None:
+            handler.rebuild_from_segments(sd, prefer_user=True)
+
+        return True
 
     def reload_legs_from_segment_data(self) -> None:
         """Tear down all leg vector layers and rebuild them from ``segment_data``.

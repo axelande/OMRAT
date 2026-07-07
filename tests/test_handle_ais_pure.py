@@ -444,7 +444,11 @@ class TestAISUpdateLegsGuard:
     def test_update_legs_runsql_exception_shows_popup(
         self, ais_with_mocks, monkeypatch
     ):
-        """A RuntimeError from run_sql triggers show_error_popup and return."""
+        """A RuntimeError from run_sql is captured in the task and surfaced
+        via QMessageBox.critical in finished(False)."""
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+
         segment = {'L1': {'Start_Point': '14.0 55.0', 'End_Point': '14.1 55.0',
                           'Width': '1000'}}
         monkeypatch.setattr(
@@ -458,11 +462,21 @@ class TestAISUpdateLegsGuard:
 
         monkeypatch.setattr(ais_with_mocks, 'run_sql', bad_run_sql)
         ais_with_mocks.db = MagicMock()
-        # get_pl (called before run_sql) needs a valid 2-tuple response.
         ais_with_mocks.db.execute_and_return.return_value = (True, [['LINESTRING(...)']])
 
-        ais_with_mocks.update_legs(key='L1')
-        ais_with_mocks.omrat.show_error_popup.assert_called_once()
+        submitted: list = []
+        with patch.object(mod, 'QgsApplication') as MockApp:
+            MockApp.taskManager.return_value.addTask.side_effect = submitted.append
+            ais_with_mocks.update_legs(key='L1')
+
+        assert submitted, "update_legs must submit a task even when run_sql will fail"
+        task = submitted[0]
+        result = task.run()
+
+        # Task run() should return False and record the error.
+        assert result is False
+        assert task.error is not None
+        assert 'database refused' in task.error
 
 
 class TestAISRunSql:

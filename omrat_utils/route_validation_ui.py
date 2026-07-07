@@ -92,21 +92,33 @@ def _zoom_canvas_to_points(
     canvas.refresh()
 
 
+def _leg_label(endpoints: list[tuple[str, str]], segment_data: dict) -> str:
+    """Format a human-readable label for one waypoint's contributing legs."""
+    parts = []
+    for leg_id, which in endpoints:
+        seg = (segment_data or {}).get(leg_id, {})
+        name = seg.get('Leg_name') or leg_id
+        parts.append(f"{name} ({which})")
+    return ", ".join(parts) if parts else "unknown"
+
+
 class _MergePromptDialog(QDialog):
     """Modal dialog asking which of two near-coincident locations to keep."""
 
-    def __init__(self, pair: CloseWaypointPair, parent=None):
+    def __init__(self, pair: CloseWaypointPair, segment_data: dict, parent=None):
         super().__init__(parent)
         self.pair = pair
         self._choice: _MergeChoice = _MergeChoice(target=None)
         self.setWindowTitle("Merge close waypoints?")
 
         layout = QVBoxLayout(self)
+        label_a = _leg_label(pair.leg_endpoints.get(pair.point_a, []), segment_data)
+        label_b = _leg_label(pair.leg_endpoints.get(pair.point_b, []), segment_data)
         msg = QLabel(
             f"Two waypoints are {pair.distance_m:.1f} m apart "
             f"(threshold {pair.threshold_m:.1f} m).\n\n"
-            f"Point 1: {pair.point_a[0]:.6f}, {pair.point_a[1]:.6f}\n"
-            f"Point 2: {pair.point_b[0]:.6f}, {pair.point_b[1]:.6f}\n\n"
+            f"Point 1: {label_a}\n"
+            f"Point 2: {label_b}\n\n"
             "Which location should both legs snap to?"
         )
         msg.setWordWrap(True)
@@ -137,15 +149,18 @@ class _MergePromptDialog(QDialog):
 class _SplitPromptDialog(QDialog):
     """Modal dialog asking whether to split a crossing into 4 sub-legs."""
 
-    def __init__(self, intersection: LegIntersection, parent=None):
+    def __init__(self, intersection: LegIntersection, segment_data: dict, parent=None):
         super().__init__(parent)
         self.intersection = intersection
         self._accept_split: bool = False
         self.setWindowTitle("Split crossing legs?")
 
+        sd = segment_data or {}
+        name1 = (sd.get(intersection.leg1_id) or {}).get('Leg_name') or intersection.leg1_id
+        name2 = (sd.get(intersection.leg2_id) or {}).get('Leg_name') or intersection.leg2_id
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
-            f"Legs {intersection.leg1_id} and {intersection.leg2_id} cross "
+            f"Legs {name1} and {name2} cross "
             f"at {intersection.point[0]:.6f}, {intersection.point[1]:.6f}.\n\n"
             "Split each leg in two at the crossing point so the model treats "
             "the crossing as a real four-leg junction?"
@@ -246,7 +261,7 @@ def run_validation_pass(
         if show_dialog is not None:
             return show_dialog('merge', pair)
         _zoom_canvas_to_points(omrat, [pair.point_a, pair.point_b])
-        dlg = _MergePromptDialog(pair, parent)
+        dlg = _MergePromptDialog(pair, sd, parent)
         dlg.exec()
         return dlg.choice()
 
@@ -254,7 +269,7 @@ def run_validation_pass(
         if show_dialog is not None:
             return show_dialog('split', intersection)
         _zoom_canvas_to_points(omrat, [intersection.point])
-        dlg = _SplitPromptDialog(intersection, parent)
+        dlg = _SplitPromptDialog(intersection, sd, parent)
         dlg.exec()
         return dlg.accepted_split()
 

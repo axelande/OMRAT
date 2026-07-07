@@ -1040,11 +1040,8 @@ class OMRAT(
 
 
     def update_ais(self) -> None:
-        # The "Update all distributions" button does three things in
-        # sequence: (1) validate routes (snap close waypoints, split
-        # crossing legs); (2) refresh per-leg AIS traffic; (3) refresh
-        # the junction transition matrices, preferring AIS-derived
-        # shares where available.
+        # Step 1 (main thread, needs UI dialogs): validate route geometry —
+        # snap close waypoints, split crossing legs.
         try:
             from omrat_utils.route_validation_ui import run_validation_pass
             outcome = run_validation_pass(self)
@@ -1063,25 +1060,10 @@ class OMRAT(
                 f"Route validation skipped: {exc}", "OMRAT", Qgis.Warning,
             )
 
+        # Steps 2+3 (background task): fetch AIS traffic per leg, then
+        # rebuild junction transition matrices.  The task disables
+        # pbUpdateAIS for its duration and re-enables it in finished().
         self.ais.update_legs()
-
-        # Refresh junction transition matrices.  When a DB connection is
-        # configured we prefer AIS-derived shares; otherwise the handler
-        # falls back to its existing geometry/user defaults.
-        try:
-            handler = getattr(self, 'junctions', None)
-            if handler is not None:
-                handler.rebuild_from_segments(prefer_user=True)
-                if getattr(self.ais, 'db', None) is not None:
-                    counts = self.ais.compute_junction_transitions()
-                    if counts:
-                        handler.apply_ais_counts(counts)
-        except Exception as exc:
-            QgsMessageLog.logMessage(
-                f"Junction transition refresh skipped: {exc}",
-                "OMRAT",
-                Qgis.Warning,
-            )
     
     def remove_route(self)-> None:
         # To implement

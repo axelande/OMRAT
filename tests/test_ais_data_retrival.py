@@ -188,40 +188,34 @@ def _empty_traffic_bucket(n_ship_types: int = 21, n_loa_cats: int = 14):
 
 
 def test_update_legs(mock_ais, mock_table):
-    """Test update_legs with mocked segment data."""
-    # Mock the QTableWidget
+    """Test update_legs submits an AisUpdateTask with the correct leg data.
+
+    DB queries run inside the task's background thread; we verify here that
+    (a) a task is submitted and (b) it carries the right segment table.
+
+    AisUpdateTask inherits from QgsTask; constructing it in the mock_ais
+    environment (no full QGIS init) hangs.  Patch it at source so we only
+    verify the constructor arguments without touching real QGIS internals.
+    """
+    from unittest.mock import patch, MagicMock
+
     mock_ais.omrat.main_widget.twRouteList = mock_table
-
-    # update_legs writes into traffic_data[leg_key][dir_][...][type][loa_cat];
-    # pre-populate the nested lists so the indexing doesn't IndexError.
-    populated = {
-        '1': {
-            'East going': _empty_traffic_bucket(),
-            'West going': _empty_traffic_bucket(),
-        }
-    }
-    mock_ais.omrat.traffic_data = populated
-    mock_ais.omrat.traffic.traffic_data = populated
-
-    # update_legs calls `traffic.create_empty_dict(leg_key, dirs)` which
-    # reads rowCount()/columnCount() off the mocked QTableWidget; those
-    # return MagicMocks that coerce to 1 under `range(...)`, so the
-    # default behaviour wipes our 21x14 fixture down to 1x1.  Replace
-    # it with a no-op so the pre-populated structure survives.
-    mock_ais.omrat.traffic.create_empty_dict = MagicMock()
-
-    # Mock other dependencies
     mock_ais.omrat.qgis_geoms.leg_dirs = {'1': ['East going', 'West going']}
-    mock_ais.omrat.traffic.run_update_plot = MagicMock()
-    mock_ais.db.execute_and_return = MagicMock(side_effect=[
-        [True, [['LINESTRING(14.435042123303658 55.24939672092081,14.372456499980117 55.276595228118936)']]],
-        ais_return,  # Mock ais_data query result
-        [True, [[37.0]]],  # Mock leg bearing query result
-    ])
 
-    # Call update_legs
-    mock_ais.update_legs()
+    submitted: list = []
+    # AisUpdateTask is imported inline inside update_legs(); patch it at its
+    # own module so the inline `from omrat_utils.ais_update_task import …`
+    # picks up the mock instead of the real QgsTask subclass.
+    with patch('omrat_utils.handle_ais.QgsApplication') as MockApp, \
+         patch('omrat_utils.ais_update_task.AisUpdateTask') as MockTask:
+        MockApp.taskManager.return_value.addTask.side_effect = submitted.append
+        MockTask.return_value = MagicMock()
+        mock_ais.update_legs()
 
-    # Verify that run_sql was called and returned ais_return
-    assert mock_ais.db.execute_and_return.call_count == 3
-    assert mock_ais.db.execute_and_return.call_args_list[1][0][0]  # Ensure the second call is for ais_data
+    assert len(submitted) == 1, "update_legs must submit exactly one task"
+    # Verify the constructor received the correct legs dict.
+    # AisUpdateTask is called with all-keyword args, so check call_args.kwargs.
+    legs = MockTask.call_args.kwargs['legs']
+    assert '1' in legs, "legs dict must contain segment id '1'"
+    assert legs['1']['Start_Point'] == '14.33188 55.21143'
+    assert legs['1']['End_Point'] == '14.52057 55.35013'
