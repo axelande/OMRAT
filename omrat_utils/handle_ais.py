@@ -1,17 +1,15 @@
-from _collections_abc import dict_items
 import os
 import re
-from typing import Any, cast, Tuple, TYPE_CHECKING
+from typing import Any, cast, TYPE_CHECKING
 if TYPE_CHECKING:
     from omrat import OMRAT
 
 import numpy as np
-from qgis.core import QgsApplication, QgsProject
+from qgis.core import QgsApplication
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QMessageBox, QTableWidget
 from shapely import wkt
 from shapely.geometry import Point
-from shapely.geometry.base import BaseGeometry
 
 from compute.database import DB
 from omrat_utils.vessel_lookup import VesselLookupConfig
@@ -19,6 +17,50 @@ from ui.ais_connection_widget import AISConnectionWidget
 
 
 _SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+_AIS_SELECT_TEMPLATE = (
+    "select ss.mmsi, segment, cog, sog, draught, type_and_cargo, "
+    "date1, dim_a, dim_b, dim_c, dim_d "
+    "FROM {tbl} ss "
+    "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
+    "JOIN {schema}.statics_{year} si on si.rowid=st.static_id "
+    "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
+)
+
+
+def _build_ais_union_block(schema: str, year: int, months: list[int]) -> str:
+    if months:
+        tables = [f"{schema}.segments_{year}_{month}" for month in months]
+    else:
+        tables = [f"{schema}.segments_{year}"]
+    return " UNION ".join(
+        _AIS_SELECT_TEMPLATE.format(tbl=tbl, schema=schema, year=year)
+        for tbl in tables
+    )
+
+
+def _assemble_ais_query(
+    union_block: str, cte_block: str, ext_join: str,
+    loa_fb: str, beam_fb: str, ship_type_expr: str, air_draught_expr: str,
+) -> str:
+    return (  # nosec B608
+        "with segments as (" + union_block + ")" + cte_block + " "
+        "SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 "
+        f"then {loa_fb} else dim_a + dim_b end as loa, "
+        "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
+        f"then {beam_fb} else dim_c + dim_d end as beam, "
+        "type_and_cargo, draught, "
+        f"{ship_type_expr}, "
+        "date1, sog, "
+        f"{air_draught_expr}, "
+        "st_distance("
+        "st_intersection(segment, st_geomfromtext(%(pl)s,4326))::geography, "
+        "st_startpoint(st_geomfromtext(%(pl)s, 4326))::geography"
+        ") - st_length(st_geomfromtext(%(pl)s, 4326)::geography) / 2 "
+        "as dist_from_start, cog "
+        "FROM segments ss"
+        + ext_join
+    )
 
 
 def _validate_sql_identifier(name: str) -> str:
@@ -210,47 +252,23 @@ class AIS:
             self.db = None
         self.max_deviation = float(self.acw.leMaxDev.text())
     
-    def update_ais_settings(self):
-        db_host = self.acw.leDBHost.text()
-        db_port = int(self.acw.SBPort.value())
-        db_name = self.acw.leDBName.text()
-        db_user = self.acw.leUserName.text()
-        db_pass = self.acw.lePassword.text()
-        self.schema = self.acw.leProvider.text()
-        self.year = self.acw.SBYear.value()
-        self.months = []
+    def _read_months_from_ui(self) -> list[int]:
+        months = []
         for i in range(1, 13):
-            cb = getattr(self.acw, f'CB_{i}')
-            if cb.isChecked():
-                self.months.append(i)
-        # Catch connection failures (wrong password, missing role, server
-        # down, ...) and surface them as a popup instead of letting the
-        # exception bubble up into a Python-error dialog.  ``DB._connect``
-        # already produces a friendly, cp1252-decoded message so we just
-        # show the exception text.
+            if getattr(self.acw, f'CB_{i}').isChecked():
+                months.append(i)
+        return months
+
+    def _connect_db_from_ui(self, db_host, db_port, db_name, db_user, db_pass) -> bool:
         try:
-            self.db = DB(
-                db_host=db_host, db_name=db_name,
-                db_user=db_user, db_pass=db_pass,
-                db_port=db_port,
-            )
+            self.db = DB(db_host=db_host, db_name=db_name, db_user=db_user, db_pass=db_pass, db_port=db_port)
+            return True
         except Exception as e:
             self.db = None
-            QMessageBox.warning(
-                self.omrat.main_widget,
-                self.omrat.tr("Could not connect to AIS database"),
-                str(e),
-            )
-            return
-        self.max_deviation = float(self.acw.leMaxDev.text())
-        for key, value in zip(
-            ["db_host", "db_port", "db_user", "db_pass", "db_name"],
-            [db_host, db_port, db_user, db_pass, db_name],
-        ):
-            self.settings.setValue(f"omrat/{key}", value)
-        # Capture + persist the external-vessel-lookup config so the
-        # next ``run_sql`` call sees the user's edits and the next
-        # session restores them.
+            QMessageBox.warning(self.omrat.main_widget, self.omrat.tr("Could not connect to AIS database"), str(e))
+            return False
+
+    def _capture_vessel_lookup_from_ui(self) -> None:
         self.vessel_lookup = VesselLookupConfig(
             enabled=bool(self.acw.gbExtVessel.isChecked()),
             schema=self.acw.leExtSchema.text().strip(),
@@ -262,11 +280,27 @@ class AIS:
             air_draught_col=self.acw.leExtAirDraughtCol.text().strip(),
         )
         self.vessel_lookup.to_qsettings()
-        # Recalculate-to-full-year flag.
+
+    def update_ais_settings(self):
+        db_host = self.acw.leDBHost.text()
+        db_port = int(self.acw.SBPort.value())
+        db_name = self.acw.leDBName.text()
+        db_user = self.acw.leUserName.text()
+        db_pass = self.acw.lePassword.text()
+        self.schema = self.acw.leProvider.text()
+        self.year = self.acw.SBYear.value()
+        self.months = self._read_months_from_ui()
+        if not self._connect_db_from_ui(db_host, db_port, db_name, db_user, db_pass):
+            return
+        self.max_deviation = float(self.acw.leMaxDev.text())
+        for key, value in zip(
+            ["db_host", "db_port", "db_user", "db_pass", "db_name"],
+            [db_host, db_port, db_user, db_pass, db_name],
+        ):
+            self.settings.setValue(f"omrat/{key}", value)
+        self._capture_vessel_lookup_from_ui()
         self.recalc_to_full_year = bool(self.acw.cbRecalcFullYear.isChecked())
-        self.settings.setValue(
-            "omrat/recalc_to_full_year", self.recalc_to_full_year,
-        )
+        self.settings.setValue("omrat/recalc_to_full_year", self.recalc_to_full_year)
 
     # ----------------------------------------------------------- coverage
 
@@ -330,13 +364,14 @@ class AIS:
         multiplier = self._YEAR_SECONDS / coverage_s
         return multiplier, coverage_s, gap_s
 
-    def update_legs(self, key: str | None = None) -> None:
-        """Launch a background task to fetch AIS data for all legs or one leg.
+    def _ensure_leg_dirs(self, legs: dict) -> dict[str, list[str]]:
+        for leg_key in legs:
+            if leg_key not in self.omrat.qgis_geoms.leg_dirs:
+                self.omrat.qgis_geoms.leg_dirs[leg_key] = self.omrat.segment_data[leg_key]["Dirs"]
+        return {k: list(v) for k, v in self.omrat.qgis_geoms.leg_dirs.items()}
 
-        All database queries and data processing run in a QgsTask so the UI
-        stays responsive.  Results are applied back to plugin state and the UI
-        is updated in the task's ``finished()`` callback (main thread).
-        """
+    def update_legs(self, key: str | None = None) -> None:
+        """Launch a background task to fetch AIS data for all legs or one leg."""
         if self.db is None:
             QMessageBox.information(
                 self.omrat.main_widget,
@@ -348,45 +383,28 @@ class AIS:
                 ),
             )
             return
-
-        # Collect everything that requires the main thread before launching.
         seg_table: dict[str, dict[str, str]] = self.get_segment_data_from_table()
         legs: dict[str, dict[str, str]] = (
             {key: seg_table[key]} if key is not None else dict(seg_table)
         )
         if not legs:
             return
-
-        # Ensure leg_dirs is populated for each leg we'll fetch.
-        for leg_key in legs:
-            if leg_key not in self.omrat.qgis_geoms.leg_dirs:
-                self.omrat.qgis_geoms.leg_dirs[leg_key] = (
-                    self.omrat.segment_data[leg_key]["Dirs"]
-                )
-        leg_dirs = {k: list(v) for k, v in self.omrat.qgis_geoms.leg_dirs.items()}
-
-        # Traffic matrix dimensions (read from UI table once, passed to task).
+        leg_dirs = self._ensure_leg_dirs(legs)
         tw = self.omrat.main_widget.twTrafficData
-        rows = tw.rowCount()
-        cols = tw.columnCount()
-
         from omrat_utils.ais_update_task import AisUpdateTask
         task = AisUpdateTask(
             ais=self,
             legs=legs,
             seg_table=seg_table,
-            rows=rows,
-            cols=cols,
+            rows=tw.rowCount(),
+            cols=tw.columnCount(),
             variables=list(self.omrat.traffic.variables),
             var_defaults=dict(self.omrat.traffic._var_cell_defaults),
             leg_dirs=leg_dirs,
         )
-
-        # Disable the main update button for the duration of the task.
         btn = getattr(self.omrat.main_widget, 'pbUpdateAIS', None)
         if btn is not None:
             btn.setEnabled(False)
-
         QgsApplication.taskManager().addTask(task)
         
     def convert_list2avg(self):
@@ -431,115 +449,48 @@ class AIS:
         self.omrat.segment_data[key]['ai1'] = 180
         self.omrat.segment_data[key]['ai2'] = 180
     
-    def run_sql(self, pl: str) -> list[list[Any]]:
-        """Runs the SQL query to get the passages.
-
-        The schema name (a SQL identifier — cannot be bound as a parameter)
-        is checked against a strict identifier regex; year/month are coerced
-        to int; the polygon WKT is bound via the ``%(pl)s`` placeholder so it
-        is never inlined into the query string.
-        """
-        if self.db is None:
-            # Should not occur
-            raise RuntimeError(self.omrat.tr("No database connection was found"))
-
-        schema = _validate_sql_identifier(str(self.schema))
-        year = int(self.year)
+    def _validate_months(self) -> list[int]:
         months: list[int] = []
         for m in self.months:
             mi = int(m)
             if not 1 <= mi <= 12:
                 raise ValueError(f"Invalid AIS month value: {m!r}")
             months.append(mi)
+        return months
 
-        # Build the per-table fragments that will be UNION'd together.
-        # ``schema`` is a validated SQL identifier and ``year`` / ``month``
-        # are ints, so f-string interpolation is safe.  ``pl`` is bound
-        # via the ``%(pl)s`` parameter placeholder, never inlined.
-        select_template = (
-            "select ss.mmsi, segment, cog, sog, draught, type_and_cargo, "
-            "date1, dim_a, dim_b, dim_c, dim_d "
-            "FROM {tbl} ss "
-            "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
-            "JOIN {schema}.statics_{year} si on si.rowid=st.static_id "
-            "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
+    def _build_ext_vessel_fragments(self) -> tuple[str, str, str, str, str, str]:
+        if not self.vessel_lookup.is_valid():
+            return "", "", "NULL", "NULL", "NULL::int as ship_type", "NULL::double precision as air_draught"
+        for ident in (
+            self.vessel_lookup.schema, self.vessel_lookup.table,
+            self.vessel_lookup.mmsi_col, self.vessel_lookup.loa_col,
+            self.vessel_lookup.beam_col, self.vessel_lookup.ship_type_col,
+            self.vessel_lookup.air_draught_col,
+        ):
+            if ident:
+                _validate_sql_identifier(ident)
+        cte_block = ", " + self.vessel_lookup.build_cte()
+        ext_join = " LEFT OUTER JOIN external_vessels ext ON ss.mmsi = ext.mmsi"
+        return (
+            cte_block, ext_join,
+            "ext.ext_loa", "ext.ext_beam",
+            "ext.ext_ship_type as ship_type",
+            "ext.ext_air_draught as air_draught",
         )
-        if months:
-            tables = [f"{schema}.segments_{year}_{month}" for month in months]
-        else:
-            tables = [f"{schema}.segments_{year}"]
-        union_block = " UNION ".join(
-            select_template.format(tbl=tbl, schema=schema, year=year)
-            for tbl in tables
+
+    def run_sql(self, pl: str) -> list[list[Any]]:
+        """Runs the SQL query to get the passages."""
+        if self.db is None:
+            raise RuntimeError(self.omrat.tr("No database connection was found"))
+        schema = _validate_sql_identifier(str(self.schema))
+        year = int(self.year)
+        months = self._validate_months()
+        union_block = _build_ais_union_block(schema, year, months)
+        cte_block, ext_join, loa_fb, beam_fb, ship_type_expr, air_draught_expr = (
+            self._build_ext_vessel_fragments()
         )
-
-        # nosec B608 - schema/year/month identifiers are validated above
-        # (regex + int coerce); ``pl`` is bound through the ``%(pl)s``
-        # placeholder, never inlined into the query string.
-        #
-        # Vessel dimensions come straight from the AIS Type-5 statics
-        # (dim_a/b/c/d):
-        #   loa  = dim_a + dim_b   (length: bow offset + stern offset)
-        #   beam = dim_c + dim_d   (beam:   port offset + starboard offset)
-        # When the AIS dimensions look bogus (sum < 2 m, or any single
-        # offset > the AIS spec maximum) we fall back to the user's
-        # external vessel table if one is configured (see
-        # ``vessel_lookup`` / the AIS Settings dialog), otherwise NULL.
-        # ``update_ais_data`` then falls back to its own default
-        # (loa=100 m, skip beam).
-        #
-        # ``ship_type`` and ``air_draught`` come from the external table
-        # only — neither is in the AIS Type-5 statics, so without a
-        # configured vessel-lookup table they're NULL.  Ship
-        # classification then falls back to ``type_and_cargo`` via
-        # ``get_type``; air-draught distributions stay empty.
-        ext_active = self.vessel_lookup.is_valid()
-        if ext_active:
-            # Defence-in-depth: ``is_valid()`` already enforces the
-            # SQL-identifier shape, but re-validate before interpolation
-            # so any future plumbing change still trips an early raise
-            # rather than handing a poisoned identifier to libpq.
-            for ident in (
-                self.vessel_lookup.schema, self.vessel_lookup.table,
-                self.vessel_lookup.mmsi_col, self.vessel_lookup.loa_col,
-                self.vessel_lookup.beam_col, self.vessel_lookup.ship_type_col,
-                self.vessel_lookup.air_draught_col,
-            ):
-                if ident:
-                    _validate_sql_identifier(ident)
-            cte_block = ", " + self.vessel_lookup.build_cte()
-            ext_join = (
-                " LEFT OUTER JOIN external_vessels ext ON ss.mmsi = ext.mmsi"
-            )
-            loa_fallback = "ext.ext_loa"
-            beam_fallback = "ext.ext_beam"
-            ship_type_expr = "ext.ext_ship_type as ship_type"
-            air_draught_expr = "ext.ext_air_draught as air_draught"
-        else:
-            cte_block = ""
-            ext_join = ""
-            loa_fallback = "NULL"
-            beam_fallback = "NULL"
-            ship_type_expr = "NULL::int as ship_type"
-            air_draught_expr = "NULL::double precision as air_draught"
-
-        sql = (
-            "with segments as (" + union_block + ")" + cte_block + " "  # nosec B608
-            "SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 "
-            f"then {loa_fallback} else dim_a + dim_b end as loa, "
-            "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
-            f"then {beam_fallback} else dim_c + dim_d end as beam, "
-            "type_and_cargo, draught, "
-            f"{ship_type_expr}, "
-            "date1, sog, "
-            f"{air_draught_expr}, "
-            "st_distance("
-            "st_intersection(segment, st_geomfromtext(%(pl)s,4326))::geography, "
-            "st_startpoint(st_geomfromtext(%(pl)s, 4326))::geography"
-            ") - st_length(st_geomfromtext(%(pl)s, 4326)::geography) / 2 "
-            "as dist_from_start, cog "
-            "FROM segments ss"
-            + ext_join
+        sql = _assemble_ais_query(
+            union_block, cte_block, ext_join, loa_fb, beam_fb, ship_type_expr, air_draught_expr,
         )
         ok, ais_data = cast(
             tuple[bool, list[list[Any]]],
@@ -549,6 +500,34 @@ class AIS:
             return ais_data
         else:
             raise TypeError(ais_data[0][0])
+
+    def _bin_one_ping(
+        self, leg_key: str, dir_: str,
+        loa, toc, sog, air_draught, beam, draugt, multiplier: float,
+    ) -> None:
+        if loa is None:
+            loa = 100
+        loa = int(loa)
+        loa_cat = -1
+        freq_data = self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)']
+        n_loa_cats = len(freq_data[0]) if freq_data else 0
+        for loa_i in range(n_loa_cats):
+            if loa_i * 25 < loa <= (loa_i * 25 + 25):
+                loa_cat = loa_i
+                continue
+        if loa_cat < 0:
+            loa_cat = n_loa_cats - 1 if n_loa_cats > 0 else 0
+        type_cat = get_type(toc)
+        td = self.omrat.traffic.traffic_data[leg_key][dir_]
+        td['Frequency (ships/year)'][type_cat][loa_cat] += multiplier
+        if sog is not None:
+            td['Speed (knots)'][type_cat][loa_cat].append(float(sog))
+        if air_draught is not None:
+            td['Ship heights (meters)'][type_cat][loa_cat].append(float(air_draught))
+        if beam is not None:
+            td['Ship Beam (meters)'][type_cat][loa_cat].append(float(beam))
+        if draugt is not None:
+            td['Draught (meters)'][type_cat][loa_cat].append(float(draugt))
 
     def update_ais_data(
         self, leg_key: str, ais_data: list[list[Any]],
@@ -563,8 +542,8 @@ class AIS:
         distributions are *not* scaled — they are observations, not
         counts, and ``convert_list2avg`` averages them downstream.
         """
-        line1:list[float] = []
-        line2:list[float] = []
+        line1: list[float] = []
+        line2: list[float] = []
         for loa, beam, toc, draugt, sh_type, _, sog, air_draught, dist, cog in ais_data:
             if close_to_line(leg_bearing + 180, cog, self.max_deviation):
                 line1.append(dist)
@@ -573,35 +552,9 @@ class AIS:
                 line2.append(dist)
                 l1 = False
             else:
-                # print(leg_bearing, cog, self.max_deviation)
                 continue
             dir_ = dirs[0] if l1 else dirs[1]
-            if loa is None:
-                loa = 100
-            loa = int(loa)
-            loa_cat = -1
-            freq_data = self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)']
-            n_loa_cats = len(freq_data[0]) if freq_data else 0
-            for loa_i in range(n_loa_cats):
-                if loa_i * 25 < loa <= (loa_i * 25 + 25):
-                    loa_cat = loa_i
-                    continue
-            if loa_cat < 0:
-                loa_cat = n_loa_cats - 1 if n_loa_cats > 0 else 0
-            if sh_type is None:
-                sh_type = ''
-            type_cat = get_type(toc)
-            self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)'][type_cat][loa_cat] += multiplier
-            if sog is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Speed (knots)'][type_cat][loa_cat].append(float(sog))
-            if air_draught is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Ship heights (meters)'][type_cat][loa_cat].append(
-                    float(air_draught))
-            if beam is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Ship Beam (meters)'][type_cat][loa_cat].append(float(beam))
-            if draugt is not None:
-                self.omrat.traffic.traffic_data[leg_key][dir_]['Draught (meters)'][type_cat][loa_cat].append(
-                    float(draugt))
+            self._bin_one_ping(leg_key, dir_, loa, toc, sog, air_draught, beam, draugt, multiplier)
         np_line1 = np.array(line1)
         np_line2 = np.array(line2)
         return np_line1, np_line2

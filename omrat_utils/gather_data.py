@@ -1,8 +1,5 @@
 from __future__ import annotations
-import json
-import os
 import copy
-from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
 from typing import Any
 import numpy as np
@@ -297,27 +294,7 @@ class GatherData:
                 rows.append([str(item), '', ''])
         return rows
     
-    def populate(self, data):
-        # Load ship categories first (needed for traffic table dimensions)
-        if 'ship_categories' in data and data['ship_categories']:
-            self.populate_ship_categories(data['ship_categories'])
-
-        # Load causation factors -- merge over the defaults rather
-        # than replacing the dict, because legacy ``.omrat`` files only
-        # persisted ``p_pc`` / ``d_pc`` and would otherwise wipe the
-        # collision keys (``headon``, ``overtaking``, ...) and break
-        # later ``set_values`` lookups.
-        if 'pc' in data and isinstance(data['pc'], dict):
-            self.p.causation_f.data.update(data['pc'])
-
-        self.p.traffic_data = data['traffic_data']
-        # The Traffic instance captures its own reference to the dict at
-        # __init__; update it too so cbTrafficDirectionSelect gets populated.
-        if hasattr(self.p, 'traffic') and self.p.traffic is not None:
-            self.p.traffic.traffic_data = self.p.traffic_data
-        # Project-level traffic-scaling state (global spinbox + follow-global
-        # flags).  Optional on legacy projects -- the normalizer + the
-        # Traffic helpers default it to 100% / all-ticked.
+    def _load_traffic_scaling(self, data: dict) -> None:
         from omrat_utils.handle_traffic import _default_traffic_scaling
         scaling_block = data.get('traffic_scaling')
         if isinstance(scaling_block, dict):
@@ -329,7 +306,6 @@ class GatherData:
             self.p.traffic_scaling = {'global_percent': gp, 'follow_global': flags}
         else:
             self.p.traffic_scaling = _default_traffic_scaling()
-        # Reflect the loaded global value in the UI spinbox (if it exists).
         sb = getattr(self.p.main_widget, 'dsbGlobalTrafficScaling', None)
         if sb is not None:
             try:
@@ -338,26 +314,28 @@ class GatherData:
             finally:
                 sb.blockSignals(False)
         traffic = getattr(self.p, 'traffic', None)
-        # The two scaling helpers live on the real ``Traffic`` instance
-        # only -- regression tests stub ``self.p.traffic`` with a
-        # ``SimpleNamespace``, so guard with ``hasattr`` before calling.
         if traffic is not None and hasattr(traffic, 'ensure_scaling_present'):
             traffic.ensure_scaling_present()
         if traffic is not None and hasattr(traffic, 'populate_scaling_checkboxes'):
             traffic.populate_scaling_checkboxes()
+
+    def _populate_causation_and_traffic(self, data: dict) -> None:
+        if 'pc' in data and isinstance(data['pc'], dict):
+            self.p.causation_f.data.update(data['pc'])
+        self.p.traffic_data = data['traffic_data']
+        if hasattr(self.p, 'traffic') and self.p.traffic is not None:
+            self.p.traffic.traffic_data = self.p.traffic_data
+        self._load_traffic_scaling(data)
+
+    def _populate_segment_data(self, data: dict) -> None:
         self.p.segment_data = data['segment_data']
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']
-        # Load the write-once segments_imported snapshot.  Absent on
-        # legacy files — ``get_all_for_save`` seeds it on next save.
         imported_raw = data.get('segments_imported') or {}
         self.p.segments_imported = {
-            str(sid): {
-                'Start_Point': str(rec.get('Start_Point', '')),
-                'End_Point': str(rec.get('End_Point', '')),
-            }
-            for sid, rec in imported_raw.items()
-            if isinstance(rec, dict)
+            str(sid): {'Start_Point': str(rec.get('Start_Point', '')),
+                       'End_Point': str(rec.get('End_Point', ''))}
+            for sid, rec in imported_raw.items() if isinstance(rec, dict)
         }
         for key, item in data['segment_data'].items():
             self.p.segment_data[key]['dist1'] = np.array(item['dist1'])
@@ -366,50 +344,44 @@ class GatherData:
         self.populate_cbTrafficSelectSeg()
         self.p.main_widget.leNormMean1_1.setText('')
         self.p.distributions.change_dist_segment(self.p.distributions.last_id)
+
+    def _populate_objects_and_canvas(self, data: dict, depth_rows: list, object_rows: list) -> None:
+        self.p.object.area_type = 'depth'
+        for i, dep in enumerate(depth_rows):
+            depth_value = dep[1] if len(dep) > 1 else dep[0]
+            self.p.object.load_area(f'Depth - {depth_value}m', dep[2], row=i,
+                                    value=depth_value, value_field='Depth', defer_style=True)
+        self.p.object._apply_depth_graduated_style()
+        self.p.object.area_type = 'object'
+        for j, obj in enumerate(object_rows):
+            height_value = obj[1] if len(obj) > 1 else obj[0]
+            self.p.object.load_area(f'Structure - {height_value}m', obj[2], row=j,
+                                    value=height_value, value_field='Height')
+        self.p.load_lines(data)
+
+    def _populate_consequence_and_junctions(self, data: dict) -> None:
+        consequence_handler = getattr(self.p, 'consequence', None)
+        if consequence_handler is not None:
+            consequence_handler.load_from_dict(
+                data.get('consequence') or {}, data.get('ship_categories') or {},
+            )
+        junctions_handler = getattr(self.p, 'junctions', None)
+        if junctions_handler is not None:
+            junctions_handler.load_from_dict(
+                data.get('junctions') or {}, data.get('segment_data') or {},
+            )
+
+    def populate(self, data):
+        if 'ship_categories' in data and data['ship_categories']:
+            self.populate_ship_categories(data['ship_categories'])
+        self._populate_causation_and_traffic(data)
+        self._populate_segment_data(data)
         depth_rows = self.normalize_depths_for_ui(data['depths'])
         object_rows = self.normalize_objects_for_ui(data['objects'])
         self.populate_tbl(depth_rows, self.p.main_widget.twDepthList)
         self.populate_tbl(object_rows, self.p.main_widget.twObjectList)
-        
-        # Load data to canvas.  Order matters: layers added EARLIER end
-        # up at the BOTTOM of the QGIS layer panel and therefore render
-        # behind layers added later.  We want depth polygons to sit at
-        # the back (they fill large areas of the canvas), structures in
-        # the middle, and the leg lines on top so they stay visible.
-        self.p.object.area_type = 'depth'
-        for i, dep in enumerate(depth_rows):
-            depth_value = dep[1] if len(dep) > 1 else dep[0]
-            self.p.object.load_area(f'Depth - {depth_value}m', dep[2], row=i, value=depth_value,
-                                    value_field='Depth', defer_style=True)
-        self.p.object._apply_depth_graduated_style()
-        self.p.object.area_type = 'object'
-        for j, obj in enumerate(object_rows):
-            # obj = [id, height_value, polygon] - use height_value (obj[1]) for layer name
-            height_value = obj[1] if len(obj) > 1 else obj[0]
-            self.p.object.load_area(f'Structure - {height_value}m', obj[2], row=j, value=height_value, value_field='Height')
-        # Legs go on last so they stay on top of depths + structures.
-        self.p.load_lines(data)
-
-        # Load oil-spill consequence inputs into the handler.  If the
-        # handler hasn't been constructed yet (testing path) we silently
-        # skip; the next save will just write defaults.
-        consequence_handler = getattr(self.p, 'consequence', None)
-        if consequence_handler is not None:
-            consequence_handler.load_from_dict(
-                data.get('consequence') or {},
-                data.get('ship_categories') or {},
-            )
-
-        # Load junction transition matrices.  Missing block is treated
-        # as "rebuild from scratch" — the handler will discover the
-        # junctions implied by the loaded segment_data and seed them
-        # with geometric defaults.
-        junctions_handler = getattr(self.p, 'junctions', None)
-        if junctions_handler is not None:
-            junctions_handler.load_from_dict(
-                data.get('junctions') or {},
-                data.get('segment_data') or {},
-            )
+        self._populate_objects_and_canvas(data, depth_rows, object_rows)
+        self._populate_consequence_and_junctions(data)
             
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.

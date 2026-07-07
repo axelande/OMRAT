@@ -15,18 +15,9 @@ try:
 except ImportError:
     shp_make_valid = None
 
-from compute.data_preparation import (
-    prepare_traffic_lists,
-    transform_to_utm,
-    split_structures_and_depths,
-)
+from compute.data_preparation import prepare_traffic_lists, transform_to_utm
 from geometries.get_drifting_overlap import DriftingOverlapVisualizer
-from geometries.get_powered_overlap import (
-    PoweredOverlapVisualizer,
-    SimpleProjector as _PoweredProjector,
-    _build_legs_and_obstacles,
-    _parse_point,
-)
+from geometries.get_powered_overlap import PoweredOverlapVisualizer
 from ui.show_geom_res import ShowGeomRes
 
 

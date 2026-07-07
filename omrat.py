@@ -23,13 +23,12 @@
 """
 from typing import Any, Callable
 from functools import partial
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QMetaType, QUrl
-from qgis.PyQt.QtGui import QIcon, QAction, QCloseEvent, QDesktopServices
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QUrl
+from qgis.PyQt.QtGui import QIcon, QAction, QDesktopServices
 from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
 from qgis._core import QgsVectorDataProvider
-from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject,
-                       QgsField, QgsFields)
-from qgis.core import QgsPointXY, QgsMessageLog, Qgis, QgsApplication
+from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsProject)
+from qgis.core import QgsMessageLog, Qgis, QgsApplication
 
 from qgis.gui import QgsMapToolPan, QgisInterface
 import copy
@@ -59,9 +58,6 @@ from omrat_utils.handle_consequence import Consequence
 from omrat_utils.handle_junctions import Junctions
 from omrat_utils.gather_data import GatherData
 from omrat_widget import OMRATMainWidget
-from geometries.drift import DriftCorridorGenerator
-from geometries.drift_corridor_task_v2 import DriftCorridorTask
-
 
 from omrat_utils.compare_mixin import CompareMixin
 from omrat_utils.accident_results_mixin import AccidentResultsMixin
@@ -106,17 +102,7 @@ class OMRAT(
             parent=self.iface.mainWindow() if not self.testing else None,
         )
         if not self.testing:
-            # initialize locale
-            locale: str = QSettings().value('locale/userLocale')[0:2]
-            locale_path: str = os.path.join(
-                self.plugin_dir,
-                'i18n',
-                f'OMRAT_{locale}.qm')
-
-            if os.path.exists(locale_path):
-                self.translator: QTranslator = QTranslator()
-                self.translator.load(locale_path)
-                QCoreApplication.installTranslator(self.translator)
+            self._init_locale()
 
         # Declare instance attributes
         self.actions: list[Any] = []
@@ -124,9 +110,7 @@ class OMRAT(
         self.toolbar: QToolBar = self.iface.addToolBar(u'OMRAT')
         self.toolbar.setObjectName(u'OMRAT')
 
-            #print "** INITIALIZING OMRAT"
         self.pluginIsActive = False
-        self.been_closed = False
         self.segment_id = 0
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
         self.segment_data: dict[str, Any] = {}
@@ -166,6 +150,14 @@ class OMRAT(
         # Cleared from ``_on_calculation_finished`` /
         # ``_on_calculation_failed``.  See ``run_calculation`` for why.
         self._current_task = None
+
+    def _init_locale(self) -> None:
+        locale: str = QSettings().value('locale/userLocale')[0:2]
+        locale_path: str = os.path.join(self.plugin_dir, 'i18n', f'OMRAT_{locale}.qm')
+        if os.path.exists(locale_path):
+            self.translator: QTranslator = QTranslator()
+            self.translator.load(locale_path)
+            QCoreApplication.installTranslator(self.translator)
 
     def tr(self, message:str):
         """Get the translation for a string using Qt translation API.
@@ -297,6 +289,17 @@ class OMRAT(
                 pass
         self._history_layers.clear()
 
+    def _remove_drift_corridor_layers(self) -> None:
+        """Remove all drift corridor layers from the QGIS project and clear the list."""
+        for layer in self.drift_corridor_layers:
+            try:
+                project = QgsProject.instance()
+                if project is not None and layer is not None:
+                    project.removeMapLayer(layer.id())
+            except Exception:
+                pass
+        self.drift_corridor_layers.clear()
+
     def _read_tracker_url(self) -> str:
         """Read the `tracker` field from metadata.txt for the Let-us-know button."""
         try:
@@ -404,32 +407,11 @@ class OMRAT(
             return 'merge'
         return 'cancel'
 
-    def clear_model(self) -> None:
-        """Reset all model state and UI to defaults."""
-        QgsMessageLog.logMessage("Clearing current model", "OMRAT", Qgis.Info)
-
-        # --- 1. Clear QGIS layers ---
+    def _clear_layers(self) -> None:
         self.qgis_geoms.clear()
         self.object.clear()
-
-        # Remove drift corridor layers
-        for layer in self.drift_corridor_layers:
-            try:
-                project = QgsProject.instance()
-                if project is not None and layer is not None:
-                    project.removeMapLayer(layer.id())
-            except Exception:
-                pass
-        self.drift_corridor_layers.clear()
-
-        # Remove any layers loaded from previous-run GeoPackages.
+        self._remove_drift_corridor_layers()
         self._remove_history_layers_from_project()
-
-        # Reset cached Calculation result-layer attributes.  The plugin
-        # no longer auto-adds memory layers to the canvas during a run --
-        # results are persisted to per-run GeoPackages instead -- so
-        # there is nothing to remove from the project here.  Just clear
-        # the attribute references so a re-run starts clean.
         if self.calc is not None:
             for attr in (
                 'allision_result_layer', 'grounding_result_layer',
@@ -438,95 +420,64 @@ class OMRAT(
             ):
                 setattr(self.calc, attr, None)
 
-        # --- 2. Clear internal data structures ---
+    def _reset_data_structures(self) -> None:
         self.traffic_data = {}
         self.segment_data = {}
         from omrat_utils.handle_traffic import _default_traffic_scaling
         self.traffic_scaling = _default_traffic_scaling()
         self.segments_imported = {}
         self.segment_id = 0
-
-        # Reset drift settings to defaults
         from compute.iwrap_defaults import default_drift_values
         default_drift = default_drift_values()
         self.drift_values = default_drift
         self.drift_settings.drift_values = default_drift
-
-        # Reset causation factors to defaults.  Use the full default
-        # set defined in ``CausationFactors.__init__`` so collision
-        # keys (``headon``, ``overtaking``, ...) survive Clear.
         from omrat_utils.causation_factors import CausationFactors
         self.causation_f.data = CausationFactors(self).data
         self.causation_values = self.causation_f.data
-
-        # Reset distributions tracking
         self.distributions.last_id = '1'
         self.distributions.new_id = '1'
-
-        # Prevent traffic table updates during clearing
         self.traffic.run_update = False
         self.traffic.traffic_data = self.traffic_data
         self.traffic.c_seg = ''
 
-        # --- 3. Clear UI widgets ---
+    def _clear_ui_widgets(self) -> None:
         self.reset_route_table()
-
         self.main_widget.twDepthList.setRowCount(0)
         self.main_widget.twObjectList.setRowCount(0)
-
         self.main_widget.cbTrafficSelectSeg.clear()
         self.main_widget.cbTrafficDirectionSelect.clear()
         self.traffic.set_table_headings()
-
-        # Distribution fields
-        dist_widgets = [
-            self.main_widget.leNormMean1_1, self.main_widget.leNormMean1_2,
-            self.main_widget.leNormMean1_3, self.main_widget.leNormMean2_1,
-            self.main_widget.leNormMean2_2, self.main_widget.leNormMean2_3,
-            self.main_widget.leNormStd1_1, self.main_widget.leNormStd1_2,
-            self.main_widget.leNormStd1_3, self.main_widget.leNormStd2_1,
-            self.main_widget.leNormStd2_2, self.main_widget.leNormStd2_3,
-            self.main_widget.leNormWeight1_1, self.main_widget.leNormWeight1_2,
-            self.main_widget.leNormWeight1_3, self.main_widget.leNormWeight2_1,
-            self.main_widget.leNormWeight2_2, self.main_widget.leNormWeight2_3,
+        for w in [
+            self.main_widget.leNormMean1_1, self.main_widget.leNormMean1_2, self.main_widget.leNormMean1_3,
+            self.main_widget.leNormMean2_1, self.main_widget.leNormMean2_2, self.main_widget.leNormMean2_3,
+            self.main_widget.leNormStd1_1, self.main_widget.leNormStd1_2, self.main_widget.leNormStd1_3,
+            self.main_widget.leNormStd2_1, self.main_widget.leNormStd2_2, self.main_widget.leNormStd2_3,
+            self.main_widget.leNormWeight1_1, self.main_widget.leNormWeight1_2, self.main_widget.leNormWeight1_3,
+            self.main_widget.leNormWeight2_1, self.main_widget.leNormWeight2_2, self.main_widget.leNormWeight2_3,
             self.main_widget.leUniformMin1, self.main_widget.leUniformMax1,
             self.main_widget.leUniformMin2, self.main_widget.leUniformMax2,
-        ]
-        for w in dist_widgets:
+        ]:
             w.setText('0')
         self.main_widget.sbUniformP1.setValue(0)
         self.main_widget.sbUniformP2.setValue(0)
-
-        # Result fields
-        result_fields = [
-            self.main_widget.LEPDriftAllision,
-            self.main_widget.LEPPoweredAllision,
-            self.main_widget.LEPDriftingGrounding,
-            self.main_widget.LEPPoweredGrounding,
-            self.main_widget.LEPOvertakingCollision,
-            self.main_widget.LEPHeadOnCollision,
-            self.main_widget.LEPCrossingCollision,
-            self.main_widget.LEPMergingCollision,
-        ]
-        for field in result_fields:
+        for field in [
+            self.main_widget.LEPDriftAllision, self.main_widget.LEPPoweredAllision,
+            self.main_widget.LEPDriftingGrounding, self.main_widget.LEPPoweredGrounding,
+            self.main_widget.LEPOvertakingCollision, self.main_widget.LEPHeadOnCollision,
+            self.main_widget.LEPCrossingCollision, self.main_widget.LEPMergingCollision,
+        ]:
             field.setText('')
-
         self.main_widget.LEModelName.setText('')
-        # The Previous-runs table reflects the master run-history DB,
-        # not the currently-loaded project, so reload from the DB
-        # instead of wiping it -- the rows survive a project clear /
-        # load.
         try:
             self.refresh_previous_runs_table()
         except Exception:
             self.main_widget.TWPreviousRuns.setRowCount(0)
         self.main_widget.laDir1.setText('')
         self.main_widget.laDir2.setText('')
-
         if hasattr(self.main_widget, 'label_drift_status'):
             self.main_widget.label_drift_status.setText('')
 
-        # Remove distribution plot canvas if present
+    def _clear_distribution_canvas(self) -> None:
         if self.distributions.canvas is not None:
             try:
                 self.main_widget.DistributionWidget.removeWidget(self.distributions.canvas)
@@ -535,9 +486,14 @@ class OMRAT(
             except Exception:
                 pass
 
-        # Re-enable traffic updates
+    def clear_model(self) -> None:
+        """Reset all model state and UI to defaults."""
+        QgsMessageLog.logMessage("Clearing current model", "OMRAT", Qgis.Info)
+        self._clear_layers()
+        self._reset_data_structures()
+        self._clear_ui_widgets()
+        self._clear_distribution_canvas()
         self.traffic.run_update = True
-
         self.iface.mapCanvas().refresh()
         QgsMessageLog.logMessage("Model cleared successfully", "OMRAT", Qgis.Info)
 
@@ -562,74 +518,52 @@ class OMRAT(
         self.pluginIsActive = False
         self.main_widget.is_active = False
 
-    def unload(self):
-        """Removes the plugin menu item and icon from QGIS GUI."""
-        # Drop any pending OMRAT message-bar items so they don't outlive
-        # the plugin (a Plugin Reloader cycle would otherwise leave stale
-        # toasts referencing torn-down callbacks).
-        try:
-            self.notifier.dismiss_all()
-        except Exception:
-            pass
-
-        # Disconnect project cleared signal
-        try:
-            QgsProject.instance().cleared.disconnect(self._on_project_cleared)
-        except Exception:
-            pass
-
-        # Call the unload method of Traffic
-        self.traffic.unload()
-
-        # Call the unload method of AIS
-        self.ais.unload()
-
-        # Unload geometries
-        self.object.unload()
-        self.qgis_geoms.unload()
-
-        # Remove drift corridor layers
-        for layer in self.drift_corridor_layers:
+    def _remove_calc_result_layers(self) -> None:
+        if self.calc is None:
+            return
+        for attr in (
+            'allision_result_layer', 'grounding_result_layer',
+            'collision_line_layer', 'collision_point_layer',
+            'powered_grounding_layer', 'powered_allision_layer',
+        ):
+            layer = getattr(self.calc, attr, None)
             try:
                 project = QgsProject.instance()
                 if project is not None and layer is not None:
                     project.removeMapLayer(layer.id())
             except Exception:
                 pass
-        self.drift_corridor_layers.clear()
+            setattr(self.calc, attr, None)
 
-        # Remove any layers loaded from previous-run GeoPackages.
+    def _unload_modules(self) -> None:
+        for folder in ['omrat_utils', 'compute', 'geometries']:
+            to_remove = [m for m in sys.modules if m.startswith(folder)]
+            for m in to_remove:
+                QgsMessageLog.logMessage(f"{m} unloaded", "OMRAT", Qgis.Info)
+                del sys.modules[m]
+
+    def unload(self):
+        """Removes the plugin menu item and icon from QGIS GUI."""
+        try:
+            self.notifier.dismiss_all()
+        except Exception:
+            pass
+        try:
+            QgsProject.instance().cleared.disconnect(self._on_project_cleared)
+        except Exception:
+            pass
+        self.traffic.unload()
+        self.ais.unload()
+        self.object.unload()
+        self.qgis_geoms.unload()
+        self._remove_drift_corridor_layers()
         self._remove_history_layers_from_project()
-
-        # Remove result layers (allision/grounding/collision/powered visualization)
-        if self.calc is not None:
-            result_layer_attrs = [
-                'allision_result_layer', 'grounding_result_layer',
-                'collision_line_layer', 'collision_point_layer',
-                'powered_grounding_layer', 'powered_allision_layer',
-            ]
-            for attr in result_layer_attrs:
-                layer = getattr(self.calc, attr, None)
-                try:
-                    project = QgsProject.instance()
-                    if project is not None and layer is not None:
-                        project.removeMapLayer(layer.id())
-                except Exception:
-                    pass
-                setattr(self.calc, attr, None)
-
-        # Remove actions from menu and toolbar
+        self._remove_calc_result_layers()
         for action in self.actions:
-            self.iface.removePluginMenu(
-                self.tr(u'&Open Maritime Risk Analysis Tool'),
-                action)
+            self.iface.removePluginMenu(self.tr(u'&Open Maritime Risk Analysis Tool'), action)
             self.iface.removeToolBarIcon(action)
-
-        # Remove the toolbar
         if hasattr(self, 'toolbar'):
-            del self.toolbar    
-
-        # Disconnect signals and clean up dock widget
+            del self.toolbar
         try:
             self.onClosePlugin()
         except Exception as e:
@@ -641,13 +575,7 @@ class OMRAT(
         except TypeError:
             pass
         gc.collect()
-        # Remove all plugin modules from sys.modules to ensure fresh code on reload
-        for folder in ['omrat_utils', 'compute', 'geometries']:
-            to_remove = [m for m in sys.modules if m.startswith(folder)]
-            for m in to_remove:
-                QgsMessageLog.logMessage(f"{m} unloaded", "OMRAT", Qgis.Info)
-                del sys.modules[m]
-        self.been_close = True
+        self._unload_modules()
         QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.Info)
         
     def point4326_from_wkt(self, coord_str:str, crs:str) -> QgsPoint:
@@ -658,97 +586,93 @@ class OMRAT(
         q_point = QgsPoint(coords[0], coords[1])
         return q_point
         
+    def _init_segment_layer(self, seg_data: dict, crs: str):
+        route_id = seg_data['Route_Id']
+        seg_id = seg_data['Segment_Id']
+        name = f"Segment {route_id} - {seg_id}"
+        vl = QgsVectorLayer(f"LineString?crs=EPSG:4326", name, "memory")
+        QgsProject.instance().addMapLayer(vl)
+        self.segment_id += 1
+        if not vl.isEditable():
+            vl.startEditing()
+        fields = self.qgis_geoms.create_fields()
+        provider = vl.dataProvider()
+        if provider is None:
+            return vl, fields, None, 0
+        provider.addAttributes(fields.toList())
+        vl.updateFields()
+        try:
+            fid = int(str(seg_id))
+        except Exception:
+            fid = self.segment_id
+        return vl, fields, provider, fid
+
+    def _build_segment_feature(self, seg_data: dict, fields, fid: int, crs: str = ''):
+        fet = QgsFeature(fields)
+        start = self.point4326_from_wkt(seg_data["Start_Point"], crs)
+        end = self.point4326_from_wkt(seg_data["End_Point"], crs)
+        fet.setGeometry(QgsLineString([start, end]))
+        fet.setAttributes([
+            seg_data["Segment_Id"], seg_data["Route_Id"],
+            seg_data["Start_Point"], seg_data["End_Point"],
+            f"LEG_{seg_data['Route_Id']}_{seg_data['Segment_Id']}",
+        ])
+        fet.setId(fid)
+        return fet
+
+    def _validate_and_wire_segment(self, vl, fet, fid: int, seg_data: dict) -> bool:
+        if not fet.geometry().isGeosValid():
+            msg = (
+                f"Invalid geometry for segment {seg_data.get('Segment_Id')} "
+                f"(route {seg_data.get('Route_Id')}): "
+                f"start={seg_data.get('Start_Point')!r} end={seg_data.get('End_Point')!r}. Layer not added."
+            )
+            print(msg)
+            try:
+                QgsMessageLog.logMessage(msg, "OMRAT", Qgis.Warning)
+            except Exception:
+                pass
+            try:
+                QgsProject.instance().removeMapLayer(vl.id())
+            except Exception:
+                pass
+            return False
+        edit_buffer = vl.editBuffer()
+        if edit_buffer is not None:
+            edit_buffer.geometryChanged.connect(partial(self.qgis_geoms.on_geometry_changed_wrapper, fid))
+        vl.triggerRepaint()
+        return True
+
     def load_lines(self, data:dict[str, dict[str, Any]]) -> None:
         self.segment_id = 0
         crs = self.iface.mapCanvas().mapSettings().destinationCrs().authid()
         for key, seg_data in data["segment_data"].items():
-            # Freshly-drawn legs may not have Segment_Id / Route_Id in the
-            # dict yet (those are filled in by GatherData.get_segment_tbl
-            # on save).  Fall back to the dict key and route 1 so the
-            # validation-pass reload doesn't KeyError mid-rebuild and
-            # wipe the canvas + route table.
             seg_id = seg_data.get('Segment_Id', key)
             route_id = seg_data.get('Route_Id', 1)
             seg_data.setdefault('Segment_Id', seg_id)
             seg_data.setdefault('Route_Id', route_id)
-            name = f"Segment {route_id} - {seg_id}"
-            vl = QgsVectorLayer(f"LineString?crs=EPSG:4326", name, "memory")
-            QgsProject.instance().addMapLayer(vl)
-            
-            self.segment_id += 1
-            if not vl.isEditable():
-                vl.startEditing()
-            fields = self.qgis_geoms.create_fields()
-            provider: QgsVectorDataProvider | None = vl.dataProvider()
+            vl, fields, provider, fid = self._init_segment_layer(seg_data, crs)
             if provider is None:
                 return
-            provider.addAttributes(fields.toList())
-            vl.updateFields()
-
-            # Create feature
-            fet = QgsFeature(fields)
-            start = self.point4326_from_wkt(seg_data["Start_Point"], crs)
-            end = self.point4326_from_wkt(seg_data["End_Point"], crs)
-            fet.setGeometry(QgsLineString([start, end]))
-            fet.setAttributes([seg_data["Segment_Id"], seg_data["Route_Id"], seg_data["Start_Point"],
-                               seg_data["End_Point"], f"LEG_{seg_data['Route_Id']}_{seg_data['Segment_Id']}"])
+            fet = self._build_segment_feature(seg_data, fields, fid, crs)
             self.qgis_geoms.style_layer(vl)
-            # Ensure feature id matches Segment_Id so geometry edits update correct row
-            try:
-                fid = int(str(seg_data["Segment_Id"]))
-            except Exception:
-                fid = self.segment_id
-            fet.setId(fid)
             provider.addFeature(fet)
             self.qgis_geoms.label_layer(vl)
             vl.updateExtents()
-            
-            # Validate geometry.  An invalid geometry used to silently
-            # `continue` -- the layer was already added to the project
-            # but no feature was ever appended, so the QGIS layer panel
-            # showed an empty layer with no clue why.  Surface it
-            # loudly and remove the orphan so the layer-count visible
-            # to the user matches the route table.
-            if not fet.geometry().isGeosValid():
-                msg = (
-                    f"Invalid geometry for segment "
-                    f"{seg_data.get('Segment_Id')} (route "
-                    f"{seg_data.get('Route_Id')}): start="
-                    f"{seg_data.get('Start_Point')!r} end="
-                    f"{seg_data.get('End_Point')!r}.  Layer not added."
-                )
-                print(msg)
-                try:
-                    QgsMessageLog.logMessage(msg, "OMRAT", Qgis.Warning)
-                except Exception:
-                    pass
-                try:
-                    QgsProject.instance().removeMapLayer(vl.id())
-                except Exception:
-                    pass
+            if not self._validate_and_wire_segment(vl, fet, fid, seg_data):
                 continue
-            # Keep layer editable and connect geometry change handler
-            edit_buffer = vl.editBuffer()
-            if edit_buffer is not None:
-                edit_buffer.geometryChanged.connect(partial(self.qgis_geoms.on_geometry_changed_wrapper, fid))
-            vl.triggerRepaint()
             self.qgis_geoms.vector_layers.append(vl)
-
-            # Preserve direction labels mapping for AIS
             try:
-                self.qgis_geoms.leg_dirs[str(seg_data["Segment_Id"])]=list(seg_data.get("Dirs", []))
+                self.qgis_geoms.leg_dirs[str(seg_data["Segment_Id"])] = list(seg_data.get("Dirs", []))
             except Exception:
                 pass
-
-        # After loading, ensure subsequent new segments use a higher id
         try:
             max_id = max(int(str(v.get('Segment_Id'))) for v in data['segment_data'].values())
         except Exception:
             max_id = self.segment_id
         self.qgis_geoms.segment_id = max_id
         self.segment_id = max_id
-        # Refresh map canvas
-        self.iface.mapCanvas().refresh()    
+        self.iface.mapCanvas().refresh()
 
     def reset_route_table(self) -> None:
         self.main_widget.twRouteList.setColumnCount(7)
@@ -1065,14 +989,6 @@ class OMRAT(
         # pbUpdateAIS for its duration and re-enables it in finished().
         self.ais.update_legs()
     
-    def remove_route(self)-> None:
-        # To implement
-        pass
-    
-    def load_route(self)-> None:
-        # To implement
-        pass
-
     # Drift-analysis slots are provided by ``DriftAnalysisMixin``
     # (see ``omrat_utils.drift_analysis_mixin``); they used to live here.
 
@@ -1082,169 +998,104 @@ class OMRAT(
         """Run method that loads and starts the plugin"""
         if not self.pluginIsActive:
             self.pluginIsActive = True
-            self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
-            self.main_widget.pbStopRoute.clicked.connect(self.stop_route)
-            self.main_widget.pbRemoveRoute.clicked.connect(self.remove_route)
-            self.main_widget.pbLoadRoute.clicked.connect(self.load_route)
-            self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
-            self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
-            self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
-            
-            menubar = QMenuBar(self.main_widget)
-            menubar.setMinimumSize(320,20)
-
-            fileMenu = menubar.addMenu('File')
-            SettingMenu = menubar.addMenu('Settings')
-            ConsequenceMenu = menubar.addMenu('Consequence')
-            HelpMenu = menubar.addMenu('Help')
-            
-            # mnuSub1 = viewMenu.addMenu('Sub-menu')
-            fileMenu.addAction("Save", self.save_work)
-            fileMenu.addAction("Load", self.load_work)
-            fileMenu.addSeparator()
-            fileMenu.addAction("Export to IWRAP XML", self.export_to_iwrap)
-            fileMenu.addAction("Import from IWRAP XML", self.import_from_iwrap)
-            SettingMenu.addAction("Drift settings", self.open_drift)
-            SettingMenu.addAction("Ship Categories", self.open_ship_categories)
-            SettingMenu.addAction("Causation Factors", self.open_causation_factors)
-            SettingMenu.addAction("AIS connection settings", self.ais_settings)
-            SettingMenu.addAction("Database setup wizard...", self.open_db_setup_wizard)
-            SettingMenu.addAction(
-                "Junction transition matrix...", self.open_junction_dialog,
-            )
-            ConsequenceMenu.addAction(
-                "Maximum oil onboard...", self.consequence.run_oil_onboard_dialog,
-            )
-            ConsequenceMenu.addAction(
-                "Spill probability per accident...",
-                self.consequence.run_spill_probability_dialog,
-            )
-            ConsequenceMenu.addAction(
-                "Spill fraction per accident...",
-                self.consequence.run_spill_fraction_dialog,
-            )
-            ConsequenceMenu.addAction(
-                "Catastrophe levels...",
-                self.consequence.run_catastrophe_levels_dialog,
-            )
-            HelpMenu.addAction(
-                "Documentation home",
-                partial(self._open_docs_url, ""),
-            )
-            HelpMenu.addAction(
-                "Quickstart",
-                partial(self._open_docs_url, "quickstart.html"),
-            )
-            HelpMenu.addAction(
-                "User guide",
-                partial(self._open_docs_url, "user_guide.html"),
-            )
-            HelpMenu.addAction(
-                "Database setup && AIS ingestion",
-                partial(self._open_docs_url, "database_setup.html"),
-            )
-            HelpMenu.addAction(
-                "Theory",
-                partial(self._open_docs_url, "theory.html"),
-            )
-            HelpMenu.addSeparator()
-            HelpMenu.addAction(
-                "Report a bug (GitHub issues)",
-                partial(self._open_external_url, "https://github.com/axelande/OMRAT/issues"),
-            )
-            #self.main_widget.actionSave_project.clicked.connect(self.save_work)
-            #self.main_widget.actionOpen_project.clicked.connect(self.load_work)
-            self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)
-            self.main_widget.pbLoadDepth.clicked.connect(self.object.load_depths)
-            self.main_widget.pbRemoveDepth.clicked.connect(self.object.remove_depth)
-            self.main_widget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
-            self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
-            self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)
-            # The legacy ``pbView*`` push-buttons used to live in the
-            # .ui file as part of the LEP*+View grid; they were
-            # removed when the accident-results QTable was added.
-            # ``_setup_accident_results_table`` now creates per-row
-            # ``QPushButton`` cell widgets inside the table and wires
-            # them to ``show_*`` slots, so no ``clicked.connect`` is
-            # needed here.
+            self._connect_toolbar_buttons()
+            fileMenu = self._build_menubar()
+            self._connect_geometry_buttons()
             self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
-            # ``LEReportPath`` is the per-run output folder (one .gpkg
-            # is written per Run Model into this directory).  The
-            # picker button opens a folder-only dialog; live edits to
-            # the line-edit re-evaluate the gate on the Run Model
-            # button.
-            try:
-                if hasattr(self.main_widget, 'pbReportPath'):
-                    # Replace the legacy "save report to file" wiring.
-                    try:
-                        self.main_widget.pbReportPath.clicked.disconnect()
-                    except Exception:
-                        pass
-                    self.main_widget.pbReportPath.clicked.connect(
-                        self.choose_output_folder,
-                    )
-                if hasattr(self.main_widget, 'LEReportPath'):
-                    self.main_widget.LEReportPath.textChanged.connect(
-                        lambda *_: self._update_run_model_enabled(),
-                    )
-                if hasattr(self.main_widget, 'LEModelName'):
-                    self.main_widget.LEModelName.textChanged.connect(
-                        lambda *_: self._update_run_model_enabled(),
-                    )
-                self._restore_output_dir()
-                self._update_run_model_enabled()
-                # OpenTopography API key: restore from QSettings and
-                # save on edit so each user enters it once instead of
-                # baking it into the plugin source.
-                self._restore_opentopo_api_key()
-            except Exception as exc:
-                QgsMessageLog.logMessage(
-                    f'Could not wire output-folder picker: {exc}',
-                    'OMRAT', Qgis.Warning,
-                )
-            # Connect drift analysis button
-            try:
-                if hasattr(self.main_widget, 'pbRunDriftAnalysis'):
-                    self.main_widget.pbRunDriftAnalysis.clicked.connect(self.run_drift_analysis)
-            except Exception:
-                pass
-            # Wire up the "Previous runs" history table.
-            try:
-                self._setup_previous_runs_table()
-                self.refresh_previous_runs_table()
-            except Exception as e:
-                QgsMessageLog.logMessage(
-                    f'Could not initialise previous-runs table: {e}',
-                    'OMRAT', Qgis.Warning,
-                )
-            # Wire up the accident-results QTable that replaces the
-            # legacy LEP* line-edit grid.
-            try:
-                self._setup_accident_results_table()
-            except Exception as e:
-                QgsMessageLog.logMessage(
-                    f'Could not initialise accident-results table: {e}',
-                    'OMRAT', Qgis.Warning,
-                )
-            # Wire up the Compare tab.
-            try:
-                self._setup_compare_tab()
-            except Exception as e:
-                QgsMessageLog.logMessage(
-                    f'Could not initialise Compare tab: {e}',
-                    'OMRAT', Qgis.Warning,
-                )
-            # Add a "Manage previous runs" item to the File menu so
-            # users can find load / compare / delete actions even if
-            # they ignore the table on the Results tab.
-            try:
-                fileMenu.addSeparator()
-                fileMenu.addAction(
-                    'Manage previous runs...', self.open_previous_runs_dialog,
-                )
-            except Exception:
-                pass
-
+            self._wire_report_path_widgets()
+            self._wire_drift_button()
+            self._init_results_ui(fileMenu)
             self.reset_route_table()
             self.run_traffic_module()
             self.main_widget.show()
+
+    def _connect_toolbar_buttons(self) -> None:
+        self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
+        self.main_widget.pbStopRoute.clicked.connect(self.stop_route)
+        self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
+        self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
+        self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
+
+    def _build_menubar(self):
+        menubar = QMenuBar(self.main_widget)
+        menubar.setMinimumSize(320, 20)
+        fileMenu = menubar.addMenu('File')
+        fileMenu.addAction("Save", self.save_work)
+        fileMenu.addAction("Load", self.load_work)
+        fileMenu.addSeparator()
+        fileMenu.addAction("Export to IWRAP XML", self.export_to_iwrap)
+        fileMenu.addAction("Import from IWRAP XML", self.import_from_iwrap)
+        sm = menubar.addMenu('Settings')
+        sm.addAction("Drift settings", self.open_drift)
+        sm.addAction("Ship Categories", self.open_ship_categories)
+        sm.addAction("Causation Factors", self.open_causation_factors)
+        sm.addAction("AIS connection settings", self.ais_settings)
+        sm.addAction("Database setup wizard...", self.open_db_setup_wizard)
+        sm.addAction("Junction transition matrix...", self.open_junction_dialog)
+        cm = menubar.addMenu('Consequence')
+        cm.addAction("Maximum oil onboard...", self.consequence.run_oil_onboard_dialog)
+        cm.addAction("Spill probability per accident...", self.consequence.run_spill_probability_dialog)
+        cm.addAction("Spill fraction per accident...", self.consequence.run_spill_fraction_dialog)
+        cm.addAction("Catastrophe levels...", self.consequence.run_catastrophe_levels_dialog)
+        hm = menubar.addMenu('Help')
+        hm.addAction("Documentation home", partial(self._open_docs_url, ""))
+        hm.addAction("Quickstart", partial(self._open_docs_url, "quickstart.html"))
+        hm.addAction("User guide", partial(self._open_docs_url, "user_guide.html"))
+        hm.addAction("Database setup && AIS ingestion", partial(self._open_docs_url, "database_setup.html"))
+        hm.addAction("Theory", partial(self._open_docs_url, "theory.html"))
+        hm.addSeparator()
+        hm.addAction("Report a bug (GitHub issues)", partial(self._open_external_url, "https://github.com/axelande/OMRAT/issues"))
+        return fileMenu
+
+    def _connect_geometry_buttons(self) -> None:
+        self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)
+        self.main_widget.pbLoadDepth.clicked.connect(self.object.load_depths)
+        self.main_widget.pbRemoveDepth.clicked.connect(self.object.remove_depth)
+        self.main_widget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
+        self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
+        self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)
+
+    def _wire_report_path_widgets(self) -> None:
+        try:
+            if hasattr(self.main_widget, 'pbReportPath'):
+                try:
+                    self.main_widget.pbReportPath.clicked.disconnect()
+                except Exception:
+                    pass
+                self.main_widget.pbReportPath.clicked.connect(self.choose_output_folder)
+            if hasattr(self.main_widget, 'LEReportPath'):
+                self.main_widget.LEReportPath.textChanged.connect(lambda *_: self._update_run_model_enabled())
+            if hasattr(self.main_widget, 'LEModelName'):
+                self.main_widget.LEModelName.textChanged.connect(lambda *_: self._update_run_model_enabled())
+            self._restore_output_dir()
+            self._update_run_model_enabled()
+            self._restore_opentopo_api_key()
+        except Exception as exc:
+            QgsMessageLog.logMessage(f'Could not wire output-folder picker: {exc}', 'OMRAT', Qgis.Warning)
+
+    def _wire_drift_button(self) -> None:
+        try:
+            if hasattr(self.main_widget, 'pbRunDriftAnalysis'):
+                self.main_widget.pbRunDriftAnalysis.clicked.connect(self.run_drift_analysis)
+        except Exception:
+            pass
+
+    def _init_results_ui(self, fileMenu) -> None:
+        try:
+            self._setup_previous_runs_table()
+            self.refresh_previous_runs_table()
+        except Exception as e:
+            QgsMessageLog.logMessage(f'Could not initialise previous-runs table: {e}', 'OMRAT', Qgis.Warning)
+        try:
+            self._setup_accident_results_table()
+        except Exception as e:
+            QgsMessageLog.logMessage(f'Could not initialise accident-results table: {e}', 'OMRAT', Qgis.Warning)
+        try:
+            self._setup_compare_tab()
+        except Exception as e:
+            QgsMessageLog.logMessage(f'Could not initialise Compare tab: {e}', 'OMRAT', Qgis.Warning)
+        try:
+            fileMenu.addSeparator()
+            fileMenu.addAction('Manage previous runs...', self.open_previous_runs_dialog)
+        except Exception:
+            pass

@@ -64,132 +64,74 @@ class CalculationTask(QgsTask):
         """Update the task description shown in the QGIS task manager."""
         self.setDescription(f"OMRAT: {text}")
 
-    def run(self) -> bool:
-        """
-        Execute the calculation in a background thread.
+    def _make_progress_wrapper(self) -> Callable[[int, int, str], bool]:
+        def progress_wrapper(completed: int, total: int, message: str) -> bool:
+            if self.isCanceled():
+                return False
+            if total > 0:
+                self.setProgress(int((completed / total) * 100))
+            self._update_description(message)
+            self.progress_updated.emit(completed, total, message)
+            return True
+        return progress_wrapper
 
-        This method is called by QgsTask when the task starts.
-        It should not directly interact with Qt widgets.
-
-        Returns:
-            True if successful, False if failed or cancelled
-        """
-        QgsMessageLog.logMessage(
-            'Starting calculation...',
-            'OMRAT',
-            Qgis.Info
-        )
-
+    def _run_consequence(self) -> None:
+        self._update_description("Computing oil-spill consequences...")
         try:
-            # Apply the project-level traffic-scaling matrix *before* any
-            # model touches Q.  ``self.data['traffic_data']`` is already
-            # a deep copy made in ``GatherData.get_all_for_save``, so the
-            # mutation here cannot leak back into the live UI state.
-            # Missing scaling cells default to 100% -- legacy projects
-            # compute exactly as before.
+            from compute.consequence import compute_catastrophe_exceedance
+            consequence_block = self.data.get('consequence') or {}
+            self.calc.consequence_result = compute_catastrophe_exceedance(
+                consequence_block,
+                drifting_report=getattr(self.calc, 'drifting_report', None),
+                powered_grounding_report=getattr(self.calc, 'powered_grounding_report', None),
+                powered_allision_report=getattr(self.calc, 'powered_allision_report', None),
+                collision_report=getattr(self.calc, 'collision_report', None),
+            )
+        except Exception as exc:
+            QgsMessageLog.logMessage(f'Consequence calculation failed: {exc}', 'OMRAT', Qgis.Warning)
+            self.calc.consequence_result = None
+
+    def _run_all_phases(self) -> None:
+        self._update_description("Drifting model - preparing...")
+        self.calc.run_drifting_model(self.data)
+        if self.isCanceled():
+            return
+        self._update_description("Ship-ship collisions...")
+        self.setProgress(0)
+        self.calc.run_ship_collision_model(self.data)
+        if self.isCanceled():
+            return
+        self._update_description("Powered grounding...")
+        self.setProgress(0)
+        self.calc.run_powered_grounding_model(self.data)
+        if self.isCanceled():
+            return
+        self._update_description("Powered allision...")
+        self.setProgress(0)
+        self.calc.run_powered_allision_model(self.data)
+        if not self.isCanceled():
+            self._run_consequence()
+
+    def run(self) -> bool:
+        """Execute the calculation in a background thread."""
+        QgsMessageLog.logMessage('Starting calculation...', 'OMRAT', Qgis.Info)
+        try:
             from compute.data_preparation import apply_traffic_scaling
             apply_traffic_scaling(self.data)
-
-            # Inject progress callback into the calculation
             if hasattr(self.calc, 'set_progress_callback'):
-                def progress_wrapper(completed: int, total: int, message: str) -> bool:
-                    """Wrapper that updates task progress and checks for cancellation."""
-                    if self.isCanceled():
-                        return False  # Signal to stop calculation
-
-                    # Update QgsTask progress (0-100)
-                    if total > 0:
-                        progress_pct = int((completed / total) * 100)
-                        self.setProgress(progress_pct)
-
-                    # Update task description with current status
-                    self._update_description(message)
-
-                    # Emit custom signal for detailed progress
-                    self.progress_updated.emit(completed, total, message)
-
-                    return True  # Continue calculation
-
-                self.calc.set_progress_callback(progress_wrapper)
-
-            # Phase 1: Drifting model
-            self._update_description("Drifting model - preparing...")
-            self.calc.run_drifting_model(self.data)
-
+                self.calc.set_progress_callback(self._make_progress_wrapper())
+            self._run_all_phases()
             if self.isCanceled():
+                QgsMessageLog.logMessage('Calculation was cancelled by user', 'OMRAT', Qgis.Warning)
                 return False
-
-            # Phase 2: Ship-ship collisions
-            self._update_description("Ship-ship collisions...")
-            self.setProgress(0)
-            self.calc.run_ship_collision_model(self.data)
-
-            if self.isCanceled():
-                return False
-
-            # Phase 3: Powered grounding
-            self._update_description("Powered grounding...")
-            self.setProgress(0)
-            self.calc.run_powered_grounding_model(self.data)
-
-            if self.isCanceled():
-                return False
-
-            # Phase 4: Powered allision
-            self._update_description("Powered allision...")
-            self.setProgress(0)
-            self.calc.run_powered_allision_model(self.data)
-
-            # Check if cancelled during execution
-            if self.isCanceled():
-                QgsMessageLog.logMessage(
-                    'Calculation was cancelled by user',
-                    'OMRAT',
-                    Qgis.Warning
-                )
-                return False
-
-            # Phase 5: Oil-spill consequence (catastrophe-level exceedance)
-            self._update_description("Computing oil-spill consequences...")
-            try:
-                from compute.consequence import compute_catastrophe_exceedance
-                consequence_block = self.data.get('consequence') or {}
-                self.calc.consequence_result = compute_catastrophe_exceedance(
-                    consequence_block,
-                    drifting_report=getattr(self.calc, 'drifting_report', None),
-                    powered_grounding_report=getattr(
-                        self.calc, 'powered_grounding_report', None,
-                    ),
-                    powered_allision_report=getattr(
-                        self.calc, 'powered_allision_report', None,
-                    ),
-                    collision_report=getattr(self.calc, 'collision_report', None),
-                )
-            except Exception as exc:
-                QgsMessageLog.logMessage(
-                    f'Consequence calculation failed: {exc}',
-                    'OMRAT',
-                    Qgis.Warning,
-                )
-                self.calc.consequence_result = None
-
             self._update_description("Complete")
             self.setProgress(100)
-            QgsMessageLog.logMessage(
-                'All calculations completed successfully',
-                'OMRAT',
-                Qgis.Success
-            )
+            QgsMessageLog.logMessage('All calculations completed successfully', 'OMRAT', Qgis.Success)
             return True
-
         except Exception as e:
             self.exception = e
             self.error_msg = str(e)
-            QgsMessageLog.logMessage(
-                f'Calculation failed with error: {self.error_msg}',
-                'OMRAT',
-                Qgis.Critical
-            )
+            QgsMessageLog.logMessage(f'Calculation failed with error: {self.error_msg}', 'OMRAT', Qgis.Critical)
             return False
 
     def finished(self, result: bool) -> None:

@@ -1,10 +1,8 @@
-import numpy as np
 import math
 from scipy import stats
 from shapely.geometry import LineString, Polygon, Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform, split
-from qgis.core import QgsPointXY, QgsLineString, QgsGeometry
 from pyproj import CRS, Transformer
 from pyproj.aoi import AreaOfInterest
 from pyproj.database import query_utm_crs_info

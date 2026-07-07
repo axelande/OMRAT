@@ -149,84 +149,83 @@ def timed_function(func):
     return wrapper
 
 
+def _summary_lines_mc(stats: ProfilingStats) -> list[str]:
+    out = ["\n[MONTE CARLO INTEGRATION - Primary computation]",
+           f"  Total calls: {stats.monte_carlo_calls}",
+           f"  Total time: {stats.monte_carlo_total_time:.2f}s"]
+    if stats.monte_carlo_calls > 0:
+        avg = stats.monte_carlo_total_time / stats.monte_carlo_calls
+        out += [f"  Average time per call: {avg:.4f}s",
+                f"  Max single call time: {stats.monte_carlo_max_time:.4f}s",
+                f"  Slow calls (>{SLOW_THRESHOLD}s): {stats.monte_carlo_slow_count}"]
+        if stats.monte_carlo_times:
+            t = np.array(stats.monte_carlo_times)
+            out += [f"  Time distribution:",
+                    f"    Min: {t.min():.4f}s",
+                    f"    Median: {np.median(t):.4f}s",
+                    f"    95th percentile: {np.percentile(t, 95):.4f}s",
+                    f"    99th percentile: {np.percentile(t, 99):.4f}s",
+                    f"    Max: {t.max():.4f}s"]
+    return out
+
+
+def _summary_lines_geometry(stats: ProfilingStats) -> list[str]:
+    out = ["\n[GEOMETRY OPERATIONS]",
+           f"  Distance checks: {stats.geometry_ops_calls}",
+           f"  Total time: {stats.geometry_ops_total_time:.2f}s"]
+    if stats.geometry_ops_calls > 0:
+        out += [f"  Average time: {stats.geometry_ops_total_time/stats.geometry_ops_calls:.6f}s",
+                f"  Max time: {stats.geometry_ops_max_time:.6f}s"]
+    out += ["\n[RAY-POLYGON INTERSECTION]",
+            f"  Total calls: {stats.ray_intersection_calls}",
+            f"  Total time: {stats.ray_intersection_total_time:.2f}s"]
+    if stats.ray_intersection_calls > 0:
+        out.append(f"  Average time: {stats.ray_intersection_total_time/stats.ray_intersection_calls:.8f}s")
+    out += ["\n[POLYGON EXTRACTION]",
+            f"  Total calls: {stats.polygon_extraction_calls}",
+            f"  Total time: {stats.polygon_extraction_total_time:.2f}s"]
+    if stats.polygon_extraction_calls > 0:
+        out.append(f"  Average time: {stats.polygon_extraction_total_time/stats.polygon_extraction_calls:.6f}s")
+    return out
+
+
+def _summary_lines_tasks(stats: ProfilingStats) -> list[str]:
+    out = ["\n[TASK-LEVEL TIMING]",
+           f"  Total tasks: {len(stats.task_times)}",
+           f"  Slow tasks (>{SLOW_THRESHOLD}s): {stats.task_slow_count}"]
+    if stats.task_times:
+        durs = [t[2] for t in stats.task_times]
+        total = sum(durs)
+        out += [f"  Total task time: {total:.2f}s",
+                f"  Average task time: {total/len(durs):.4f}s",
+                f"  Max task time: {max(durs):.4f}s",
+                f"  Top 5 slowest tasks:"]
+        for i, (li, di, dur) in enumerate(sorted(stats.task_times, key=lambda x: x[2], reverse=True)[:5]):
+            out.append(f"    {i+1}. Leg {li}, Dir {di}: {dur:.2f}s")
+    return out
+
+
+def _summary_lines_breakdown(stats: ProfilingStats) -> list[str]:
+    total = (stats.monte_carlo_total_time + stats.geometry_ops_total_time
+             + stats.ray_intersection_total_time + stats.polygon_extraction_total_time)
+    out = ["\n[TIME BREAKDOWN]"]
+    if total > 0:
+        out += [f"  monte carlo: {stats.monte_carlo_total_time:.2f}s ({100*stats.monte_carlo_total_time/total:.1f}%)",
+                f"  geometry ops: {stats.geometry_ops_total_time:.2f}s ({100*stats.geometry_ops_total_time/total:.1f}%)",
+                f"  ray intersection: {stats.ray_intersection_total_time:.2f}s ({100*stats.ray_intersection_total_time/total:.1f}%)",
+                f"  polygon extraction: {stats.polygon_extraction_total_time:.2f}s ({100*stats.polygon_extraction_total_time/total:.1f}%)"]
+    return out
+
+
 def print_profiling_summary() -> str:
     """Generate a human-readable profiling summary."""
     stats = _profiling_stats
-    lines = []
-    lines.append("\n" + "=" * 80)
-    lines.append("PROFILING SUMMARY - BOTTLENECK IDENTIFICATION")
-    lines.append("=" * 80)
-
-    # Monte Carlo statistics
-    lines.append("\n[MONTE CARLO INTEGRATION - Primary computation]")
-    lines.append(f"  Total calls: {stats.monte_carlo_calls}")
-    lines.append(f"  Total time: {stats.monte_carlo_total_time:.2f}s")
-    if stats.monte_carlo_calls > 0:
-        avg_time = stats.monte_carlo_total_time / stats.monte_carlo_calls
-        lines.append(f"  Average time per call: {avg_time:.4f}s")
-        lines.append(f"  Max single call time: {stats.monte_carlo_max_time:.4f}s")
-        lines.append(f"  Slow calls (>{SLOW_THRESHOLD}s): {stats.monte_carlo_slow_count}")
-
-        # Distribution of call times
-        if stats.monte_carlo_times:
-            times = np.array(stats.monte_carlo_times)
-            lines.append(f"  Time distribution:")
-            lines.append(f"    Min: {times.min():.4f}s")
-            lines.append(f"    Median: {np.median(times):.4f}s")
-            lines.append(f"    95th percentile: {np.percentile(times, 95):.4f}s")
-            lines.append(f"    99th percentile: {np.percentile(times, 99):.4f}s")
-            lines.append(f"    Max: {times.max():.4f}s")
-
-    # Geometry operations
-    lines.append("\n[GEOMETRY OPERATIONS]")
-    lines.append(f"  Distance checks: {stats.geometry_ops_calls}")
-    lines.append(f"  Total time: {stats.geometry_ops_total_time:.2f}s")
-    if stats.geometry_ops_calls > 0:
-        lines.append(f"  Average time: {stats.geometry_ops_total_time/stats.geometry_ops_calls:.6f}s")
-        lines.append(f"  Max time: {stats.geometry_ops_max_time:.6f}s")
-
-    # Ray intersection
-    lines.append("\n[RAY-POLYGON INTERSECTION]")
-    lines.append(f"  Total calls: {stats.ray_intersection_calls}")
-    lines.append(f"  Total time: {stats.ray_intersection_total_time:.2f}s")
-    if stats.ray_intersection_calls > 0:
-        lines.append(f"  Average time: {stats.ray_intersection_total_time/stats.ray_intersection_calls:.8f}s")
-
-    # Polygon extraction
-    lines.append("\n[POLYGON EXTRACTION]")
-    lines.append(f"  Total calls: {stats.polygon_extraction_calls}")
-    lines.append(f"  Total time: {stats.polygon_extraction_total_time:.2f}s")
-    if stats.polygon_extraction_calls > 0:
-        lines.append(f"  Average time: {stats.polygon_extraction_total_time/stats.polygon_extraction_calls:.6f}s")
-
-    # Task-level statistics
-    lines.append("\n[TASK-LEVEL TIMING]")
-    lines.append(f"  Total tasks: {len(stats.task_times)}")
-    lines.append(f"  Slow tasks (>{SLOW_THRESHOLD}s): {stats.task_slow_count}")
-    if stats.task_times:
-        task_durations = [t[2] for t in stats.task_times]
-        total_task_time = sum(task_durations)
-        lines.append(f"  Total task time: {total_task_time:.2f}s")
-        lines.append(f"  Average task time: {total_task_time/len(stats.task_times):.4f}s")
-        lines.append(f"  Max task time: {max(task_durations):.4f}s")
-
-        # Find slowest tasks
-        sorted_tasks = sorted(stats.task_times, key=lambda x: x[2], reverse=True)
-        lines.append(f"  Top 5 slowest tasks:")
-        for i, (leg_idx, dir_idx, duration) in enumerate(sorted_tasks[:5]):
-            lines.append(f"    {i+1}. Leg {leg_idx}, Dir {dir_idx}: {duration:.2f}s")
-
-    # Time breakdown
-    lines.append("\n[TIME BREAKDOWN]")
-    total = stats.monte_carlo_total_time + stats.geometry_ops_total_time + stats.ray_intersection_total_time + stats.polygon_extraction_total_time
-    if total > 0:
-        lines.append(f"  monte carlo: {stats.monte_carlo_total_time:.2f}s ({100*stats.monte_carlo_total_time/total:.1f}%)")
-        lines.append(f"  geometry ops: {stats.geometry_ops_total_time:.2f}s ({100*stats.geometry_ops_total_time/total:.1f}%)")
-        lines.append(f"  ray intersection: {stats.ray_intersection_total_time:.2f}s ({100*stats.ray_intersection_total_time/total:.1f}%)")
-        lines.append(f"  polygon extraction: {stats.polygon_extraction_total_time:.2f}s ({100*stats.polygon_extraction_total_time/total:.1f}%)")
-
+    lines = ["\n" + "=" * 80, "PROFILING SUMMARY - BOTTLENECK IDENTIFICATION", "=" * 80]
+    lines.extend(_summary_lines_mc(stats))
+    lines.extend(_summary_lines_geometry(stats))
+    lines.extend(_summary_lines_tasks(stats))
+    lines.extend(_summary_lines_breakdown(stats))
     lines.append("=" * 80 + "\n")
-
     summary = "\n".join(lines)
     logger.info(summary)
     return summary
@@ -499,6 +498,109 @@ def _batch_ray_intersects_polygon(
     return hits
 
 
+def _setup_leg_vars(
+    line: LineString,
+) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+    """Return (leg_start, leg_vec, leg_len, perp_dir) for a leg geometry."""
+    coords = np.array(line.coords)
+    leg_start, leg_end = coords[0], coords[-1]
+    leg_vec = leg_end - leg_start
+    leg_len = line.length
+    leg_dir = leg_vec / leg_len if leg_len > 0 else np.array([1.0, 0.0])
+    perp_dir = np.array([-leg_dir[1], leg_dir[0]])
+    return leg_start, leg_vec, leg_len, perp_dir
+
+
+def _compute_lateral_ranges(
+    distributions: list, weights: list,
+) -> list[float]:
+    result = []
+    for dists, wgts in zip(distributions, weights):
+        w = np.array(wgts)
+        if w.sum() == 0:
+            w = np.ones_like(w)
+        w = w / w.sum()
+        weighted_std = float(np.sqrt(sum(wt * (d.std() ** 2) for d, wt in zip(dists, w))))
+        result.append(5.0 * weighted_std)
+    return result
+
+
+def _build_tasks(
+    lines: list, distributions: list, weights: list,
+    drift_angles: list, lateral_ranges: list,
+    objs_gdf_list: list, obj_index_map: list, distance: float,
+) -> list:
+    tasks = []
+    for leg_idx, (line, dists, wgts) in enumerate(zip(lines, distributions, weights)):
+        coords = np.array(line.coords)
+        if len(coords) < 2:
+            continue
+        for dir_idx, angle_deg in enumerate(drift_angles):
+            tasks.append((
+                leg_idx, dir_idx, angle_deg, line, dists, wgts,
+                objs_gdf_list, obj_index_map, distance, lateral_ranges[leg_idx],
+            ))
+    return tasks
+
+
+def _log_computation_start(n_lines: int, n_dirs: int, n_objs: int, n_total: int, max_workers: int) -> None:
+    _log(f"\n{'='*80}")
+    _log("COMPUTING PROBABILITY HOLES (PARALLEL OPTIMIZED)")
+    _log(f"{'='*80}")
+    _log(f"Legs: {n_lines} | Drift directions: {n_dirs} | Objects: {n_objs}")
+    _log(f"Total hole calculations: {n_total} | Worker threads: {max_workers}")
+    _log(f"{'='*80}")
+
+
+def _log_computation_end(
+    total_holes: int, skipped_full: int, skipped_far: int, start_time: float,
+) -> None:
+    total_time = time.time() - start_time
+    actually_computed = total_holes - skipped_full - skipped_far
+    _log(f"\n{'='*80}")
+    _log("HOLE CALCULATION COMPLETE")
+    _log(f"{'='*80}")
+    _log(f"Total: {total_holes} | Computed: {actually_computed} | Skipped-coverage: {skipped_full} | Skipped-far: {skipped_far}")
+    _log(f"Total time: {int(total_time/60)}m {int(total_time%60)}s ({total_time:.1f}s)")
+    if actually_computed > 0:
+        _log(f"Avg time/computed hole: {total_time/actually_computed:.2f}s")
+    _log(f"{'='*80}\n")
+
+
+def _build_obj_index_map(objs_gdf_list: list) -> list[tuple[int, int]]:
+    """Flatten list of GeoDataFrames into (gdf_idx, row_idx) pairs."""
+    obj_index_map: list[tuple[int, int]] = []
+    for gi, gdf in enumerate(objs_gdf_list):
+        for ri in range(len(gdf)):
+            obj_index_map.append((gi, ri))
+    return obj_index_map
+
+
+def _check_progress_cancel(
+    progress_callback: Callable,
+    completed_tasks: int,
+    total_tasks: int,
+    start_time: float,
+    last_pct: int,
+    per_leg_dir_obj: list,
+    futures: dict,
+) -> tuple[int, bool]:
+    """Invoke progress callback and cancel futures if user requests stop. Returns (new_last_pct, should_cancel)."""
+    current = int((completed_tasks / total_tasks) * 100)
+    if current <= last_pct:
+        return last_pct, False
+    elapsed = time.time() - start_time
+    avg = elapsed / completed_tasks if completed_tasks > 0 else 0
+    eta_s = avg * (total_tasks - completed_tasks)
+    msg = f"Progress: {completed_tasks}/{total_tasks} tasks | ETA: {int(eta_s/60)}m {int(eta_s%60)}s"
+    if not progress_callback(completed_tasks, total_tasks, msg):
+        logger.info("Calculation cancelled by user")
+        for f in futures:
+            f.cancel()
+        return current, True
+    return current, False
+
+
 def _compute_single_direction(
     leg_idx: int,
     dir_idx: int,
@@ -531,95 +633,41 @@ def _compute_single_direction(
     Returns:
         Tuple of (leg_idx, dir_idx, dir_holes, skipped_full_coverage, skipped_too_far)
     """
-    task_start_time = time.perf_counter()
-
-    # Normalize weights
+    task_start = time.perf_counter()
     w = np.array(wgts)
-    if w.sum() == 0:
-        w = np.ones_like(w)
+    if w.sum() == 0: w = np.ones_like(w)
     w = w / w.sum()
-
-    # Get leg geometry
-    leg_coords = np.array(line.coords)
-    leg_start = leg_coords[0]
-    leg_end = leg_coords[-1]
-    leg_vec = leg_end - leg_start
-    leg_len = line.length
-    leg_dir = leg_vec / leg_len if leg_len > 0 else np.array([1, 0])
-
-    # Perpendicular direction for lateral offsets
-    perp_dir = np.array([-leg_dir[1], leg_dir[0]])
-
-    # Drift direction vector
+    leg_start, leg_vec, leg_len, perp_dir = _setup_leg_vars(line)
     angle_rad = np.radians(angle_deg)
-    drift_dx = np.cos(angle_rad)
-    drift_dy = np.sin(angle_rad)
-    drift_vec_cached = np.array([drift_dx, drift_dy])
-
-    # OPTIMIZATION: Extract polygon coordinates as NumPy arrays (much faster than Shapely)
-    # This replaces prepared geometries with raw coordinate arrays
-    polygon_coords_dict = {}
-    for gi, ri in obj_index_map:
-        geom = objs_gdf_list[gi].geometry.iloc[ri]
-        polygon_coords_dict[(gi, ri)] = _extract_polygon_rings(geom)
-
+    drift_vec = np.array([np.cos(angle_rad), np.sin(angle_rad)])
+    polygon_coords_dict = {
+        (gi, ri): _extract_polygon_rings(objs_gdf_list[gi].geometry.iloc[ri])
+        for gi, ri in obj_index_map}
     dir_holes: list[float] = []
     skipped_too_far = 0
-    skipped_full_coverage = 0
-
     for obj_idx, (gi, ri) in enumerate(obj_index_map):
         obj = objs_gdf_list[gi].geometry.iloc[ri]
         polygon_rings = polygon_coords_dict[(gi, ri)]
-
-        # Quick distance check - if object is too far, skip
-        geom_start = time.perf_counter()
+        geom_t = time.perf_counter()
         min_dist = line.distance(obj)
-        geom_elapsed = time.perf_counter() - geom_start
-        _record_geometry_op(geom_elapsed)
-
-        max_possible_reach = distance + lateral_range
-        if min_dist > max_possible_reach:
-            probability_hole = 0.0
-            dir_holes.append(probability_hole)
+        _record_geometry_op(time.perf_counter() - geom_t)
+        if min_dist > distance + lateral_range:
+            dir_holes.append(0.0)
             skipped_too_far += 1
             continue
-
-        n_samples = 2000
-
         try:
-            monte_carlo_start = time.perf_counter()
-            probability_hole = _compute_probability_monte_carlo(
-                leg_start=leg_start,
-                leg_vec=leg_vec,
-                leg_length=leg_len,
-                perp_dir=perp_dir,
-                drift_vec=drift_vec_cached,
-                distance=distance,
-                lateral_range=lateral_range,
-                polygon_rings=polygon_rings,
-                dists=dists,
-                weights=w,
-                n_samples=n_samples,
+            mc_t = time.perf_counter()
+            p = _compute_probability_monte_carlo(
+                leg_start, leg_vec, leg_len, perp_dir, drift_vec,
+                distance, lateral_range, polygon_rings, dists, w, n_samples=2000,
             )
-            monte_carlo_elapsed = time.perf_counter() - monte_carlo_start
-            _record_monte_carlo_time(monte_carlo_elapsed)
-
-            # MC already samples s in [0,1] (normalized position along leg),
-            # so the result is an average probability, not a per-meter density.
-            # Clamp to reasonable range [0, 1]
-            probability_hole = max(0.0, min(1.0, probability_hole))
+            _record_monte_carlo_time(time.perf_counter() - mc_t)
+            dir_holes.append(max(0.0, min(1.0, p)))
         except Exception as e:
-            # If integration fails, fall back to 0
             logger.debug(f"Monte Carlo failed for leg {leg_idx}, dir {dir_idx}, obj {obj_idx}: {e}")
-            probability_hole = 0.0
-
-        dir_holes.append(probability_hole)
-
-    # Record task timing
-    task_elapsed = time.perf_counter() - task_start_time
-    _record_task_time(leg_idx, dir_idx, task_elapsed)
-
-    return (leg_idx, dir_idx, dir_holes, skipped_full_coverage, skipped_too_far)
+            dir_holes.append(0.0)
+    _record_task_time(leg_idx, dir_idx, time.perf_counter() - task_start)
+    return (leg_idx, dir_idx, dir_holes, 0, skipped_too_far)
 
 
 def compute_probability_holes(
@@ -650,152 +698,40 @@ def compute_probability_holes(
         3-level nested list: [leg_idx][direction_idx][object_idx] = probability (0-1)
         where direction_idx corresponds to: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
     """
-    # Reset profiling statistics for this computation
     reset_profiling_stats()
-
-    # Flatten object indexing
-    obj_index_map: list[tuple[int, int]] = []
-    for gi, gdf in enumerate(objs_gdf_list):
-        for ri in range(len(gdf)):
-            obj_index_map.append((gi, ri))
-
-    # 8 drift directions (compass directions)
+    obj_index_map = _build_obj_index_map(objs_gdf_list)
     drift_angles = [0, 45, 90, 135, 180, 225, 270, 315]
-
-    # Calculate total number of holes for progress tracking
-    total_holes = len(lines) * len(drift_angles) * len(obj_index_map)
-    completed_holes = 0
-    skipped_full_coverage = 0
-    skipped_too_far = 0
+    n_objs = len(obj_index_map)
+    total_holes = len(lines) * len(drift_angles) * n_objs
+    skipped_full_coverage, skipped_too_far = 0, 0
     start_time = time.time()
-
-    # Determine number of worker processes
-    max_workers = max(1, cpu_count() - 1)  # Leave one core free for system
-
-    _log(f"\n{'='*80}")
-    _log(f"COMPUTING PROBABILITY HOLES (PARALLEL OPTIMIZED)")
-    _log(f"{'='*80}")
-    _log(f"Legs: {len(lines)}")
-    _log(f"Drift directions: {len(drift_angles)}")
-    _log(f"Objects: {len(obj_index_map)}")
-    _log(f"Total hole calculations: {total_holes}")
-    _log(f"Worker threads: {max_workers}")
-    _log(f"{'='*80}")
-    _log(f"Optimizations enabled:")
-    _log(f"  • MONTE CARLO INTEGRATION (10-100x faster than dblquad)")
-    _log(f"  • THREADED PROCESSING ({max_workers} threads)")
-    _log(f"  • Fast coordinate-based ray intersection (3x faster than Shapely)")
-    _log(f"  • Skip after 100% coverage")
-    _log(f"  • Skip objects too far away")
-    _log(f"  • Adaptive sample count (fewer samples for low-contribution holes)")
-    _log(f"  • Reduced lateral range (±5σ instead of ±9.5σ)")
-    _log(f"{'='*80}\n")
-
-    # Pre-calculate lateral ranges for each leg
-    lateral_ranges = []
-    for dists, wgts in zip(distributions, weights):
-        w = np.array(wgts)
-        if w.sum() == 0:
-            w = np.ones_like(w)
-        w = w / w.sum()
-        weighted_std = float(np.sqrt(sum(weight * (dist.std() ** 2) for dist, weight in zip(dists, w))))
-        lateral_ranges.append(5.0 * weighted_std)
-
-    # Initialize result structure
-    per_leg_dir_obj = [
-        [[0.0] * len(obj_index_map) for _ in drift_angles]
-        for _ in lines
-    ]
-
-    # Prepare tasks for parallel execution
-    tasks = []
-    for leg_idx, (line, dists, wgts) in enumerate(zip(lines, distributions, weights)):
-        # Skip degenerate lines
-        leg_coords = np.array(line.coords)
-        if len(leg_coords) < 2:
-            continue
-
-        lateral_range = lateral_ranges[leg_idx]
-
-        # Create task for each direction
-        for dir_idx, angle_deg in enumerate(drift_angles):
-            tasks.append((
-                leg_idx, dir_idx, angle_deg, line, dists, wgts,
-                objs_gdf_list, obj_index_map, distance, lateral_range
-            ))
-
-    # Execute tasks in parallel
-    total_tasks = len(tasks)
-    completed_tasks = 0
-    last_progress_percent = -1
-
+    max_workers = max(1, cpu_count() - 1)
+    _log_computation_start(len(lines), len(drift_angles), n_objs, total_holes, max_workers)
+    lateral_ranges = _compute_lateral_ranges(distributions, weights)
+    per_leg_dir_obj = [[[0.0] * n_objs for _ in drift_angles] for _ in lines]
+    tasks = _build_tasks(
+        lines, distributions, weights, drift_angles, lateral_ranges,
+        objs_gdf_list, obj_index_map, distance,
+    )
+    total_tasks, completed_tasks, last_pct = len(tasks), 0, -1
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_task = {
-            executor.submit(
-                _compute_single_direction,
-                *task
-            ): task
-            for task in tasks
-        }
-
-        # Process completed tasks
-        for future in as_completed(future_to_task):
+        futures = {executor.submit(_compute_single_direction, *t): t for t in tasks}
+        for future in as_completed(futures):
             try:
                 leg_idx, dir_idx, dir_holes, skip_cov, skip_far = future.result()
-
-                # Store results
                 per_leg_dir_obj[leg_idx][dir_idx] = dir_holes
-
-                # Update statistics
                 skipped_full_coverage += skip_cov
                 skipped_too_far += skip_far
                 completed_tasks += 1
-                completed_holes += len(dir_holes)
-
-                # Progress reporting
                 if progress_callback:
-                    current_progress_percent = int((completed_tasks / total_tasks) * 100)
-                    if current_progress_percent > last_progress_percent:
-                        last_progress_percent = current_progress_percent
-                        elapsed = time.time() - start_time
-                        avg_time_per_task = elapsed / completed_tasks if completed_tasks > 0 else 0
-                        remaining_tasks = total_tasks - completed_tasks
-                        eta_seconds = avg_time_per_task * remaining_tasks
-                        eta_min = int(eta_seconds / 60)
-                        eta_sec = int(eta_seconds % 60)
-                        msg = f"Progress: {completed_tasks}/{total_tasks} tasks | ETA: {eta_min}m {eta_sec}s"
-                        should_continue = progress_callback(completed_tasks, total_tasks, msg)
-                        if not should_continue:
-                            logger.info("Calculation cancelled by user")
-                            # Cancel remaining futures
-                            for f in future_to_task:
-                                f.cancel()
-                            return per_leg_dir_obj
-
+                    last_pct, cancel = _check_progress_cancel(
+                        progress_callback, completed_tasks, total_tasks,
+                        start_time, last_pct, per_leg_dir_obj, futures,
+                    )
+                    if cancel:
+                        return per_leg_dir_obj
             except Exception as e:
                 logger.error(f"Task failed with error: {e}")
-                # Continue with other tasks
-
-    # Final summary
-    total_time = time.time() - start_time
-    actually_computed = total_holes - skipped_full_coverage - skipped_too_far
-    _log(f"\n{'='*80}")
-    _log("HOLE CALCULATION COMPLETE")
-    _log(f"{'='*80}")
-    _log(f"Total holes: {total_holes}")
-    _log(f"  • Actually computed: {actually_computed} ({actually_computed/total_holes*100:.1f}%)")
-    _log(f"  • Skipped (100% coverage): {skipped_full_coverage} ({skipped_full_coverage/total_holes*100:.1f}%)")
-    _log(f"  • Skipped (too far): {skipped_too_far} ({skipped_too_far/total_holes*100:.1f}%)")
-    _log(f"Total time: {int(total_time/60)}m {int(total_time%60)}s ({total_time:.1f}s)")
-    if actually_computed > 0:
-        _log(f"Average time per computed hole: {total_time/actually_computed:.2f}s")
-    _log(f"Average time per total hole: {total_time/total_holes:.2f}s")
-    speedup = total_holes / max(actually_computed, 1)
-    _log(f"Effective speedup from skipping: {speedup:.1f}x")
-    _log(f"{'='*80}\n")
-
-    # Print detailed profiling summary to identify bottlenecks
+    _log_computation_end(total_holes, skipped_full_coverage, skipped_too_far, start_time)
     print_profiling_summary()
-
     return per_leg_dir_obj

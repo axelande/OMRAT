@@ -20,17 +20,41 @@ SCALING_KEY = 'Scaling (%)'
 FREQ_KEY = 'Frequency (ships/year)'
 
 
+def _scale_direction_freq(var: dict) -> None:
+    freq = var.get(FREQ_KEY)
+    if freq is None:
+        return
+    scaling = var.get(SCALING_KEY)
+    for i, row in enumerate(freq):
+        if not hasattr(row, '__iter__'):
+            continue
+        for j, q in enumerate(row):
+            factor = 1.0
+            if scaling is not None and i < len(scaling):
+                s_row = scaling[i]
+                if hasattr(s_row, '__iter__') and j < len(s_row):
+                    try:
+                        factor = float(s_row[j]) / 100.0
+                    except (TypeError, ValueError):
+                        factor = 1.0
+            if factor == 1.0:
+                continue
+            if q == '' or q is None:
+                continue
+            try:
+                q_val = float(q)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(q_val):
+                continue
+            row[j] = q_val * factor
+
+
 def apply_traffic_scaling(data: dict[str, Any]) -> None:
     """Multiply every ``Frequency (ships/year)`` cell by its ``Scaling (%)`` / 100.
 
-    Mutates ``data['traffic_data']`` **in place**.  Callers must hand in
-    a deep-copy of the live UI state (the calculation pipeline already
-    does this via :meth:`omrat_utils.gather_data.GatherData.get_all_for_save`),
-    so the user's stored Q values stay untouched.
-
-    The scaling matrix is per ``(seg, dir, ship_type, length_idx)`` and
-    defaults to 100% (no-op) wherever it is missing -- so projects saved
-    before scaling existed still compute identically.
+    Mutates ``data['traffic_data']`` in place.  Callers must pass a deep-copy
+    of the live UI state so the user's stored Q values stay untouched.
     """
     traffic = data.get('traffic_data') or {}
     if not isinstance(traffic, dict):
@@ -39,39 +63,8 @@ def apply_traffic_scaling(data: dict[str, Any]) -> None:
         if not isinstance(dirs, dict):
             continue
         for _di, var in dirs.items():
-            if not isinstance(var, dict):
-                continue
-            freq = var.get(FREQ_KEY)
-            if freq is None:
-                continue
-            scaling = var.get(SCALING_KEY)
-            for i, row in enumerate(freq):
-                if not hasattr(row, '__iter__'):
-                    continue
-                for j, q in enumerate(row):
-                    factor = 1.0
-                    if scaling is not None and i < len(scaling):
-                        s_row = scaling[i]
-                        if hasattr(s_row, '__iter__') and j < len(s_row):
-                            try:
-                                factor = float(s_row[j]) / 100.0
-                            except (TypeError, ValueError):
-                                factor = 1.0
-                    if factor == 1.0:
-                        continue
-                    # Pass through cells that aren't a finite number --
-                    # downstream models treat '' as 0 and use ``np.inf``
-                    # as a "no data" sentinel; we mustn't quietly turn
-                    # either into something else.
-                    if q == '' or q is None:
-                        continue
-                    try:
-                        q_val = float(q)
-                    except (TypeError, ValueError):
-                        continue
-                    if not np.isfinite(q_val):
-                        continue
-                    row[j] = q_val * factor
+            if isinstance(var, dict):
+                _scale_direction_freq(var)
 
 
 def _is_qgis_available() -> bool:
@@ -187,116 +180,67 @@ def load_areas(data: dict[str, Any]) -> list[dict[str, Any]]:
     return objs
 
 
+def _expand_geom_entries(items: list, value_key: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for entry in items:
+        try:
+            eid, val, wkt = entry
+        except Exception:
+            continue
+        geom = safe_load_wkt(wkt)
+        if geom is None:
+            continue
+        try:
+            fval = float(val)
+        except Exception:
+            continue
+        if geom.geom_type == 'MultiPolygon':
+            for i, poly in enumerate(geom.geoms):
+                result.append({'id': f'{eid}_{i}', value_key: fval, 'wkt': poly})
+        else:
+            result.append({'id': str(eid), value_key: fval, 'wkt': geom})
+    return result
+
+
 def split_structures_and_depths(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return two lists with attributes preserved, splitting MultiPolygons.
-
-    - structures: [{'id': str, 'height': float, 'wkt': BaseGeometry}]
-    - depths: [{'id': str, 'depth': float, 'wkt': BaseGeometry}]
-
-    MultiPolygons are split into individual Polygons, each retaining the
-    original attributes (id, height/depth). This ensures the depths list
-    has the same length as depths_gdfs after transformation.
-    """
-    structures: list[dict[str, Any]] = []
-    depths: list[dict[str, Any]] = []
-    for obj in data.get('objects', []):
-        try:
-            oid, height, wkt = obj
-        except Exception:
-            continue
-        geom = safe_load_wkt(wkt)
-        if geom is None:
-            continue
-        try:
-            hval = float(height)
-        except Exception:
-            continue
-        # Split MultiPolygons into individual Polygons
-        if geom.geom_type == 'MultiPolygon':
-            for i, poly in enumerate(geom.geoms):
-                structures.append({'id': f'{oid}_{i}', 'height': hval, 'wkt': poly})
-        else:
-            structures.append({'id': str(oid), 'height': hval, 'wkt': geom})
-    for dep in data.get('depths', []):
-        try:
-            did, depth, wkt = dep
-        except Exception:
-            continue
-        geom = safe_load_wkt(wkt)
-        if geom is None:
-            continue
-        try:
-            dval = float(depth)
-        except Exception:
-            continue
-        # Split MultiPolygons into individual Polygons
-        if geom.geom_type == 'MultiPolygon':
-            for i, poly in enumerate(geom.geoms):
-                depths.append({'id': f'{did}_{i}', 'depth': dval, 'wkt': poly})
-        else:
-            depths.append({'id': str(did), 'depth': dval, 'wkt': geom})
+    """Return (structures, depths), splitting MultiPolygons into individual Polygons."""
+    structures = _expand_geom_entries(data.get('objects', []), 'height')
+    depths = _expand_geom_entries(data.get('depths', []), 'depth')
     return structures, depths
 
 
-def transform_to_utm(lines, objects):
-    """
-    Transform lines and objects from WGS84 (EPSG:4326) to the appropriate UTM zone.
+def _get_utm_epsg(lon: float, lat: float) -> int:
+    utm_zone = int((lon + 180) // 6) + 1
+    return 32600 + utm_zone if lat >= 0 else 32700 + utm_zone
 
-    Uses QGIS native coordinate transformation to avoid pyproj conflicts in QGIS.
 
-    Parameters:
-    - lines: List of LineString geometries in EPSG:4326.
-    - objects: List of Polygon geometries in EPSG:4326.
-
-    Returns:
-    - transformed_lines: List of LineString geometries in UTM.
-    - transformed_objects: List of Polygon geometries in UTM.
-    - utm_epsg: The EPSG code of the UTM zone used.
-    """
-    # Combine all geometries to find the centroid
-    all_geometries = lines + objects
-    combined_centroid_x = sum([geom.centroid.x for geom in all_geometries]) / len(all_geometries)
-    combined_centroid_y = sum([geom.centroid.y for geom in all_geometries]) / len(all_geometries)
-
-    # Determine the UTM zone based on the centroid longitude
-    # Northern hemisphere: EPSG 326XX, Southern hemisphere: EPSG 327XX
-    utm_zone = int((combined_centroid_x + 180) // 6) + 1
-    if combined_centroid_y >= 0:
-        utm_epsg = 32600 + utm_zone  # Northern hemisphere
-    else:
-        utm_epsg = 32700 + utm_zone  # Southern hemisphere
-
+def _make_coord_transform(utm_epsg: int):
     if _is_qgis_available():
-        # QGIS path – use the native CRS transform to stay consistent with the
-        # rest of the plugin when running inside QGIS.
         wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
         utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
         transform_context = QgsProject.instance().transformContext()
         coord_transform = QgsCoordinateTransform(wgs84_crs, utm_crs, transform_context)
-
         def transform_coords(x, y):
             from qgis.core import QgsPointXY
             point = coord_transform.transform(QgsPointXY(x, y))
             return point.x(), point.y()
     else:
-        # Standalone / test path – fall back to pyproj (available in OSGeo4W).
         from pyproj import Transformer as _Transformer
         _proj = _Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
-
         def transform_coords(x, y):
             return _proj.transform(x, y)
+    return transform_coords
 
-    def transform_geometry(geom):
-        """Transform a shapely geometry from WGS84 to UTM."""
-        return transform(transform_coords, geom)
 
-    # Transform lines
-    transformed_lines = [transform_geometry(line) for line in lines]
-
-    # Transform objects
-    transformed_objects = [transform_geometry(obj) for obj in objects]
-
-    return transformed_lines, transformed_objects, utm_epsg
+def transform_to_utm(lines, objects):
+    """Transform lines and objects from WGS84 (EPSG:4326) to the appropriate UTM zone."""
+    all_geometries = lines + objects
+    cx = sum(g.centroid.x for g in all_geometries) / len(all_geometries)
+    cy = sum(g.centroid.y for g in all_geometries) / len(all_geometries)
+    utm_epsg = _get_utm_epsg(cx, cy)
+    tc = _make_coord_transform(utm_epsg)
+    xform = lambda geom: transform(tc, geom)
+    return [xform(l) for l in lines], [xform(o) for o in objects], utm_epsg
 
 
 def prepare_traffic_lists(data: dict[str, Any]) -> tuple[

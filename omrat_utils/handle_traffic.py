@@ -1,23 +1,13 @@
-from dataclasses import dataclass, field
-from operator import xor
-import json
 from functools import partial
-from typing import Optional, Any, TYPE_CHECKING, cast, Union
+from typing import Optional, Any, TYPE_CHECKING, Union
 if TYPE_CHECKING:
     from omrat import OMRAT, OMRATMainWidget
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
-import matplotlib.pyplot as plt
-from matplotlib.axes import Axes
-from matplotlib.figure import Figure
-import matplotlib.gridspec as gridspec
 import numpy as np
-from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox
-from scipy import stats
 
-from ui.traffic_data_widget import TrafficDataWidget
 from geometries import isint
 from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox
 

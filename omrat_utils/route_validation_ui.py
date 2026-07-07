@@ -219,6 +219,69 @@ def _restore_dock(omrat: "OMRAT", was_visible) -> None:
                 pass
 
 
+def _show_merge_dialog(
+    pair: CloseWaypointPair, sd: dict, omrat: "OMRAT",
+    show_dialog: Callable | None, parent,
+) -> "_MergeChoice":
+    if show_dialog is not None:
+        return show_dialog('merge', pair)
+    _zoom_canvas_to_points(omrat, [pair.point_a, pair.point_b])
+    dlg = _MergePromptDialog(pair, sd, parent)
+    dlg.exec()
+    return dlg.choice()
+
+
+def _show_split_dialog(
+    hit: LegIntersection, sd: dict, omrat: "OMRAT",
+    show_dialog: Callable | None, parent,
+) -> bool:
+    if show_dialog is not None:
+        return show_dialog('split', hit)
+    _zoom_canvas_to_points(omrat, [hit.point])
+    dlg = _SplitPromptDialog(hit, sd, parent)
+    dlg.exec()
+    return dlg.accepted_split()
+
+
+def _apply_merges_and_splits(
+    out: ValidationOutcome, report, sd: dict, td: dict,
+    tol_frac: float, omrat: "OMRAT", show_dialog: Callable | None, parent,
+) -> None:
+    for pair in report.close_pairs:
+        choice = _show_merge_dialog(pair, sd, omrat, show_dialog, parent)
+        if choice.target is None:
+            out.skipped += 1
+            continue
+        moved = apply_waypoint_merge(sd, pair, choice.target)
+        if moved > 0:
+            out.merges_applied += 1
+    fresh_intersections = validate_routes(sd, tol_frac=tol_frac).intersections
+    for hit in fresh_intersections:
+        if not _show_split_dialog(hit, sd, omrat, show_dialog, parent):
+            out.skipped += 1
+            continue
+        apply_intersection_split(sd, hit, traffic_data=td)
+        out.splits_applied += 1
+
+
+def _reload_legs_after_mutation(omrat: "OMRAT") -> None:
+    qgis_geoms = getattr(omrat, 'qgis_geoms', None)
+    if qgis_geoms is None or not hasattr(qgis_geoms, 'reload_legs_from_segment_data'):
+        return
+    try:
+        qgis_geoms.reload_legs_from_segment_data()
+    except Exception as exc:
+        try:
+            import traceback
+            from qgis.core import Qgis, QgsMessageLog
+            QgsMessageLog.logMessage(
+                f"reload_legs_from_segment_data failed: {exc}\n{traceback.format_exc()}",
+                "OMRAT", Qgis.Critical,
+            )
+        except Exception:
+            pass
+
+
 def run_validation_pass(
     omrat: "OMRAT",
     *,
@@ -246,85 +309,19 @@ def run_validation_pass(
     sd = getattr(omrat, 'segment_data', {}) or {}
     td = getattr(omrat, 'traffic_data', {}) or {}
     report = validate_routes(sd, tol_frac=tol_frac)
-
-    parent = None  # not omrat.main_widget -- the parent gets hidden below
-
-    # Hide the dock only when there's actually something to prompt
-    # about (so a no-op validation pass does not flicker the UI).
+    parent = None
     needs_prompt = bool(report.close_pairs or report.intersections)
     dock_was_visible = (
         _hide_dock_for_prompts(omrat) if (needs_prompt and show_dialog is None)
         else None
     )
-
-    def _show_merge(pair: CloseWaypointPair) -> _MergeChoice:
-        if show_dialog is not None:
-            return show_dialog('merge', pair)
-        _zoom_canvas_to_points(omrat, [pair.point_a, pair.point_b])
-        dlg = _MergePromptDialog(pair, sd, parent)
-        dlg.exec()
-        return dlg.choice()
-
-    def _show_split(intersection: LegIntersection) -> bool:
-        if show_dialog is not None:
-            return show_dialog('split', intersection)
-        _zoom_canvas_to_points(omrat, [intersection.point])
-        dlg = _SplitPromptDialog(intersection, sd, parent)
-        dlg.exec()
-        return dlg.accepted_split()
-
     try:
-        # Process merges first — they may collapse a candidate intersection
-        # into a junction, which the second pass will skip naturally.
-        for pair in report.close_pairs:
-            choice = _show_merge(pair)
-            if choice.target is None:
-                out.skipped += 1
-                continue
-            moved = apply_waypoint_merge(sd, pair, choice.target)
-            if moved > 0:
-                out.merges_applied += 1
-
-        # Re-run intersection detection on the (possibly mutated) data so
-        # any merge-resolved crossings disappear from the list.
-        fresh_intersections = validate_routes(sd, tol_frac=tol_frac).intersections
-        for hit in fresh_intersections:
-            if not _show_split(hit):
-                out.skipped += 1
-                continue
-            apply_intersection_split(sd, hit, traffic_data=td)
-            out.splits_applied += 1
+        _apply_merges_and_splits(out, report, sd, td, tol_frac, omrat, show_dialog, parent)
     finally:
         _restore_dock(omrat, dock_was_visible)
-
-    # Refresh canvas layers, route table, and tangent lines so the
-    # mutated segment_data is reflected on screen *and* survives the
-    # next save (GatherData reads endpoints from twRouteList).
     if out.merges_applied or out.splits_applied:
-        qgis_geoms = getattr(omrat, 'qgis_geoms', None)
-        if qgis_geoms is not None and hasattr(qgis_geoms, 'reload_legs_from_segment_data'):
-            try:
-                qgis_geoms.reload_legs_from_segment_data()
-            except Exception as exc:  # nosec B110
-                # A failure here leaves the UI half-rebuilt (vector
-                # layers + table rows wiped, no rebuild) so the user
-                # sees "all legs disappeared" with no obvious cause.
-                # Log loudly instead of swallowing silently.
-                try:
-                    import traceback
-                    from qgis.core import Qgis, QgsMessageLog
-                    QgsMessageLog.logMessage(
-                        f"reload_legs_from_segment_data failed: {exc}\n"
-                        f"{traceback.format_exc()}",
-                        "OMRAT", Qgis.Critical,
-                    )
-                except Exception:
-                    pass
-
-    # Refresh the junction registry after the structural edits so the
-    # transition matrices have correct leg references.
+        _reload_legs_after_mutation(omrat)
     handler = getattr(omrat, 'junctions', None)
     if handler is not None:
         handler.rebuild_from_segments(sd, prefer_user=True)
-
     return out

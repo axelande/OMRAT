@@ -23,8 +23,8 @@ under the standalone interpreter.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import atan2, degrees, exp, radians
-from typing import Any, Iterable
+from math import atan2, degrees, exp
+from typing import Any
 
 from geometries.route_validation import parse_wkt_point
 

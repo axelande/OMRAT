@@ -22,6 +22,58 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 
+def _expand_poly_geoms(geom, value: float) -> list:
+    if isinstance(geom, Polygon):
+        return [(geom, value)]
+    elif isinstance(geom, MultiPolygon):
+        return [(poly, value) for poly in geom.geoms if not poly.is_empty]
+    return []
+
+
+def _transform_anchor_to_utm(anchor_zone: Polygon, wgs84, utm_crs) -> Polygon:
+    if anchor_zone is None or anchor_zone.is_empty:
+        return Polygon()
+    try:
+        result = transform_geometry(anchor_zone, wgs84, utm_crs)
+        return make_valid(result)
+    except Exception:
+        return Polygon()
+
+
+def _transform_corridor_to_wgs84(
+    corridor_utm: Polygon,
+    anchor_utm: Polygon,
+    deep_utm: Polygon,
+    utm_crs,
+    wgs84,
+) -> dict | None:
+    try:
+        corridor_wgs84 = make_valid(transform_geometry(corridor_utm, utm_crs, wgs84))
+        if corridor_wgs84.is_empty:
+            return None
+        bounds = corridor_wgs84.bounds
+        if not (-180 <= bounds[0] <= 180 and -180 <= bounds[2] <= 180 and
+                -90 <= bounds[1] <= 90 and -90 <= bounds[3] <= 90):
+            return None
+        if (bounds[2] - bounds[0]) > 2 or (bounds[3] - bounds[1]) > 2:
+            return None
+        anchor_wgs84 = Polygon()
+        deep_wgs84 = Polygon()
+        if not anchor_utm.is_empty:
+            try:
+                anchor_wgs84 = make_valid(transform_geometry(anchor_utm, utm_crs, wgs84))
+            except Exception:
+                pass
+        if not deep_utm.is_empty:
+            try:
+                deep_wgs84 = make_valid(transform_geometry(deep_utm, utm_crs, wgs84))
+            except Exception:
+                pass
+        return {'polygon': corridor_wgs84, 'anchor_polygon': anchor_wgs84, 'deep_polygon': deep_wgs84}
+    except Exception:
+        return None
+
+
 class DriftCorridorGenerator:
     """
     Generates drift corridors for QGIS layers.
@@ -129,59 +181,48 @@ class DriftCorridorGenerator:
                         pass
         return legs
 
+    def _parse_depth_row(self, table, row: int, bin_width: float):
+        depth_item = table.item(row, 1)
+        if depth_item is None:
+            return None, None
+        depth = self._parse_depth_value(depth_item.text().strip(), bin_width)
+        if depth is None:
+            return None, None
+        wkt_item = table.item(row, 2)
+        if wkt_item is None or not (wkt_item.text() or '').strip():
+            return None, None
+        from shapely import wkt as shapely_wkt
+        return depth, shapely_wkt.loads(wkt_item.text())
+
+    def _unpack_data(self, depth_threshold: float, height_threshold: float) -> tuple:
+        if self._precollected_data is not None:
+            d = self._precollected_data
+            return (d['legs'], d['depth_obstacles'], d['structure_obstacles'],
+                    d['lateral_std'], d['repair_params'], d['drift_speed'],
+                    d.get('anchor_zone', Polygon()))
+        legs = self._get_legs_from_routes()
+        depth_obstacles = self._get_depth_obstacles(depth_threshold)
+        structure_obstacles = self._get_structure_obstacles(height_threshold)
+        anchor_d = float(self.plugin.drift_values.get('anchor_d', 0))
+        anchor_zone = self._get_anchor_zone(anchor_d * depth_threshold)
+        return (legs, depth_obstacles, structure_obstacles,
+                self._get_distribution_std(), self._get_repair_params(),
+                self._get_drift_speed_ms(), anchor_zone)
+
     def _get_depth_obstacles(self, depth_threshold: float) -> list[tuple[Polygon, float]]:
-        """
-        Get depth polygons that are shallower than threshold.
-
-        For depth intervals like "0-10", we use the UPPER bound (10m) as the max depth.
-        Areas with max depth <= threshold are considered obstacles (grounding risk).
-
-        For single values with bin detection, we use (value + bin_width) as max depth.
-        """
+        """Get depth polygons shallower than threshold."""
         from qgis.core import QgsMessageLog, Qgis
-
-        obstacles = []
         table = self.plugin.main_widget.twDepthList
-
-        # First pass: detect bin width from depth values
         bin_width = self._detect_depth_bin_width(table)
-
-        # Second pass: collect obstacles
+        obstacles = []
         for row in range(table.rowCount()):
             try:
-                depth_item = table.item(row, 1)
-                if depth_item is None:
+                depth, geom = self._parse_depth_row(table, row, bin_width)
+                if depth is None or geom is None or depth > depth_threshold:
                     continue
-                depth_text = depth_item.text().strip()
-
-                # Parse depth value
-                depth = self._parse_depth_value(depth_text, bin_width)
-                if depth is None or depth > depth_threshold:
-                    continue
-
-                wkt_item = table.item(row, 2)
-                if wkt_item is None:
-                    continue
-                wkt = wkt_item.text()
-                if not wkt or not wkt.strip():
-                    continue
-
-                from shapely import wkt as shapely_wkt
-                shapely_geom = shapely_wkt.loads(wkt)
-
-                # Handle both Polygon and MultiPolygon
-                if isinstance(shapely_geom, Polygon):
-                    obstacles.append((shapely_geom, depth))
-                elif isinstance(shapely_geom, MultiPolygon):
-                    for poly in shapely_geom.geoms:
-                        if not poly.is_empty:
-                            obstacles.append((poly, depth))
-
+                obstacles.extend(_expand_poly_geoms(geom, depth))
             except Exception as e:
-                QgsMessageLog.logMessage(
-                    f"Error parsing depth row {row}: {e}", "OMRAT", Qgis.Warning
-                )
-
+                QgsMessageLog.logMessage(f"Error parsing depth row {row}: {e}", "OMRAT", Qgis.Warning)
         return obstacles
 
     def _get_anchor_zone(self, anchor_threshold: float) -> Polygon:
@@ -197,41 +238,21 @@ class DriftCorridorGenerator:
             Union polygon of all anchorable depth cells (WGS84).
         """
         from shapely.ops import unary_union as _unary_union
-
         if anchor_threshold <= 0:
             return Polygon()
-
         table = self.plugin.main_widget.twDepthList
         bin_width = self._detect_depth_bin_width(table)
         anchor_geoms = []
-
         for row in range(table.rowCount()):
             try:
-                depth_item = table.item(row, 1)
-                if depth_item is None:
+                depth, geom = self._parse_depth_row(table, row, bin_width)
+                if depth is None or geom is None or depth >= anchor_threshold:
                     continue
-                depth_text = depth_item.text().strip()
-
-                depth = self._parse_depth_value(depth_text, bin_width)
-                if depth is None or depth >= anchor_threshold:
-                    continue
-
-                wkt_item = table.item(row, 2)
-                if wkt_item is None:
-                    continue
-                wkt = wkt_item.text()
-                if not wkt or not wkt.strip():
-                    continue
-
-                from shapely import wkt as shapely_wkt
-                geom = shapely_wkt.loads(wkt)
                 geom = make_valid(geom)
                 if not geom.is_empty:
                     anchor_geoms.append(geom)
-
             except Exception:
                 pass
-
         if anchor_geoms:
             return make_valid(_unary_union(anchor_geoms))
         return Polygon()
@@ -293,42 +314,25 @@ class DriftCorridorGenerator:
             return None
 
     def _get_structure_obstacles(self, height_threshold: float) -> list[tuple[Polygon, float]]:
-        """Get structure polygons that are lower than threshold."""
+        """Get structure polygons lower than threshold."""
         from qgis.core import QgsMessageLog, Qgis
-
+        from shapely import wkt as shapely_wkt
         obstacles = []
         table = self.plugin.main_widget.twObjectList
-
         for row in range(table.rowCount()):
             try:
                 height_item = table.item(row, 1)
                 if height_item is None:
                     continue
                 height = float(height_item.text())
-
                 if height > height_threshold:
                     continue
-
                 wkt_item = table.item(row, 2)
                 if wkt_item is None:
                     continue
-                wkt = wkt_item.text()
-
-                from shapely import wkt as shapely_wkt
-                shapely_geom = shapely_wkt.loads(wkt)
-
-                if isinstance(shapely_geom, Polygon):
-                    obstacles.append((shapely_geom, height))
-                elif isinstance(shapely_geom, MultiPolygon):
-                    for poly in shapely_geom.geoms:
-                        if not poly.is_empty:
-                            obstacles.append((poly, height))
-
+                obstacles.extend(_expand_poly_geoms(shapely_wkt.loads(wkt_item.text()), height))
             except Exception as e:
-                QgsMessageLog.logMessage(
-                    f"Error parsing structure row {row}: {e}", "OMRAT", Qgis.Warning
-                )
-
+                QgsMessageLog.logMessage(f"Error parsing structure row {row}: {e}", "OMRAT", Qgis.Warning)
         return obstacles
 
     def _get_distribution_std(self) -> float:
@@ -371,70 +375,36 @@ class DriftCorridorGenerator:
             List of corridor dicts with: direction, angle, leg_index, polygon (WGS84)
         """
         from qgis.core import QgsMessageLog, Qgis
-
         self._cancelled = False
-
-        # Use pre-collected data if available
-        if self._precollected_data is not None:
-            data = self._precollected_data
-            legs = data['legs']
-            depth_obstacles = data['depth_obstacles']
-            structure_obstacles = data['structure_obstacles']
-            lateral_std = data['lateral_std']
-            repair_params = data['repair_params']
-            drift_speed = data['drift_speed']
-            anchor_zone = data.get('anchor_zone', Polygon())
-        else:
-            legs = self._get_legs_from_routes()
-            depth_obstacles = self._get_depth_obstacles(depth_threshold)
-            structure_obstacles = self._get_structure_obstacles(height_threshold)
-            lateral_std = self._get_distribution_std()
-            repair_params = self._get_repair_params()
-            drift_speed = self._get_drift_speed_ms()
-            anchor_d = float(self.plugin.drift_values.get('anchor_d', 0))
-            anchor_zone = self._get_anchor_zone(anchor_d * depth_threshold)
-
+        legs, depth_obs, struct_obs, lateral_std, repair_params, drift_speed, anchor_zone = (
+            self._unpack_data(depth_threshold, height_threshold)
+        )
         if not legs:
             QgsMessageLog.logMessage("No legs found from routes", "OMRAT", Qgis.Warning)
             return []
-
         total_work = len(legs) * len(DIRECTIONS)
-        completed_work = 0
-
         if not self._report_progress(0, total_work, "Initializing..."):
             return []
-
-        # Calculate parameters
         half_width = get_distribution_width(lateral_std, 0.99) / 2
-        projection_dist = get_projection_distance(repair_params, drift_speed, target_prob)
-        projection_dist = min(projection_dist, 50000)
-
+        projection_dist = min(get_projection_distance(repair_params, drift_speed, target_prob), 50000)
         QgsMessageLog.logMessage(
             f"Corridor params: half_width={half_width:.1f}m, projection_dist={projection_dist:.1f}m",
-            "OMRAT", Qgis.Info
+            "OMRAT", Qgis.Info,
         )
-
         wgs84 = CRS("EPSG:4326")
-        all_obstacles = depth_obstacles + structure_obstacles
+        all_obstacles = depth_obs + struct_obs
         corridors = []
-
+        completed = 0
         for leg_idx, leg in enumerate(legs):
             if self._cancelled:
                 return corridors
-
-            # Generate corridors for this leg
-            leg_corridors, completed_work = self._generate_leg_corridors(
-                leg, leg_idx, len(legs),
-                all_obstacles, half_width, projection_dist,
-                wgs84, completed_work, total_work,
-                anchor_zone=anchor_zone,
+            leg_corridors, completed = self._generate_leg_corridors(
+                leg, leg_idx, len(legs), all_obstacles, half_width,
+                projection_dist, wgs84, completed, total_work, anchor_zone=anchor_zone,
             )
             corridors.extend(leg_corridors)
-
-        self._report_progress(total_work, total_work,
-                              f"Complete: {len(corridors)} corridors generated")
+        self._report_progress(total_work, total_work, f"Complete: {len(corridors)} corridors generated")
         self._precollected_data = None
-
         return corridors
 
     def _generate_leg_corridors(self, leg: LineString, leg_idx: int, total_legs: int,
@@ -443,61 +413,34 @@ class DriftCorridorGenerator:
                                 anchor_zone: Polygon | None = None) -> tuple[list[dict], int]:
         """Generate corridors for a single leg in all 8 directions."""
         corridors = []
-
         centroid = leg.centroid
         if not (-180 <= centroid.x <= 180 and -90 <= centroid.y <= 90):
             return corridors, completed_work + len(DIRECTIONS)
-
         try:
             utm_crs = get_utm_crs(centroid.x, centroid.y)
             leg_utm = transform_geometry(leg, wgs84, utm_crs)
         except Exception:
             return corridors, completed_work + len(DIRECTIONS)
-
-        # Transform obstacles to UTM
         if not self._report_progress(completed_work, total_work,
                                      f"Transforming obstacles for leg {leg_idx + 1}/{total_legs}..."):
             return corridors, completed_work
-
         obstacles_utm = self._transform_obstacles_to_utm(all_obstacles, wgs84, utm_crs)
-
-        # Transform anchor zone to UTM
-        anchor_zone_utm = Polygon()
-        if anchor_zone is not None and not anchor_zone.is_empty:
-            try:
-                anchor_zone_utm = transform_geometry(anchor_zone, wgs84, utm_crs)
-                anchor_zone_utm = make_valid(anchor_zone_utm)
-            except Exception:
-                anchor_zone_utm = Polygon()
-
+        anchor_zone_utm = _transform_anchor_to_utm(anchor_zone, wgs84, utm_crs)
         for dir_name, angle in DIRECTIONS.items():
             if self._cancelled:
                 return corridors, completed_work
-
             if not self._report_progress(completed_work, total_work,
                                          f"Leg {leg_idx + 1}/{total_legs} - {dir_name}"):
                 return corridors, completed_work
-
-            # Create and clip corridor
             result = self._create_single_corridor(
-                leg_utm, half_width, angle, projection_dist,
-                obstacles_utm, utm_crs, wgs84,
-                f"Leg {leg_idx} {dir_name}: ",
-                anchor_zone_utm=anchor_zone_utm,
+                leg_utm, half_width, angle, projection_dist, obstacles_utm, utm_crs, wgs84,
+                f"Leg {leg_idx} {dir_name}: ", anchor_zone_utm=anchor_zone_utm,
             )
-
             if result is not None:
-                corridors.append({
-                    'direction': dir_name,
-                    'angle': angle,
-                    'leg_index': leg_idx,
-                    'polygon': result['polygon'],
-                    'anchor_polygon': result.get('anchor_polygon'),
-                    'deep_polygon': result.get('deep_polygon'),
-                })
-
+                corridors.append({'direction': dir_name, 'angle': angle, 'leg_index': leg_idx,
+                                  'polygon': result['polygon'], 'anchor_polygon': result.get('anchor_polygon'),
+                                  'deep_polygon': result.get('deep_polygon')})
             completed_work += 1
-
         return corridors, completed_work
 
     def _transform_obstacles_to_utm(self, obstacles: list, wgs84: CRS, utm_crs: CRS) -> list:
@@ -525,72 +468,18 @@ class DriftCorridorGenerator:
             'anchor_polygon' (blue/anchorable part), and
             'deep_polygon' (green/deep part), or None on failure.
         """
-        # Create corridor
         corridor_utm = create_projected_corridor(leg_utm, half_width, angle, projection_dist)
-
         if corridor_utm.is_empty:
             return None
-
-        # Remember original bounds for shadow sizing
         original_bounds = corridor_utm.bounds
-
-        # Clip at obstacles
         if obstacles_utm:
-            corridor_utm = clip_corridor_at_obstacles(
-                corridor_utm, obstacles_utm, angle, log_prefix
-            )
-
+            corridor_utm = clip_corridor_at_obstacles(corridor_utm, obstacles_utm, angle, log_prefix)
         if corridor_utm.is_empty:
             return None
-
-        # Split into anchor (blue) and deep (green) zones
         anchor_utm = Polygon()
-        deep_utm = Polygon()
+        deep_utm = corridor_utm
         if anchor_zone_utm is not None and not anchor_zone_utm.is_empty:
             anchor_utm, deep_utm = split_corridor_by_anchor_zone(
-                corridor_utm, anchor_zone_utm, angle, original_bounds
+                corridor_utm, anchor_zone_utm, angle, original_bounds,
             )
-        else:
-            deep_utm = corridor_utm
-
-        # Transform back to WGS84 and validate
-        try:
-            corridor_wgs84 = transform_geometry(corridor_utm, utm_crs, wgs84)
-            corridor_wgs84 = make_valid(corridor_wgs84)
-
-            if corridor_wgs84.is_empty:
-                return None
-
-            # Validate bounds
-            bounds = corridor_wgs84.bounds
-            if not (-180 <= bounds[0] <= 180 and -180 <= bounds[2] <= 180 and
-                    -90 <= bounds[1] <= 90 and -90 <= bounds[3] <= 90):
-                return None
-
-            # Check for unreasonably large corridors (likely transformation errors)
-            if (bounds[2] - bounds[0]) > 2 or (bounds[3] - bounds[1]) > 2:
-                return None
-
-            # Transform anchor/deep to WGS84
-            anchor_wgs84 = Polygon()
-            deep_wgs84 = Polygon()
-            if not anchor_utm.is_empty:
-                try:
-                    anchor_wgs84 = make_valid(
-                        transform_geometry(anchor_utm, utm_crs, wgs84))
-                except Exception:
-                    pass
-            if not deep_utm.is_empty:
-                try:
-                    deep_wgs84 = make_valid(
-                        transform_geometry(deep_utm, utm_crs, wgs84))
-                except Exception:
-                    pass
-
-            return {
-                'polygon': corridor_wgs84,
-                'anchor_polygon': anchor_wgs84,
-                'deep_polygon': deep_wgs84,
-            }
-        except Exception:
-            return None
+        return _transform_corridor_to_wgs84(corridor_utm, anchor_utm, deep_utm, utm_crs, wgs84)

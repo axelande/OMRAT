@@ -33,7 +33,6 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QColor
 import logging
-import shapely.wkt as sw
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +252,58 @@ def _aggregate_by_leg(leg_contributions: dict[str, float]) -> dict[str, float]:
     return by_leg
 
 
+def _build_initial_obstacle_dicts(
+    by_object: dict, struct_lookup: dict, depth_lookup: dict,
+) -> tuple[dict, dict]:
+    allision_data: dict = {}
+    grounding_data: dict = {}
+    for obj_key, obj_vals in by_object.items():
+        if not isinstance(obj_vals, dict):
+            continue
+        allision_prob = obj_vals.get('allision', 0.0)
+        grounding_prob = obj_vals.get('grounding', 0.0)
+        if obj_key.startswith('Structure - '):
+            obj_id = obj_key.replace('Structure - ', '')
+            if obj_id in struct_lookup and allision_prob > 0:
+                meta = struct_lookup[obj_id]
+                allision_data[obj_id] = {
+                    'total_probability': allision_prob,
+                    'geometry': meta.get('wkt_wgs84') or meta.get('wkt'),
+                    'value': meta['height'],
+                    'leg_contributions': {}, 'leg_dir_contributions': {}, 'segment_contributions': {},
+                }
+        elif obj_key.startswith('Depth - '):
+            obj_id = obj_key.replace('Depth - ', '')
+            if obj_id in depth_lookup and grounding_prob > 0:
+                meta = depth_lookup[obj_id]
+                grounding_data[obj_id] = {
+                    'total_probability': grounding_prob,
+                    'geometry': meta.get('wkt_wgs84') or meta.get('wkt'),
+                    'value': meta['depth'],
+                    'leg_contributions': {}, 'leg_dir_contributions': {}, 'segment_contributions': {},
+                }
+    return allision_data, grounding_data
+
+
+def _fill_legdir_contributions(obstacle_data: dict, legdir_map: dict, prefix: str) -> None:
+    for obs_key, leg_contribs in legdir_map.items():
+        if not isinstance(leg_contribs, dict):
+            continue
+        obj_id = obs_key.replace(prefix, '')
+        if obj_id in obstacle_data:
+            obstacle_data[obj_id]['leg_dir_contributions'] = dict(leg_contribs)
+            obstacle_data[obj_id]['leg_contributions'] = _aggregate_by_leg(leg_contribs)
+
+
+def _fill_segment_contributions(obstacle_data: dict, seg_map: dict, prefix: str) -> None:
+    for obs_key, seg_data in seg_map.items():
+        if not isinstance(seg_data, dict):
+            continue
+        obj_id = obs_key.replace(prefix, '')
+        if obj_id in obstacle_data:
+            obstacle_data[obj_id]['segment_contributions'] = dict(seg_data)
+
+
 def extract_obstacle_probabilities(
     report: dict[str, Any],
     structures: list[dict[str, Any]],
@@ -279,97 +330,15 @@ def extract_obstacle_probabilities(
             }
         }
     """
-    by_object = report.get('by_object', {})
-
-    # Build reverse lookup: obstacle_id -> metadata
     struct_lookup = {s['id']: s for s in structures}
     depth_lookup = {d['id']: d for d in depths}
-
-    allision_data: dict[str, dict[str, Any]] = {}
-    grounding_data: dict[str, dict[str, Any]] = {}
-
-    # Extract totals per object
-    for obj_key, obj_vals in by_object.items():
-        if not isinstance(obj_vals, dict):
-            continue
-
-        allision_prob = obj_vals.get('allision', 0.0)
-        grounding_prob = obj_vals.get('grounding', 0.0)
-
-        # Parse object key: "Structure - id" or "Depth - id"
-        if obj_key.startswith('Structure - '):
-            obj_id = obj_key.replace('Structure - ', '')
-            if obj_id in struct_lookup and allision_prob > 0:
-                meta = struct_lookup[obj_id]
-                # Use WGS84 geometry if available, otherwise fall back to UTM
-                geom = meta.get('wkt_wgs84') or meta.get('wkt')
-                allision_data[obj_id] = {
-                    'total_probability': allision_prob,
-                    'geometry': geom,
-                    'value': meta['height'],
-                    'leg_contributions': {},
-                    'leg_dir_contributions': {},  # Raw leg-direction data for per-segment calc
-                    'segment_contributions': {},  # Per-segment per leg-direction
-                }
-        elif obj_key.startswith('Depth - '):
-            obj_id = obj_key.replace('Depth - ', '')
-            if obj_id in depth_lookup and grounding_prob > 0:
-                meta = depth_lookup[obj_id]
-                # Use WGS84 geometry if available, otherwise fall back to UTM
-                geom = meta.get('wkt_wgs84') or meta.get('wkt')
-                grounding_data[obj_id] = {
-                    'total_probability': grounding_prob,
-                    'geometry': geom,
-                    'value': meta['depth'],
-                    'leg_contributions': {},
-                    'leg_dir_contributions': {},  # Raw leg-direction data for per-segment calc
-                    'segment_contributions': {},  # Per-segment per leg-direction
-                }
-
-    # Extract per-leg contributions from by_structure_legdir (for allision)
-    by_struct_legdir = report.get('by_structure_legdir', {})
-    for struct_key, leg_contribs in by_struct_legdir.items():
-        if not isinstance(leg_contribs, dict):
-            continue
-        obj_id = struct_key.replace('Structure - ', '')
-        if obj_id in allision_data:
-            # Store raw leg-direction contributions for per-segment calculation
-            allision_data[obj_id]['leg_dir_contributions'] = dict(leg_contribs)
-            # Aggregate contributions by leg ID (sum across all directions)
-            aggregated = _aggregate_by_leg(leg_contribs)
-            allision_data[obj_id]['leg_contributions'] = aggregated
-
-    # Extract per-leg contributions for grounding from by_depth_legdir
-    by_depth_legdir = report.get('by_depth_legdir', {})
-    for depth_key, leg_contribs in by_depth_legdir.items():
-        if not isinstance(leg_contribs, dict):
-            continue
-        obj_id = depth_key.replace('Depth - ', '')
-        if obj_id in grounding_data:
-            # Store raw leg-direction contributions for per-segment calculation
-            grounding_data[obj_id]['leg_dir_contributions'] = dict(leg_contribs)
-            # Aggregate contributions by leg ID (sum across all directions)
-            aggregated = _aggregate_by_leg(leg_contribs)
-            grounding_data[obj_id]['leg_contributions'] = aggregated
-
-    # Extract per-segment contributions from by_structure_segment_legdir
-    by_struct_seg_legdir = report.get('by_structure_segment_legdir', {})
-    for struct_key, seg_data in by_struct_seg_legdir.items():
-        if not isinstance(seg_data, dict):
-            continue
-        obj_id = struct_key.replace('Structure - ', '')
-        if obj_id in allision_data:
-            allision_data[obj_id]['segment_contributions'] = dict(seg_data)
-
-    # Extract per-segment contributions from by_depth_segment_legdir
-    by_depth_seg_legdir = report.get('by_depth_segment_legdir', {})
-    for depth_key, seg_data in by_depth_seg_legdir.items():
-        if not isinstance(seg_data, dict):
-            continue
-        obj_id = depth_key.replace('Depth - ', '')
-        if obj_id in grounding_data:
-            grounding_data[obj_id]['segment_contributions'] = dict(seg_data)
-
+    allision_data, grounding_data = _build_initial_obstacle_dicts(
+        report.get('by_object', {}), struct_lookup, depth_lookup,
+    )
+    _fill_legdir_contributions(allision_data, report.get('by_structure_legdir', {}), 'Structure - ')
+    _fill_legdir_contributions(grounding_data, report.get('by_depth_legdir', {}), 'Depth - ')
+    _fill_segment_contributions(allision_data, report.get('by_structure_segment_legdir', {}), 'Structure - ')
+    _fill_segment_contributions(grounding_data, report.get('by_depth_segment_legdir', {}), 'Depth - ')
     return allision_data, grounding_data
 
 
@@ -482,6 +451,135 @@ def _calculate_segment_probability(
     return segment_total, per_leg
 
 
+def _collect_all_leg_keys(obstacle_data: dict[str, dict[str, Any]]) -> set[str]:
+    all_leg_keys: set[str] = set()
+    for obs_data in obstacle_data.values():
+        all_leg_keys.update(obs_data.get('leg_contributions', {}).keys())
+    return all_leg_keys
+
+
+def _init_result_layer(
+    name: str, all_leg_keys: set[str],
+) -> tuple[QgsVectorLayer, Any, dict[str, str]]:
+    layer = QgsVectorLayer("LineString?crs=epsg:4326", name, "memory")
+    provider = layer.dataProvider()
+    if provider is None:
+        logger.error(f"Failed to get data provider for layer {name}")
+        return layer, None, {}
+    fields = [
+        QgsField("obstacle_id", QVariant.String),
+        QgsField("segment_idx", QVariant.Int),
+        QgsField("total_edge_probability", QVariant.Double),
+        QgsField("object_probability", QVariant.Double),
+        QgsField("normal_deg", QVariant.Double),
+        QgsField("value", QVariant.Double),
+    ]
+    leg_key_to_field: dict[str, str] = {}
+    for leg_key in sorted(all_leg_keys):
+        safe_name = f"leg_{leg_key}"
+        leg_key_to_field[leg_key] = safe_name
+        fields.append(QgsField(safe_name, QVariant.Double))
+    provider.addAttributes(fields)
+    layer.updateFields()
+    _set_result_field_aliases(layer)
+    _enable_fid_labels(layer, 'obstacle_id')
+    return layer, provider, leg_key_to_field
+
+
+def _resolve_seg_probs(
+    seg_idx: int,
+    segment_contributions: dict,
+    obs_total_prob: float,
+    obs_leg_contribs: dict,
+) -> tuple[float, dict[str, float]]:
+    if not segment_contributions:
+        return obs_total_prob, obs_leg_contribs
+    seg_legdir_contribs = segment_contributions.get(f"seg_{seg_idx}", {})
+    seg_prob = sum(seg_legdir_contribs.values()) if seg_legdir_contribs else 0.0
+    seg_leg_contribs: dict[str, float] = {}
+    for leg_dir_key, contrib in seg_legdir_contribs.items():
+        parts = leg_dir_key.split(':')
+        if parts:
+            leg_id = parts[0]
+            seg_leg_contribs[leg_id] = seg_leg_contribs.get(leg_id, 0.0) + contrib
+    return seg_prob, seg_leg_contribs
+
+
+def _make_obstacle_segment_feat(
+    layer: QgsVectorLayer,
+    obs_id: str,
+    obs_data: dict,
+    seg_idx: int,
+    x1: float, y1: float, x2: float, y2: float,
+    normal_angle: float,
+    seg_prob: float,
+    seg_leg_contribs: dict[str, float],
+    leg_key_to_field: dict[str, str],
+) -> QgsFeature:
+    feat = QgsFeature(layer.fields())
+    feat.setGeometry(QgsGeometry.fromWkt(f"LINESTRING({x1} {y1}, {x2} {y2})"))
+    feat.setAttribute("obstacle_id", obs_id)
+    feat.setAttribute("segment_idx", seg_idx)
+    feat.setAttribute("total_edge_probability", seg_prob)
+    feat.setAttribute("object_probability", obs_data.get('total_probability', 0.0))
+    feat.setAttribute("normal_deg", normal_angle)
+    feat.setAttribute("value", obs_data.get('value', 0.0))
+    for leg_key, field_name in leg_key_to_field.items():
+        feat.setAttribute(field_name, seg_leg_contribs.get(leg_key, 0.0))
+    return feat
+
+
+def _build_features_for_obstacle(
+    layer: QgsVectorLayer,
+    obs_id: str,
+    obs_data: dict[str, Any],
+    leg_key_to_field: dict[str, str],
+) -> list[QgsFeature]:
+    geom = obs_data.get('geometry')
+    if geom is None:
+        return []
+    try:
+        segments = _extract_line_segments_with_normals(geom)
+    except Exception as e:
+        logger.warning(f"Failed to extract segments for {obs_id}: {e}")
+        return []
+    if not segments:
+        logger.warning(f"No segments extracted for {obs_id}")
+        return []
+    obs_total_prob = obs_data.get('total_probability', 0.0)
+    segment_contributions = obs_data.get('segment_contributions', {})
+    obs_leg_contribs = obs_data.get('leg_contributions', {})
+    feats = []
+    for seg_idx, (x1, y1, x2, y2, normal_angle) in enumerate(segments):
+        seg_prob, seg_leg_contribs = _resolve_seg_probs(
+            seg_idx, segment_contributions, obs_total_prob, obs_leg_contribs,
+        )
+        feats.append(_make_obstacle_segment_feat(
+            layer, obs_id, obs_data, seg_idx,
+            x1, y1, x2, y2, normal_angle,
+            seg_prob, seg_leg_contribs, leg_key_to_field,
+        ))
+    return feats
+
+
+def _log_result_layer_stats(
+    features: list, layer_type: str, obstacle_data: dict,
+) -> None:
+    probs = [
+        f["total_edge_probability"] for f in features
+        if f["total_edge_probability"] is not None
+    ]
+    if probs:
+        logger.info(
+            f"Created {layer_type} layer with {len(features)} segments from "
+            f"{len(obstacle_data)} obstacles. Probability range: {min(probs):.2e} - {max(probs):.2e}"
+        )
+    else:
+        logger.info(
+            f"Created {layer_type} layer with {len(features)} segments from {len(obstacle_data)} obstacles"
+        )
+
+
 def create_result_layer(
     name: str,
     obstacle_data: dict[str, dict[str, Any]],
@@ -507,136 +605,40 @@ def create_result_layer(
     if not obstacle_data:
         logger.info(f"No {layer_type} data to create layer")
         return None
-
-    # Collect all unique leg keys for attribute columns
-    all_leg_keys: set[str] = set()
-    for obs_id, obs_data in obstacle_data.items():
-        all_leg_keys.update(obs_data.get('leg_contributions', {}).keys())
-
-    # Create layer with Line geometry in WGS84
-    layer = QgsVectorLayer("LineString?crs=epsg:4326", name, "memory")
-    provider = layer.dataProvider()
-
+    all_leg_keys = _collect_all_leg_keys(obstacle_data)
+    layer, provider, leg_key_to_field = _init_result_layer(name, all_leg_keys)
     if provider is None:
-        logger.error(f"Failed to get data provider for layer {name}")
         return None
-
-    # Define attributes
-    fields = [
-        QgsField("obstacle_id", QVariant.String),
-        QgsField("segment_idx", QVariant.Int),  # Index of segment within obstacle
-        QgsField("total_edge_probability", QVariant.Double),  # Per-segment probability
-        QgsField("object_probability", QVariant.Double),      # Total obstacle probability (for reference)
-        QgsField("normal_deg", QVariant.Double),  # Segment normal direction (compass degrees)
-        QgsField("value", QVariant.Double),  # height or depth
-    ]
-
-    # Add per-leg attributes with leg ID as field name
-    leg_key_to_field: dict[str, str] = {}
-    for leg_key in sorted(all_leg_keys):
-        # Use leg ID directly as field name (e.g., "leg_1", "leg_2")
-        safe_name = f"leg_{leg_key}"
-        leg_key_to_field[leg_key] = safe_name
-        fields.append(QgsField(safe_name, QVariant.Double))
-
-    provider.addAttributes(fields)
-    layer.updateFields()
-    _set_result_field_aliases(layer)
-    _enable_fid_labels(layer, 'obstacle_id')
-
-    # Add features - one per line segment with per-segment probability
-    features = []
+    features: list[QgsFeature] = []
     for obs_id, obs_data in obstacle_data.items():
-        geom = obs_data.get('geometry')
-        if geom is None:
-            continue
-
-        # Extract individual line segments with their normal angles
-        try:
-            segments = _extract_line_segments_with_normals(geom)
-        except Exception as e:
-            logger.warning(f"Failed to extract segments for {obs_id}: {e}")
-            continue
-
-        if not segments:
-            logger.warning(f"No segments extracted for {obs_id}")
-            continue
-
-        # Get leg-direction contributions for per-segment calculation
-        leg_dir_contribs = obs_data.get('leg_dir_contributions', {})
-        obs_total_prob = obs_data.get('total_probability', 0.0)
-
-        # Get per-segment contributions from the report (calculated based on corridor intersection)
-        segment_contributions = obs_data.get('segment_contributions', {})
-
-        # Check if we have per-segment data (new behavior) or need to fall back
-        has_segment_data = bool(segment_contributions)
-
-        # Get aggregated leg contributions for fallback
-        obs_leg_contribs = obs_data.get('leg_contributions', {})
-
-        # Create one feature per segment
-        # Per-segment contributions are tracked based on actual drift corridor intersection
-        # Falls back to obstacle total if per-segment data is not available
-        for seg_idx, (x1, y1, x2, y2, normal_angle) in enumerate(segments):
-            if has_segment_data:
-                # Use per-segment contribution data from corridor intersection
-                seg_key = f"seg_{seg_idx}"
-                seg_legdir_contribs = segment_contributions.get(seg_key, {})
-
-                # Calculate segment total probability from its leg-direction contributions
-                seg_prob = sum(seg_legdir_contribs.values()) if seg_legdir_contribs else 0.0
-
-                # Calculate per-leg contributions for this segment
-                seg_leg_contribs: dict[str, float] = {}
-                for leg_dir_key, contrib in seg_legdir_contribs.items():
-                    parts = leg_dir_key.split(':')
-                    if parts:
-                        leg_id = parts[0]
-                        seg_leg_contribs[leg_id] = seg_leg_contribs.get(leg_id, 0.0) + contrib
-            else:
-                # Fallback: all segments share the obstacle's total probability
-                # This maintains backward compatibility with older reports
-                seg_prob = obs_total_prob
-                seg_leg_contribs = obs_leg_contribs
-
-            # Create WKT for line segment (already in WGS84)
-            wkt = f"LINESTRING({x1} {y1}, {x2} {y2})"
-            qgs_geom = QgsGeometry.fromWkt(wkt)
-
-            feat = QgsFeature(layer.fields())
-            feat.setGeometry(qgs_geom)
-
-            # Set attributes
-            feat.setAttribute("obstacle_id", obs_id)
-            feat.setAttribute("segment_idx", seg_idx)
-            feat.setAttribute("total_edge_probability", seg_prob)  # Per-segment probability
-            feat.setAttribute("object_probability", obs_total_prob)  # Total obstacle probability
-            feat.setAttribute("normal_deg", normal_angle)  # Segment orientation
-            feat.setAttribute("value", obs_data.get('value', 0.0))
-
-            # Set per-leg probabilities (segment-specific)
-            for leg_key, field_name in leg_key_to_field.items():
-                feat.setAttribute(field_name, seg_leg_contribs.get(leg_key, 0.0))
-
-            features.append(feat)
-
+        features.extend(_build_features_for_obstacle(layer, obs_id, obs_data, leg_key_to_field))
     provider.addFeatures(features)
-
-    # Log statistics
-    probs = [
-        f["total_edge_probability"] for f in features
-        if f["total_edge_probability"] is not None
-    ]
-    if probs:
-        logger.info(
-            f"Created {layer_type} layer with {len(features)} segments from "
-            f"{len(obstacle_data)} obstacles. Probability range: {min(probs):.2e} - {max(probs):.2e}"
-        )
-    else:
-        logger.info(f"Created {layer_type} layer with {len(features)} segments from {len(obstacle_data)} obstacles")
-
+    _log_result_layer_stats(features, layer_type, obstacle_data)
     return layer
+
+
+def _make_graduated_ranges(
+    min_val: float, max_val: float, num_classes: int,
+) -> list[QgsRendererRange]:
+    colors = [
+        QColor(0, 255, 0),
+        QColor(128, 255, 0),
+        QColor(255, 255, 0),
+        QColor(255, 128, 0),
+        QColor(255, 0, 0),
+    ]
+    step = (max_val - min_val) / num_classes
+    ranges: list[QgsRendererRange] = []
+    for i in range(num_classes):
+        lower = min_val + i * step
+        upper = min_val + (i + 1) * step
+        color = colors[min(i, len(colors) - 1)]
+        symbol = QgsLineSymbol.createSimple({
+            'color': color.name(),
+            'width': str(0.5 + 0.3 * i),
+        })
+        ranges.append(QgsRendererRange(lower, upper, symbol, f"{lower:.2e} - {upper:.2e}"))
+    return ranges
 
 
 def apply_graduated_symbology(
@@ -654,68 +656,23 @@ def apply_graduated_symbology(
     """
     if layer is None or layer.featureCount() == 0:
         return
-
-    # Get min/max values
-    idx = layer.fields().indexOf(attribute)
-    if idx < 0:
+    if layer.fields().indexOf(attribute) < 0:
         logger.warning(f"Attribute {attribute} not found in layer")
         return
-
     values = [f[attribute] for f in layer.getFeatures() if f[attribute] is not None and f[attribute] > 0]
     if not values:
         logger.warning("No valid values for symbology")
         return
-
-    min_val = min(values)
-    max_val = max(values)
-
+    min_val, max_val = min(values), max(values)
     if min_val >= max_val:
-        # All same value - use single symbol
-        symbol = QgsLineSymbol.createSimple({
-            'color': 'yellow',
-            'width': '0.8',
-        })
+        symbol = QgsLineSymbol.createSimple({'color': 'yellow', 'width': '0.8'})
         from qgis.core import QgsSingleSymbolRenderer
-        renderer = QgsSingleSymbolRenderer(symbol)
-        layer.setRenderer(renderer)
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
         layer.triggerRepaint()
         return
-
-    # Create ranges manually: green -> yellow -> red
-    ranges = []
-    step = (max_val - min_val) / num_classes
-
-    # Color gradient: green (low probability) to red (high probability)
-    colors = [
-        QColor(0, 255, 0),      # Green - lowest
-        QColor(128, 255, 0),    # Yellow-green
-        QColor(255, 255, 0),    # Yellow - medium
-        QColor(255, 128, 0),    # Orange
-        QColor(255, 0, 0),      # Red - highest
-    ]
-
-    for i in range(num_classes):
-        lower = min_val + i * step
-        upper = min_val + (i + 1) * step
-
-        # Get color for this range
-        color = colors[min(i, len(colors) - 1)]
-
-        # Create symbol
-        symbol = QgsLineSymbol.createSimple({
-            'color': color.name(),
-            'width': str(0.5 + 0.3 * i),  # Thicker lines for higher probability
-        })
-
-        # Create range
-        label = f"{lower:.2e} - {upper:.2e}"
-        rng = QgsRendererRange(lower, upper, symbol, label)
-        ranges.append(rng)
-
-    # Create graduated renderer
+    ranges = _make_graduated_ranges(min_val, max_val, num_classes)
     renderer = QgsGraduatedSymbolRenderer(attribute, ranges)
     renderer.setMode(QgsGraduatedSymbolRenderer.Custom)
-
     layer.setRenderer(renderer)
     layer.triggerRepaint()
 
@@ -863,6 +820,91 @@ def _marker_symbol_factory(color: QColor, frac: float) -> QgsMarkerSymbol:
     })
 
 
+def _build_collision_line_layer(
+    by_leg: dict, segment_data: dict,
+) -> QgsVectorLayer:
+    layer = QgsVectorLayer('LineString?crs=EPSG:4326', 'Ship-Ship Collision (per leg)', 'memory')
+    lp = layer.dataProvider()
+    lp.addAttributes([
+        QgsField('leg_id', QVariant.String),
+        QgsField('head_on', QVariant.Double),
+        QgsField('overtaking', QVariant.Double),
+        QgsField('combined', QVariant.Double),
+    ])
+    layer.updateFields()
+    feats: list[QgsFeature] = []
+    for leg_id, contribs in by_leg.items():
+        seg = segment_data.get(leg_id, {})
+        sp_str, ep_str = seg.get('Start_Point', ''), seg.get('End_Point', '')
+        if not sp_str or not ep_str:
+            continue
+        try:
+            sp = [float(x) for x in str(sp_str).split()][:2]
+            ep = [float(x) for x in str(ep_str).split()][:2]
+        except (TypeError, ValueError):
+            continue
+        head_on = float(contribs.get('head_on', 0.0) or 0.0)
+        overtaking = float(contribs.get('overtaking', 0.0) or 0.0)
+        combined = head_on + overtaking
+        if combined <= 0.0:
+            continue
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(sp[0], sp[1]), QgsPointXY(ep[0], ep[1])]))
+        feat.setAttribute('leg_id', str(leg_id))
+        feat.setAttribute('head_on', head_on)
+        feat.setAttribute('overtaking', overtaking)
+        feat.setAttribute('combined', combined)
+        feats.append(feat)
+    lp.addFeatures(feats)
+    _apply_graduated(layer, 'combined', _line_symbol_factory)
+    return layer
+
+
+def _build_collision_point_layer(by_waypoint: dict) -> QgsVectorLayer:
+    layer = QgsVectorLayer('Point?crs=EPSG:4326', 'Ship-Ship Collision (waypoints)', 'memory')
+    pp = layer.dataProvider()
+    pp.addAttributes([
+        QgsField('waypoint', QVariant.String),
+        QgsField('crossing', QVariant.Double),
+        QgsField('bend', QVariant.Double),
+        QgsField('combined', QVariant.Double),
+    ])
+    layer.updateFields()
+    feats: list[QgsFeature] = []
+    for wp_key, rec in by_waypoint.items():
+        try:
+            lon_str, lat_str = wp_key.split()
+            lon, lat = float(lon_str), float(lat_str)
+        except Exception:
+            continue
+        crossing = float(rec.get('crossing', 0.0) or 0.0)
+        bend = float(rec.get('bend', 0.0) or 0.0)
+        combined = crossing + bend
+        if combined <= 0.0:
+            continue
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
+        feat.setAttribute('waypoint', wp_key)
+        feat.setAttribute('crossing', crossing)
+        feat.setAttribute('bend', bend)
+        feat.setAttribute('combined', combined)
+        feats.append(feat)
+    pp.addFeatures(feats)
+    _apply_graduated(layer, 'combined', _marker_symbol_factory)
+    return layer
+
+
+def _add_collision_layers_to_project(
+    line_layer: QgsVectorLayer, point_layer: QgsVectorLayer,
+) -> None:
+    if line_layer.featureCount() > 0:
+        QgsProject.instance().addMapLayer(line_layer)
+        logger.info(f"Added Ship-Ship Collision (per leg) layer with {line_layer.featureCount()} features")
+    if point_layer.featureCount() > 0:
+        QgsProject.instance().addMapLayer(point_layer)
+        logger.info(f"Added Ship-Ship Collision (waypoints) layer with {point_layer.featureCount()} features")
+
+
 def create_collision_layers(
     collision_report: dict[str, Any] | None,
     segment_data: dict[str, Any],
@@ -885,99 +927,12 @@ def create_collision_layers(
     """
     if collision_report is None:
         return None, None
-
     by_leg = collision_report.get('by_leg', {}) or {}
     by_waypoint = collision_report.get('by_waypoint', {}) or {}
-
-    # ----- per-leg line layer -----
-    line_layer = QgsVectorLayer(
-        'LineString?crs=EPSG:4326', 'Ship-Ship Collision (per leg)', 'memory',
-    )
-    lp = line_layer.dataProvider()
-    lp.addAttributes([
-        QgsField('leg_id', QVariant.String),
-        QgsField('head_on', QVariant.Double),
-        QgsField('overtaking', QVariant.Double),
-        QgsField('combined', QVariant.Double),
-    ])
-    line_layer.updateFields()
-    line_feats: list[QgsFeature] = []
-    for leg_id, contribs in by_leg.items():
-        seg = segment_data.get(leg_id, {})
-        sp_str = seg.get('Start_Point', '')
-        ep_str = seg.get('End_Point', '')
-        if not sp_str or not ep_str:
-            continue
-        try:
-            sp = [float(x) for x in str(sp_str).split()][:2]
-            ep = [float(x) for x in str(ep_str).split()][:2]
-        except (TypeError, ValueError):
-            continue
-        head_on = float(contribs.get('head_on', 0.0) or 0.0)
-        overtaking = float(contribs.get('overtaking', 0.0) or 0.0)
-        combined = head_on + overtaking
-        if combined <= 0.0:
-            continue
-        feat = QgsFeature(line_layer.fields())
-        feat.setGeometry(QgsGeometry.fromPolylineXY([
-            QgsPointXY(sp[0], sp[1]), QgsPointXY(ep[0], ep[1]),
-        ]))
-        feat.setAttribute('leg_id', str(leg_id))
-        feat.setAttribute('head_on', head_on)
-        feat.setAttribute('overtaking', overtaking)
-        feat.setAttribute('combined', combined)
-        line_feats.append(feat)
-    lp.addFeatures(line_feats)
-    _apply_graduated(line_layer, 'combined', _line_symbol_factory)
-
-    # ----- per-waypoint point layer -----
-    point_layer = QgsVectorLayer(
-        'Point?crs=EPSG:4326', 'Ship-Ship Collision (waypoints)', 'memory',
-    )
-    pp = point_layer.dataProvider()
-    pp.addAttributes([
-        QgsField('waypoint', QVariant.String),
-        QgsField('crossing', QVariant.Double),
-        QgsField('bend', QVariant.Double),
-        QgsField('combined', QVariant.Double),
-    ])
-    point_layer.updateFields()
-    point_feats: list[QgsFeature] = []
-    for wp_key, rec in by_waypoint.items():
-        try:
-            lon_str, lat_str = wp_key.split()
-            lon, lat = float(lon_str), float(lat_str)
-        except Exception:
-            continue
-        crossing = float(rec.get('crossing', 0.0) or 0.0)
-        bend = float(rec.get('bend', 0.0) or 0.0)
-        combined = crossing + bend
-        if combined <= 0.0:
-            continue
-        feat = QgsFeature(point_layer.fields())
-        feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
-        feat.setAttribute('waypoint', wp_key)
-        feat.setAttribute('crossing', crossing)
-        feat.setAttribute('bend', bend)
-        feat.setAttribute('combined', combined)
-        point_feats.append(feat)
-    pp.addFeatures(point_feats)
-    _apply_graduated(point_layer, 'combined', _marker_symbol_factory)
-
+    line_layer = _build_collision_line_layer(by_leg, segment_data)
+    point_layer = _build_collision_point_layer(by_waypoint)
     if add_to_project:
-        if line_layer.featureCount() > 0:
-            QgsProject.instance().addMapLayer(line_layer)
-            logger.info(
-                "Added Ship-Ship Collision (per leg) layer "
-                f"with {line_layer.featureCount()} features"
-            )
-        if point_layer.featureCount() > 0:
-            QgsProject.instance().addMapLayer(point_layer)
-            logger.info(
-                "Added Ship-Ship Collision (waypoints) layer "
-                f"with {point_layer.featureCount()} features"
-            )
-
+        _add_collision_layers_to_project(line_layer, point_layer)
     return line_layer, point_layer
 
 
@@ -1057,6 +1012,72 @@ def _build_powered_layer(
     )
 
 
+def _invert_obstacle_leg_map(
+    by_obstacle_leg: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    result: dict[str, dict[str, float]] = {}
+    for obs_id, leg_map in by_obstacle_leg.items():
+        for leg_id, contrib in leg_map.items():
+            if not contrib:
+                continue
+            result.setdefault(str(leg_id), {})[str(obs_id)] = float(contrib)
+    return result
+
+
+def _init_per_leg_layer(
+    name: str, obs_ids_sorted: list, obs_to_field: dict,
+) -> tuple[QgsVectorLayer, Any]:
+    layer = QgsVectorLayer('LineString?crs=EPSG:4326', name, 'memory')
+    pr = layer.dataProvider()
+    fields = [
+        QgsField('segment_id', QVariant.String),
+        QgsField('total_edge_probability', QVariant.Double),
+        QgsField('value_max', QVariant.Double),
+    ]
+    for oid in obs_ids_sorted:
+        fields.append(QgsField(obs_to_field[oid], QVariant.Double))
+    pr.addAttributes(fields)
+    layer.updateFields()
+    _set_result_field_aliases(layer)
+    _enable_fid_labels(layer, 'segment_id')
+    return layer, pr
+
+
+def _build_per_leg_feat(
+    layer: QgsVectorLayer,
+    leg_id: str,
+    obs_map: dict,
+    seg: dict,
+    obs_lookup: dict,
+    obs_ids_sorted: list,
+    obs_to_field: dict,
+    value_key: str,
+) -> 'QgsFeature | None':
+    sp = _parse_point_pair(str(seg.get('Start_Point', '') or seg.get('Start Point', '')))
+    ep = _parse_point_pair(str(seg.get('End_Point', '') or seg.get('End Point', '')))
+    if sp is None or ep is None:
+        return None
+    qgis_geom = QgsGeometry.fromWkt(f'LINESTRING({sp[0]} {sp[1]}, {ep[0]} {ep[1]})')
+    if qgis_geom is None or qgis_geom.isEmpty():
+        return None
+    total = sum(obs_map.values())
+    if total <= 0.0:
+        return None
+    try:
+        biggest_obs = max(obs_map.items(), key=lambda kv: kv[1])[0]
+        value_max = float(obs_lookup.get(biggest_obs, {}).get(value_key, 0.0) or 0.0)
+    except Exception:
+        value_max = 0.0
+    feat = QgsFeature(layer.fields())
+    feat.setGeometry(qgis_geom)
+    feat.setAttribute('segment_id', str(leg_id))
+    feat.setAttribute('total_edge_probability', float(total))
+    feat.setAttribute('value_max', value_max)
+    for oid in obs_ids_sorted:
+        feat.setAttribute(obs_to_field[oid], float(obs_map.get(oid, 0.0)))
+    return feat
+
+
 def _build_powered_layer_per_leg(
     *,
     name: str,
@@ -1067,75 +1088,23 @@ def _build_powered_layer_per_leg(
     segment_data: dict[str, dict[str, Any]],
     add_to_project: bool,
 ) -> QgsVectorLayer | None:
-    # Invert by_obstacle_leg into by_leg_obstacle.
-    by_leg_obstacle: dict[str, dict[str, float]] = {}
-    for obs_id, leg_map in by_obstacle_leg.items():
-        for leg_id, contrib in leg_map.items():
-            if not contrib:
-                continue
-            by_leg_obstacle.setdefault(str(leg_id), {})[str(obs_id)] = float(contrib)
+    by_leg_obstacle = _invert_obstacle_leg_map(by_obstacle_leg)
     if not by_leg_obstacle:
         return None
-
-    layer = QgsVectorLayer('LineString?crs=EPSG:4326', name, 'memory')
-    pr = layer.dataProvider()
-
     obs_ids_sorted = sorted({oid for legs in by_leg_obstacle.values() for oid in legs})
     obs_to_field = {oid: f'obs_{oid}' for oid in obs_ids_sorted}
-
-    # Build a small "summary" of each obstacle (depth / height) so the
-    # user can see what an ``obs_<id>`` column refers to without
-    # round-tripping to the Depths / Objects tab.
     obs_lookup = {str(rec.get('id', '')): rec for rec in obstacle_records}
-
-    fields = [
-        QgsField('segment_id', QVariant.String),
-        QgsField('total_edge_probability', QVariant.Double),
-        QgsField('value_max', QVariant.Double),  # max obstacle value (depth/height) on this leg
-    ]
-    for oid in obs_ids_sorted:
-        fields.append(QgsField(obs_to_field[oid], QVariant.Double))
-    pr.addAttributes(fields)
-    layer.updateFields()
-    _set_result_field_aliases(layer)
-    _enable_fid_labels(layer, 'segment_id')
-
+    layer, pr = _init_per_leg_layer(name, obs_ids_sorted, obs_to_field)
     feats: list[QgsFeature] = []
     for leg_id, obs_map in by_leg_obstacle.items():
         seg = segment_data.get(leg_id) or segment_data.get(str(leg_id))
         if seg is None:
             continue
-        sp = _parse_point_pair(str(seg.get('Start_Point', '') or seg.get('Start Point', '')))
-        ep = _parse_point_pair(str(seg.get('End_Point', '') or seg.get('End Point', '')))
-        if sp is None or ep is None:
-            continue
-        wkt = f'LINESTRING({sp[0]} {sp[1]}, {ep[0]} {ep[1]})'
-        qgis_geom = QgsGeometry.fromWkt(wkt)
-        if qgis_geom is None or qgis_geom.isEmpty():
-            continue
-
-        total = sum(obs_map.values())
-        if total <= 0.0:
-            continue
-
-        # Pick the largest obstacle's value (depth/height) as a coarse
-        # summary; per-obstacle detail lives in the obs_<id> columns.
-        try:
-            biggest_obs = max(obs_map.items(), key=lambda kv: kv[1])[0]
-            biggest_meta = obs_lookup.get(biggest_obs, {})
-            value_max = float(biggest_meta.get(value_key, 0.0) or 0.0)
-        except Exception:
-            value_max = 0.0
-
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(qgis_geom)
-        feat.setAttribute('segment_id', str(leg_id))
-        feat.setAttribute('total_edge_probability', float(total))
-        feat.setAttribute('value_max', value_max)
-        for oid in obs_ids_sorted:
-            feat.setAttribute(obs_to_field[oid], float(obs_map.get(oid, 0.0)))
-        feats.append(feat)
-
+        feat = _build_per_leg_feat(
+            layer, leg_id, obs_map, seg, obs_lookup, obs_ids_sorted, obs_to_field, value_key,
+        )
+        if feat is not None:
+            feats.append(feat)
     if not feats:
         return None
     pr.addFeatures(feats)
@@ -1144,6 +1113,57 @@ def _build_powered_layer_per_leg(
         QgsProject.instance().addMapLayer(layer)
         logger.info(f"Added {name} layer with {layer.featureCount()} features (per leg)")
     return layer
+
+
+def _collect_leg_fields(
+    by_obstacle_leg: dict | None,
+) -> tuple[list[str], dict[str, str]]:
+    all_leg_ids: list[str] = []
+    leg_to_field: dict[str, str] = {}
+    if by_obstacle_leg:
+        seen: set[str] = set()
+        for legs_for_obs in by_obstacle_leg.values():
+            for leg_id in legs_for_obs:
+                if leg_id not in seen:
+                    seen.add(leg_id)
+                    all_leg_ids.append(str(leg_id))
+        all_leg_ids.sort()
+        for leg_id in all_leg_ids:
+            leg_to_field[leg_id] = f'leg_{leg_id}'
+    return all_leg_ids, leg_to_field
+
+
+def _build_per_obs_feat(
+    layer: QgsVectorLayer,
+    obs_id: str,
+    prob: float,
+    meta: dict,
+    value_key: str,
+    leg_to_field: dict[str, str],
+    by_obstacle_leg: dict | None,
+) -> 'QgsFeature | None':
+    geom = meta.get('wkt_wgs84') or meta.get('wkt')
+    if geom is None:
+        return None
+    try:
+        qgis_geom = QgsGeometry.fromWkt(geom.wkt if hasattr(geom, 'wkt') else str(geom))
+    except Exception:
+        return None
+    if qgis_geom is None or qgis_geom.isEmpty():
+        return None
+    feat = QgsFeature(layer.fields())
+    feat.setGeometry(qgis_geom)
+    feat.setAttribute('obstacle_id', str(obs_id))
+    try:
+        feat.setAttribute('value', float(meta.get(value_key, 0.0) or 0.0))
+    except (TypeError, ValueError):
+        feat.setAttribute('value', 0.0)
+    feat.setAttribute('total_edge_probability', float(prob))
+    if by_obstacle_leg is not None:
+        obs_leg_contribs = by_obstacle_leg.get(str(obs_id), {})
+        for leg_id, field_name in leg_to_field.items():
+            feat.setAttribute(field_name, float(obs_leg_contribs.get(leg_id, 0.0) or 0.0))
+    return feat
 
 
 def _build_powered_layer_per_obstacle(
@@ -1156,34 +1176,20 @@ def _build_powered_layer_per_obstacle(
     add_to_project: bool,
 ) -> QgsVectorLayer | None:
     """Legacy path: one polygon per obstacle, kept for backward compat."""
-    layer = QgsVectorLayer(
-        'MultiPolygon?crs=EPSG:4326', name, 'memory',
-    )
+    layer = QgsVectorLayer('MultiPolygon?crs=EPSG:4326', name, 'memory')
     pr = layer.dataProvider()
+    _, leg_to_field = _collect_leg_fields(by_obstacle_leg)
     fields = [
         QgsField('obstacle_id', QVariant.String),
         QgsField('value', QVariant.Double),
         QgsField('total_edge_probability', QVariant.Double),
     ]
-    all_leg_ids: list[str] = []
-    leg_to_field: dict[str, str] = {}
-    if by_obstacle_leg:
-        seen: set[str] = set()
-        for legs_for_obs in by_obstacle_leg.values():
-            for leg_id in legs_for_obs:
-                if leg_id not in seen:
-                    seen.add(leg_id)
-                    all_leg_ids.append(str(leg_id))
-        all_leg_ids.sort()
-        for leg_id in all_leg_ids:
-            field_name = f'leg_{leg_id}'
-            leg_to_field[leg_id] = field_name
-            fields.append(QgsField(field_name, QVariant.Double))
+    for leg_id, field_name in leg_to_field.items():
+        fields.append(QgsField(field_name, QVariant.Double))
     pr.addAttributes(fields)
     layer.updateFields()
     _set_result_field_aliases(layer)
     _enable_fid_labels(layer, 'obstacle_id')
-
     lookup = {str(rec.get('id', '')): rec for rec in obstacle_records}
     feats: list[QgsFeature] = []
     for obs_id, prob in by_obstacle.items():
@@ -1192,30 +1198,9 @@ def _build_powered_layer_per_obstacle(
         meta = lookup.get(str(obs_id))
         if meta is None:
             continue
-        geom = meta.get('wkt_wgs84') or meta.get('wkt')
-        if geom is None:
-            continue
-        try:
-            qgis_geom = QgsGeometry.fromWkt(geom.wkt if hasattr(geom, 'wkt') else str(geom))
-        except Exception:
-            continue
-        if qgis_geom is None or qgis_geom.isEmpty():
-            continue
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(qgis_geom)
-        feat.setAttribute('obstacle_id', str(obs_id))
-        try:
-            feat.setAttribute('value', float(meta.get(value_key, 0.0) or 0.0))
-        except (TypeError, ValueError):
-            feat.setAttribute('value', 0.0)
-        feat.setAttribute('total_edge_probability', float(prob))
-        if by_obstacle_leg is not None:
-            obs_leg_contribs = by_obstacle_leg.get(str(obs_id), {})
-            for leg_id, field_name in leg_to_field.items():
-                feat.setAttribute(
-                    field_name, float(obs_leg_contribs.get(leg_id, 0.0) or 0.0),
-                )
-        feats.append(feat)
+        feat = _build_per_obs_feat(layer, obs_id, prob, meta, value_key, leg_to_field, by_obstacle_leg)
+        if feat is not None:
+            feats.append(feat)
     pr.addFeatures(feats)
     _apply_graduated(layer, 'total_edge_probability', _polygon_symbol_factory)
     if add_to_project and layer.featureCount() > 0:

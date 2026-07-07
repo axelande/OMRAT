@@ -44,6 +44,130 @@ class DriftingReportBuilderMixin:
             seg_data = obs_seg_map.setdefault(seg_key, {})
             seg_data[leg_dir_key] = seg_data.get(leg_dir_key, 0.0) + contrib
 
+    def _accumulate_object_prob(
+        self,
+        report: dict[str, Any],
+        event: str,
+        contrib: float,
+        idx: int,
+        structures: list[dict[str, Any]],
+        depths: list[dict[str, Any]],
+    ) -> None:
+        try:
+            if idx is None:
+                return
+            if event == 'allision':
+                o = structures[idx]
+                okey = f"Structure - {o.get('id', str(idx))}"
+            elif event in ('grounding', 'anchoring'):
+                d = depths[idx]
+                okey = f"Depth - {d.get('id', str(idx))}"
+            else:
+                return
+            ob = report.setdefault('by_object', {}).setdefault(
+                okey, {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0},
+            )
+            ob[event] = ob.get(event, 0.0) + contrib
+        except Exception:
+            pass
+
+    def _accumulate_leg_dir_stats(
+        self,
+        report: dict[str, Any],
+        event: str,
+        contrib: float,
+        dist: float,
+        base: float,
+        rp: float,
+        leg_dir_key: str,
+        anchor_factor: float,
+        p_nr: float,
+        ov_frac: float,
+        freq: float,
+        ship_type: int,
+        ship_size: int,
+    ) -> None:
+        rec = report['by_leg_direction'].setdefault(leg_dir_key, {
+            'base_hours': 0.0, 'contrib_allision': 0.0, 'contrib_grounding': 0.0,
+            'ship_categories': {}, 'min_distance_allision': None,
+            'min_distance_grounding': None, 'anchor_factor_sum': 0.0,
+            'not_repaired_sum': 0.0, 'overlap_sum': 0.0, 'weight_sum': 0.0,
+        })
+        rec['base_hours'] += base * rp
+        if event == 'allision':
+            rec['contrib_allision'] += contrib
+            md = rec['min_distance_allision']
+            rec['min_distance_allision'] = dist if md is None or dist < md else md
+        else:
+            rec['contrib_grounding'] += contrib
+            md = rec['min_distance_grounding']
+            rec['min_distance_grounding'] = dist if md is None or dist < md else md
+        w = base * rp
+        rec['anchor_factor_sum'] += anchor_factor * w
+        rec['not_repaired_sum'] += p_nr * w
+        rec['overlap_sum'] += ov_frac * w
+        rec['weight_sum'] += w
+        cat_key = f"{ship_type}-{ship_size}"
+        scat = rec['ship_categories'].setdefault(cat_key, {'allision': 0.0, 'grounding': 0.0, 'freq': 0.0})
+        scat[event] += contrib
+        scat['freq'] = freq
+
+    def _accumulate_structure_legdir(
+        self,
+        report: dict[str, Any],
+        event: str,
+        idx: int,
+        structures: list[dict[str, Any]],
+        leg_dir_key: str,
+        contrib: float,
+        d_idx: int,
+        drift_corridor: 'Polygon | None',
+        leg: 'LineString | None',
+    ) -> None:
+        try:
+            if event != 'allision' or idx is None:
+                return
+            s = structures[idx]
+            skey = f"Structure - {s.get('id', str(idx))}"
+            s_map = report['by_structure_legdir'].setdefault(skey, {})
+            s_map[leg_dir_key] = s_map.get(leg_dir_key, 0.0) + contrib
+            if drift_corridor is not None and s.get('wkt') is not None:
+                math_drift_angle = (90 - d_idx * 45) % 360
+                self._update_segment_contributions(
+                    report, 'by_structure_segment_legdir', skey, leg_dir_key,
+                    contrib, s['wkt'], drift_corridor, math_drift_angle, leg,
+                )
+        except Exception:
+            pass
+
+    def _accumulate_depth_legdir(
+        self,
+        report: dict[str, Any],
+        event: str,
+        idx: int,
+        depths: list[dict[str, Any]],
+        leg_dir_key: str,
+        contrib: float,
+        d_idx: int,
+        drift_corridor: 'Polygon | None',
+        leg: 'LineString | None',
+    ) -> None:
+        try:
+            if event != 'grounding' or idx is None:
+                return
+            d = depths[idx]
+            dkey = f"Depth - {d.get('id', str(idx))}"
+            d_map = report['by_depth_legdir'].setdefault(dkey, {})
+            d_map[leg_dir_key] = d_map.get(leg_dir_key, 0.0) + contrib
+            if drift_corridor is not None and d.get('wkt') is not None:
+                math_drift_angle = (90 - d_idx * 45) % 360
+                self._update_segment_contributions(
+                    report, 'by_depth_segment_legdir', dkey, leg_dir_key,
+                    contrib, d['wkt'], drift_corridor, math_drift_angle, leg,
+                )
+        except Exception:
+            pass
+
     def _update_report(self,
             report: dict[str, Any],
             event: str,
@@ -66,120 +190,62 @@ class DriftingReportBuilderMixin:
             drift_corridor: Polygon | None = None,
             leg: LineString | None = None,
         ) -> None:
-        """Update report dictionaries with contribution.
-
-        Now also tracks per-segment contributions when drift_corridor is provided.
-        """
-        # Per-object accumulation.  This populates ``report['by_object']``
-        # which is the input for the result-layer factory; without it the
-        # drifting allision / grounding QGIS layers come up empty.
-        try:
-            if idx is not None:
-                if event == 'allision':
-                    o = structures[idx]
-                    okey = f"Structure - {o.get('id', str(idx))}"
-                elif event in ('grounding', 'anchoring'):
-                    d = depths[idx]
-                    okey = f"Depth - {d.get('id', str(idx))}"
-                else:
-                    okey = None
-                if okey is not None:
-                    ob = report.setdefault('by_object', {}).setdefault(
-                        okey,
-                        {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0},
-                    )
-                    ob[event] = ob.get(event, 0.0) + contrib
-        except Exception:
-            pass
-
-        # Per leg-direction accumulation
+        """Update report dictionaries with contribution."""
         leg_dir_label = str(cell.get('direction', '')).strip()
-        leg_dir_key = f"{seg_id}:{leg_dir_label}:{d_idx*45}"
-        rec = report['by_leg_direction'].setdefault(leg_dir_key, {
-            'base_hours': 0.0,
-            'contrib_allision': 0.0,
-            'contrib_grounding': 0.0,
-            'ship_categories': {},
-            'min_distance_allision': None,
-            'min_distance_grounding': None,
-            'anchor_factor_sum': 0.0,
-            'not_repaired_sum': 0.0,
-            'overlap_sum': 0.0,
-            'weight_sum': 0.0,
-        })
-        rec['base_hours'] += base * rp
-        if event == 'allision':
-            rec['contrib_allision'] += contrib
-            md = rec['min_distance_allision']
-            rec['min_distance_allision'] = dist if md is None or dist < md else md
-        else:
-            rec['contrib_grounding'] += contrib
-            md = rec['min_distance_grounding']
-            rec['min_distance_grounding'] = dist if md is None or dist < md else md
+        leg_dir_key = f"{seg_id}:{leg_dir_label}:{d_idx * 45}"
+        self._accumulate_object_prob(report, event, contrib, idx, structures, depths)
+        self._accumulate_leg_dir_stats(
+            report, event, contrib, dist, base, rp, leg_dir_key,
+            anchor_factor, p_nr, ov_frac, freq, ship_type, ship_size,
+        )
+        self._accumulate_structure_legdir(report, event, idx, structures, leg_dir_key, contrib, d_idx, drift_corridor, leg)
+        self._accumulate_depth_legdir(report, event, idx, depths, leg_dir_key, contrib, d_idx, drift_corridor, leg)
 
-        # Weighted diagnostics
-        w = base * rp
-        rec['anchor_factor_sum'] += anchor_factor * w
-        rec['not_repaired_sum'] += p_nr * w
-        rec['overlap_sum'] += ov_frac * w
-        rec['weight_sum'] += w
-
-        # Ship category accumulation
-        cat_key = f"{ship_type}-{ship_size}"
-        scat = rec['ship_categories'].setdefault(cat_key, {'allision': 0.0, 'grounding': 0.0, 'freq': 0.0})
-        scat[event] += contrib
-        # ``freq`` is the cell's annual ships/year — invariant across
-        # the per-obstacle-edge calls that share the same (leg, dir,
-        # angle, cat).  Accumulating with += inflates by the obstacle-
-        # edge count and produces nonsensical "Annual Frequency" values
-        # in the breakdown table.  Risk math is unaffected (it uses
-        # ``freq`` once via ``base`` in drifting_model.py).
-        scat['freq'] = freq
-
-        # Per-structure per leg-direction accumulation (allision only)
+    def _record_seg_debug_meta(
+        self,
+        report: dict[str, Any],
+        obstacle_key: str,
+        seg_key: str,
+        leg_dir_key: str,
+        contrib_seg: float,
+        seg_line: 'LineString',
+        drift_corridor: 'Polygon',
+        leg: 'LineString | None',
+    ) -> None:
         try:
-            if event == 'allision' and idx is not None:
-                s = structures[idx]
-                skey = f"Structure - {s.get('id', str(idx))}"
-                s_map = report['by_structure_legdir'].setdefault(skey, {})
-                s_map[leg_dir_key] = s_map.get(leg_dir_key, 0.0) + contrib
-
-                # Per-segment tracking: determine which segments of this structure
-                # actually intersect with the drift corridor
-                if drift_corridor is not None:
-                    obs_geom = s.get('wkt')
-                    if obs_geom is not None:
-                        # Convert compass angle (d_idx*45) to math convention
-                        compass_angle = d_idx * 45
-                        math_drift_angle = (90 - compass_angle) % 360
-                        self._update_segment_contributions(
-                            report, 'by_structure_segment_legdir',
-                            skey, leg_dir_key, contrib, obs_geom, drift_corridor,
-                            math_drift_angle, leg
-                        )
-        except Exception:
-            pass
-
-        # Per-depth per leg-direction accumulation (grounding only)
-        try:
-            if event == 'grounding' and idx is not None:
-                d = depths[idx]
-                dkey = f"Depth - {d.get('id', str(idx))}"
-                d_map = report['by_depth_legdir'].setdefault(dkey, {})
-                d_map[leg_dir_key] = d_map.get(leg_dir_key, 0.0) + contrib
-
-                # Per-segment tracking for depths
-                if drift_corridor is not None:
-                    obs_geom = d.get('wkt')
-                    if obs_geom is not None:
-                        # Convert compass angle (d_idx*45) to math convention
-                        compass_angle = d_idx * 45
-                        math_drift_angle = (90 - compass_angle) % 360
-                        self._update_segment_contributions(
-                            report, 'by_depth_segment_legdir',
-                            dkey, leg_dir_key, contrib, obs_geom, drift_corridor,
-                            math_drift_angle, leg
-                        )
+            inter_len = 0.0
+            try:
+                inter_len = float(seg_line.intersection(drift_corridor).length)
+            except Exception:
+                pass
+            dist_to_leg = None
+            if leg is not None:
+                try:
+                    dist_to_leg = float(seg_line.distance(leg))
+                except Exception:
+                    pass
+            runtime_map = report.setdefault('runtime_segment_hits', {}).setdefault(obstacle_key, {})
+            seg_meta = runtime_map.setdefault(seg_key, {
+                'segment_wkt_utm': seg_line.wkt, 'segment_wkt_wgs84': None, 'hits': {},
+            })
+            if seg_meta.get('segment_wkt_wgs84') is None:
+                conv = getattr(self, '_segment_utm_to_wgs84', None)
+                if conv is not None:
+                    try:
+                        seg_meta['segment_wkt_wgs84'] = conv(seg_line).wkt
+                    except Exception:
+                        pass
+            hit = seg_meta['hits'].setdefault(leg_dir_key, {
+                'count': 0, 'max_intersection_len_m': 0.0, 'min_distance_to_leg_m': None, 'contrib_sum': 0.0,
+            })
+            hit['count'] += 1
+            hit['contrib_sum'] += float(contrib_seg)
+            if inter_len > float(hit.get('max_intersection_len_m', 0.0)):
+                hit['max_intersection_len_m'] = inter_len
+            if dist_to_leg is not None:
+                cur = hit.get('min_distance_to_leg_m')
+                if cur is None or dist_to_leg < float(cur):
+                    hit['min_distance_to_leg_m'] = dist_to_leg
         except Exception:
             pass
 
@@ -213,98 +279,40 @@ class DriftingReportBuilderMixin:
             leg: The traffic leg LineString for direction checking
         """
         try:
-            # Extract obstacle segments
             segments = _extract_obstacle_segments(obs_geom)
             if not segments:
                 return
-
-            # Get leg centroid for direction checking
             leg_centroid = None
             if leg is not None:
                 centroid = leg.centroid
                 leg_centroid = (centroid.x, centroid.y)
-
-            # Find which segments intersect with the corridor in the drift direction
             intersecting_indices: list[int] = []
             seg_intersection_len: dict[int, float] = {}
             for seg_idx, segment in enumerate(segments):
                 if _segment_intersects_corridor(segment, drift_corridor, drift_angle, leg_centroid):
                     intersecting_indices.append(seg_idx)
                     try:
-                        seg_line_tmp = LineString([segment[0], segment[1]])
-                        seg_intersection_len[seg_idx] = float(seg_line_tmp.intersection(drift_corridor).length)
+                        seg_intersection_len[seg_idx] = float(
+                            LineString([segment[0], segment[1]]).intersection(drift_corridor).length
+                        )
                     except Exception:
                         seg_intersection_len[seg_idx] = 0.0
-
             if not intersecting_indices:
                 return
-
-            # Distribute contribution by corridor-intersection length (fallback to equal split)
             total_inter_len = sum(max(seg_intersection_len.get(i, 0.0), 0.0) for i in intersecting_indices)
-
-            # Initialize data structure if needed
             obs_seg_map = report.setdefault(report_key, {}).setdefault(obstacle_key, {})
-
-            # Store contribution for each intersecting segment
             for seg_idx in intersecting_indices:
                 if total_inter_len > 0.0:
-                    w_seg = max(seg_intersection_len.get(seg_idx, 0.0), 0.0) / total_inter_len
-                    contrib_seg = contrib * w_seg
+                    contrib_seg = contrib * max(seg_intersection_len.get(seg_idx, 0.0), 0.0) / total_inter_len
                 else:
                     contrib_seg = contrib / len(intersecting_indices)
                 seg_key = f"seg_{seg_idx}"
                 seg_data = obs_seg_map.setdefault(seg_key, {})
                 seg_data[leg_dir_key] = seg_data.get(leg_dir_key, 0.0) + contrib_seg
-
-                # Runtime segment debug metadata (exact segment geometry and hit metrics)
-                try:
-                    seg_line = LineString([segments[seg_idx][0], segments[seg_idx][1]])
-                    inter_len = 0.0
-                    try:
-                        inter_len = float(seg_line.intersection(drift_corridor).length)
-                    except Exception:
-                        inter_len = 0.0
-
-                    dist_to_leg = None
-                    if leg is not None:
-                        try:
-                            dist_to_leg = float(seg_line.distance(leg))
-                        except Exception:
-                            dist_to_leg = None
-
-                    runtime_map = report.setdefault('runtime_segment_hits', {}).setdefault(obstacle_key, {})
-                    seg_meta = runtime_map.setdefault(seg_key, {
-                        'segment_wkt_utm': seg_line.wkt,
-                        'segment_wkt_wgs84': None,
-                        'hits': {},
-                    })
-
-                    # Best-effort WGS84 conversion if converter is available
-                    if seg_meta.get('segment_wkt_wgs84') is None:
-                        conv = getattr(self, '_segment_utm_to_wgs84', None)
-                        if conv is not None:
-                            try:
-                                seg_meta['segment_wkt_wgs84'] = conv(seg_line).wkt
-                            except Exception:
-                                pass
-
-                    hit = seg_meta['hits'].setdefault(leg_dir_key, {
-                        'count': 0,
-                        'max_intersection_len_m': 0.0,
-                        'min_distance_to_leg_m': None,
-                        'contrib_sum': 0.0,
-                    })
-                    hit['count'] += 1
-                    hit['contrib_sum'] += float(contrib_seg)
-                    if inter_len > float(hit.get('max_intersection_len_m', 0.0)):
-                        hit['max_intersection_len_m'] = inter_len
-                    if dist_to_leg is not None:
-                        cur = hit.get('min_distance_to_leg_m')
-                        if cur is None or dist_to_leg < float(cur):
-                            hit['min_distance_to_leg_m'] = dist_to_leg
-                except Exception:
-                    pass
-
+                seg_line = LineString([segments[seg_idx][0], segments[seg_idx][1]])
+                self._record_seg_debug_meta(
+                    report, obstacle_key, seg_key, leg_dir_key, contrib_seg, seg_line, drift_corridor, leg,
+                )
         except Exception:
             pass
 

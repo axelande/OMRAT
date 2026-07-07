@@ -1,21 +1,19 @@
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from qgis._core import QgsFeatureRenderer, QgsVectorDataProvider, QgsVectorLayerEditBuffer
 if TYPE_CHECKING:
     from omrat import OMRAT
 
-from omrat_widget import OMRATMainWidget
 from qgis.core import (
     QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject,
     QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFields,
     QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsSingleSymbolRenderer,
-    QgsLineSymbol, QgsPointXY, QgsSymbol
+    QgsLineSymbol, QgsPointXY
 )
 from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
-from qgis.gui import QgsMapToolPan
 
 
 from omrat_utils import PointTool

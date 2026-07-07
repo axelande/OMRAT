@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas)
-from numpy import exp, log, linspace
+from numpy import linspace
 from scipy import stats
 
 from compute.basic_equations import _safe_compile, _safe_eval

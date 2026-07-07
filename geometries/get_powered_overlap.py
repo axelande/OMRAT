@@ -259,6 +259,86 @@ def _extract_edges_local(
     return np.concatenate(edges_list, axis=0)
 
 
+def _build_hit_matrix(
+    offsets: np.ndarray,
+    obstacles: list[tuple[dict, str]],
+    turn_pt: np.ndarray,
+    ext_dir: np.ndarray,
+    perp: np.ndarray,
+) -> np.ndarray:
+    n_rays = len(offsets)
+    hit_matrix = np.full((n_rays, len(obstacles)), np.inf, dtype=float)
+    ray_ys = offsets[:, None]
+    for obs_idx, (obs, _kind) in enumerate(obstacles):
+        edges = _extract_edges_local(obs["geom"], turn_pt, ext_dir, perp)
+        if edges is None or edges.shape[0] == 0:
+            continue
+        x0, y0 = edges[:, 0, 0], edges[:, 0, 1]
+        x1, y1 = edges[:, 1, 0], edges[:, 1, 1]
+        y_min = np.minimum(y0, y1)[None, :]
+        y_max = np.maximum(y0, y1)[None, :]
+        dy = (y1 - y0)[None, :]
+        crosses = (ray_ys >= y_min) & (ray_ys < y_max) & (dy != 0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t = (ray_ys - y0[None, :]) / dy
+            along = x0[None, :] + t * (x1 - x0)[None, :]
+        valid = crosses & (along > 0) & (along < MAX_RANGE)
+        hit_matrix[:, obs_idx] = np.min(np.where(valid, along, np.inf), axis=1)
+    return hit_matrix
+
+
+def _accumulate_obs_hits(
+    offsets: np.ndarray, masses: np.ndarray,
+    hit_matrix: np.ndarray, obstacles: list, recovery: float,
+) -> tuple[list, dict]:
+    n_rays = len(offsets)
+    best_obs_idx = np.argmin(hit_matrix, axis=1)
+    best_dists = hit_matrix[np.arange(n_rays), best_obs_idx]
+    hit_mask = np.isfinite(best_dists)
+    ray_data: list = []
+    obs_accum: dict = defaultdict(lambda: {
+        "mass": 0.0, "weighted_dist": 0.0, "p_integral": 0.0,
+        "n_rays": 0, "ray_offsets": [], "ray_dists": [], "obs": None, "kind": None,
+    })
+    for i in range(n_rays):
+        off, m_i = float(offsets[i]), float(masses[i])
+        if not hit_mask[i]:
+            ray_data.append((off, m_i, None, None))
+            continue
+        obs, kind = obstacles[int(best_obs_idx[i])]
+        best_key = (kind, obs["id"])
+        best_d = float(best_dists[i])
+        oa = obs_accum[best_key]
+        oa["mass"] += m_i
+        oa["weighted_dist"] += m_i * best_d
+        if recovery > 0:
+            oa["p_integral"] += m_i * exp(-best_d / recovery)
+        oa["n_rays"] += 1
+        oa["ray_offsets"].append(off)
+        oa["ray_dists"].append(best_d)
+        oa["obs"], oa["kind"] = obs, kind
+        ray_data.append((off, m_i, best_key, best_d))
+    return ray_data, obs_accum
+
+
+def _build_summaries(obs_accum: dict, ai: float, speed_ms: float) -> dict:
+    summaries: dict = {}
+    for key, oa in obs_accum.items():
+        mean_dist = oa["weighted_dist"] / oa["mass"] if oa["mass"] > 0 else 0.0
+        summaries[key] = {
+            "mass": oa["mass"],
+            "mean_dist": mean_dist,
+            "p_integral": oa["p_integral"],
+            "p_approx": oa["mass"] * _powered_na(mean_dist, ai, speed_ms),
+            "n_rays": oa["n_rays"],
+            "ray_offsets": oa["ray_offsets"],
+            "ray_dists": oa["ray_dists"],
+            "obs": oa["obs"],
+            "kind": oa["kind"],
+        }
+    return summaries
+
+
 def _compute_cat2_with_shadows(
     turn_pt: np.ndarray,
     ext_dir: np.ndarray,
@@ -271,127 +351,20 @@ def _compute_cat2_with_shadows(
 ) -> tuple[dict, list, np.ndarray, np.ndarray]:
     """Compute Cat II probabilities with shadow effects (vectorised).
 
-    Casts ``N_RAYS`` parallel rays across the lateral distribution.  Per ray,
-    keeps the FIRST obstacle hit -- this is what creates shadows.
-
-    Implementation
-    --------------
-    Every ray has the same ``ext_dir``, only its lateral offset differs.  In
-    the local frame ``(along, lateral)`` anchored at ``turn_pt``, each ray is
-    the line ``y = offset`` moving in +x.  For each polygon edge
-    ``(v0, v1)`` in that frame, a ray at lateral ``y`` crosses the edge iff
-    ``y`` lies strictly between ``y0`` and ``y1``, and the along-crossing is
-    ``x0 + (y - y0) / (y1 - y0) * (x1 - x0)``.  Taking the minimum positive
-    crossing per obstacle gives the ray's first-hit distance to that
-    obstacle; argmin across obstacles gives the first-hit obstacle.  Both
-    reductions are a single broadcasted numpy op.
-
-    Returns
-    -------
-    summaries : dict
-        ``{(kind, obs_id): {mass, mean_dist, p_integral, p_approx, ...}}``
-    ray_data : list
-        ``[(offset, mass_i, hit_key, hit_dist), ...]``
-    offsets : ndarray
-    pdf_vals : ndarray
+    Casts ``N_RAYS`` parallel rays; per ray keeps the FIRST obstacle hit.
     """
     offsets = np.linspace(mean_offset - 4 * sigma, mean_offset + 4 * sigma, N_RAYS)
     dx = offsets[1] - offsets[0]
     pdf_vals = norm.pdf(offsets, mean_offset, sigma)
     masses = pdf_vals * dx
-    recovery = ai * speed_ms
     n_rays = len(offsets)
-
-    # Empty-obstacle shortcut: every ray misses.
     if not obstacles:
-        return (
-            {},
-            [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
-            offsets,
-            pdf_vals,
-        )
-
-    # Per-obstacle first-hit distance for every ray.
-    hit_matrix = np.full((n_rays, len(obstacles)), np.inf, dtype=float)
-    ray_ys = offsets[:, None]  # (n_rays, 1)
-
-    for obs_idx, (obs, _kind) in enumerate(obstacles):
-        edges = _extract_edges_local(obs["geom"], turn_pt, ext_dir, perp)
-        if edges is None or edges.shape[0] == 0:
-            continue
-
-        # edges: (M, 2, 2)  where axis-1 is endpoint index, axis-2 is (along, lateral).
-        x0 = edges[:, 0, 0]
-        y0 = edges[:, 0, 1]
-        x1 = edges[:, 1, 0]
-        y1 = edges[:, 1, 1]
-
-        y_min = np.minimum(y0, y1)[None, :]
-        y_max = np.maximum(y0, y1)[None, :]
-        dy = (y1 - y0)[None, :]
-
-        crosses = (ray_ys >= y_min) & (ray_ys < y_max) & (dy != 0)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            t = (ray_ys - y0[None, :]) / dy
-            along = x0[None, :] + t * (x1 - x0)[None, :]
-
-        valid = crosses & (along > 0) & (along < MAX_RANGE)
-        along = np.where(valid, along, np.inf)
-        hit_matrix[:, obs_idx] = np.min(along, axis=1)
-
-    best_obs_idx = np.argmin(hit_matrix, axis=1)
-    best_dists = hit_matrix[np.arange(n_rays), best_obs_idx]
-    hit_mask = np.isfinite(best_dists)
-
-    # Accumulate per-obstacle summaries.  The outer loop is only N_RAYS (500)
-    # so the remaining pure-Python cost is negligible relative to the numpy
-    # reduction above.
-    ray_data: list[tuple[float, float, tuple[str, Any] | None, float | None]] = []
-    obs_accum: dict[tuple[str, Any], dict] = defaultdict(lambda: {
-        "mass": 0.0, "weighted_dist": 0.0, "p_integral": 0.0,
-        "n_rays": 0, "ray_offsets": [], "ray_dists": [],
-        "obs": None, "kind": None,
-    })
-
-    for i in range(n_rays):
-        off = float(offsets[i])
-        m_i = float(masses[i])
-        if not hit_mask[i]:
-            ray_data.append((off, m_i, None, None))
-            continue
-        oi = int(best_obs_idx[i])
-        obs, kind = obstacles[oi]
-        best_key = (kind, obs["id"])
-        best_d = float(best_dists[i])
-        oa = obs_accum[best_key]
-        oa["mass"] += m_i
-        oa["weighted_dist"] += m_i * best_d
-        if recovery > 0:
-            oa["p_integral"] += m_i * exp(-best_d / recovery)
-        oa["n_rays"] += 1
-        oa["ray_offsets"].append(off)
-        oa["ray_dists"].append(best_d)
-        oa["obs"] = obs
-        oa["kind"] = kind
-        ray_data.append((off, m_i, best_key, best_d))
-
-    summaries: dict[tuple[str, Any], dict] = {}
-    for key, oa in obs_accum.items():
-        mean_dist = oa["weighted_dist"] / oa["mass"] if oa["mass"] > 0 else 0
-        p_approx = oa["mass"] * _powered_na(mean_dist, ai, speed_ms)
-        summaries[key] = {
-            "mass": oa["mass"],
-            "mean_dist": mean_dist,
-            "p_integral": oa["p_integral"],
-            "p_approx": p_approx,
-            "n_rays": oa["n_rays"],
-            "ray_offsets": oa["ray_offsets"],
-            "ray_dists": oa["ray_dists"],
-            "obs": oa["obs"],
-            "kind": oa["kind"],
-        }
-
-    return summaries, ray_data, offsets, pdf_vals
+        return ({}, [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
+                offsets, pdf_vals)
+    hit_matrix = _build_hit_matrix(offsets, obstacles, turn_pt, ext_dir, perp)
+    ray_data, obs_accum = _accumulate_obs_hits(offsets, masses, hit_matrix, obstacles,
+                                                ai * speed_ms)
+    return _build_summaries(obs_accum, ai, speed_ms), ray_data, offsets, pdf_vals
 
 
 # ---------------------------------------------------------------------------
@@ -439,105 +412,75 @@ def find_closest_computation_index(
     return None
 
 
+def _load_depth_obstacles(data: dict, proj: "SimpleProjector") -> list[dict]:
+    result: list[dict] = []
+    for dep in data.get("depths", []):
+        try:
+            did, depth_val, wkt_str = dep
+            geom = sw.loads(wkt_str)
+            result.append({"id": did, "depth": float(depth_val), "geom": _project_wkt_geom(geom, proj)})
+        except Exception:
+            continue
+    return result
+
+
+def _load_object_obstacles(data: dict, proj: "SimpleProjector") -> list[dict]:
+    result: list[dict] = []
+    for obj in data.get("objects", []):
+        try:
+            oid, height, wkt_str = obj
+            geom = sw.loads(wkt_str)
+            result.append({"id": oid, "height": height, "geom": _project_wkt_geom(geom, proj)})
+        except Exception:
+            continue
+    return result
+
+
+def _build_leg_entry(seg_id: str, seg: dict, traffic: dict, proj: "SimpleProjector") -> dict:
+    lon_s, lat_s = _parse_point(seg["Start_Point"])
+    lon_e, lat_e = _parse_point(seg["End_Point"])
+    xs, ys = proj.transform(lon_s, lat_s)
+    xe, ye = proj.transform(lon_e, lat_e)
+    dirs = seg.get("Dirs", ["Dir 1", "Dir 2"])
+    ai_values = [float(seg.get("ai1", 180)), float(seg.get("ai2", 180))]
+    seg_traffic = traffic.get(seg_id, {})
+    dir_info: list[dict] = []
+    for i, d_name in enumerate(dirs):
+        spd_kn = _weighted_avg_speed_knots(seg_traffic[d_name]) if d_name in seg_traffic else 0
+        dir_info.append({
+            "name": d_name, "speed_kn": spd_kn, "speed_ms": spd_kn * 1852.0 / 3600.0,
+            "ai": ai_values[min(i, 1)],
+            "mean": float(seg.get(f"mean{i+1}_1", 0)),
+            "std": float(seg.get(f"std{i+1}_1", 100)),
+        })
+    return {"start": np.array([xs, ys]), "end": np.array([xe, ye]),
+            "name": seg.get("Leg_name", ""), "start_wkt": seg["Start_Point"],
+            "end_wkt": seg["End_Point"], "dirs": dir_info}
+
+
 def _build_legs_and_obstacles(
     data: dict[str, Any],
     proj: SimpleProjector,
     mode: str,
     max_draft: float,
 ) -> tuple[dict[str, dict], list[tuple[dict, str]], list[dict], list[dict], list[dict]]:
-    """Extract projected legs, obstacle list, and raw geometry lists from *data*.
-
-    Parameters
-    ----------
-    mode : str
-        ``"allision"`` -> only objects;  ``"grounding"`` -> only depths.
-        ``"both"`` -> all obstacles.
-
-    Returns
-    -------
-    legs, all_obstacles, depth_geoms, depth_geoms_deep, object_geoms
-    """
-    segments = data.get("segment_data", {})
-    traffic = data.get("traffic_data", {})
-
-    # Project obstacles
-    depth_geoms_all = []
-    for dep in data.get("depths", []):
-        try:
-            did, depth_val, wkt_str = dep
-            geom = sw.loads(wkt_str)
-            depth_geoms_all.append({
-                "id": did,
-                "depth": float(depth_val),
-                "geom": _project_wkt_geom(geom, proj),
-            })
-        except Exception:
-            continue
-
+    """Extract projected legs, obstacle list, and raw geometry lists from *data*."""
+    depth_geoms_all = _load_depth_obstacles(data, proj)
     depth_geoms = [d for d in depth_geoms_all if d["depth"] <= max_draft]
     depth_geoms_deep = [d for d in depth_geoms_all if d["depth"] > max_draft]
-
-    object_geoms: list[dict] = []
-    for obj in data.get("objects", []):
-        try:
-            oid, height, wkt_str = obj
-            geom = sw.loads(wkt_str)
-            object_geoms.append({
-                "id": oid,
-                "height": height,
-                "geom": _project_wkt_geom(geom, proj),
-            })
-        except Exception:
-            continue
-
-    # Build obstacle list based on mode
+    object_geoms = _load_object_obstacles(data, proj)
     all_obstacles: list[tuple[dict, str]] = []
     if mode in ("grounding", "both"):
         all_obstacles.extend([(dg, "depth") for dg in depth_geoms])
     if mode in ("allision", "both"):
         all_obstacles.extend([(og, "object") for og in object_geoms])
-
-    # Build legs
     legs: dict[str, dict] = {}
-    for seg_id, seg in segments.items():
+    traffic = data.get("traffic_data", {})
+    for seg_id, seg in data.get("segment_data", {}).items():
         try:
-            lon_s, lat_s = _parse_point(seg["Start_Point"])
-            lon_e, lat_e = _parse_point(seg["End_Point"])
+            legs[seg_id] = _build_leg_entry(seg_id, seg, traffic, proj)
         except Exception:
             continue
-        xs, ys = proj.transform(lon_s, lat_s)
-        xe, ye = proj.transform(lon_e, lat_e)
-        start = np.array([xs, ys])
-        end = np.array([xe, ye])
-
-        dirs = seg.get("Dirs", ["Dir 1", "Dir 2"])
-        ai_values = [float(seg.get("ai1", 180)), float(seg.get("ai2", 180))]
-
-        seg_traffic = traffic.get(seg_id, {})
-        dir_info: list[dict] = []
-        for i, d_name in enumerate(dirs):
-            spd_kn = (_weighted_avg_speed_knots(seg_traffic[d_name])
-                      if d_name in seg_traffic else 0)
-            mean_key = f"mean{i + 1}_1"
-            std_key = f"std{i + 1}_1"
-            dir_info.append({
-                "name": d_name,
-                "speed_kn": spd_kn,
-                "speed_ms": spd_kn * 1852.0 / 3600.0,
-                "ai": ai_values[min(i, 1)],
-                "mean": float(seg.get(mean_key, 0)),
-                "std": float(seg.get(std_key, 100)),
-            })
-
-        legs[seg_id] = {
-            "start": start,
-            "end": end,
-            "name": seg.get("Leg_name", ""),
-            "start_wkt": seg["Start_Point"],
-            "end_wkt": seg["End_Point"],
-            "dirs": dir_info,
-        }
-
     return legs, all_obstacles, depth_geoms, depth_geoms_deep, object_geoms
 
 

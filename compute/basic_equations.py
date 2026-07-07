@@ -109,6 +109,43 @@ _WEIBULL_FUNC_RE = re.compile(
 )
 
 
+def _make_lognorm_repair_fn(s: float, loc: float, scale: float, drift_speed: float):
+    def fn(distance: float, _s=s, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
+        drift_time = distance / _spd / 3600.0
+        t = drift_time - _loc
+        if t <= 0 or _scale <= 0:
+            return 1.0
+        return 1.0 - float(ndtr(log(t / _scale) / _s))
+    return fn
+
+
+def _make_norm_repair_fn(loc: float, scale: float, drift_speed: float):
+    def fn(distance: float, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
+        drift_time = distance / _spd / 3600.0
+        if _scale <= 0:
+            return 1.0
+        return 1.0 - float(ndtr((drift_time - _loc) / _scale))
+    return fn
+
+
+def _make_weibull_repair_fn(c: float, loc: float, scale: float, drift_speed: float):
+    def fn(distance: float, _c=c, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
+        drift_time = distance / _spd / 3600.0
+        t = drift_time - _loc
+        if t <= 0 or _scale <= 0:
+            return 1.0
+        return float(exp(-((t / _scale) ** _c)))
+    return fn
+
+
+def _make_fallback_repair_fn(func_str: str, drift_speed: float):
+    code = _safe_compile(func_str)
+    def fn(distance: float, _code=code, _spd=drift_speed) -> float:
+        x = distance / _spd / 3600.0
+        return 1.0 - float(_safe_eval(_code, x))
+    return fn
+
+
 def _repair_fn(data: dict, drift_speed: float):
     """Return a callable ``f(distance) -> P(not repaired)`` for *data*.
 
@@ -116,68 +153,31 @@ def _repair_fn(data: dict, drift_speed: float):
     per-ship call sites don't re-parse strings or re-create distribution
     objects.  For the two dominant shapes (``norm.cdf(x)`` /
     ``weibull_min.cdf(x)``) we bypass scipy's frozen-distribution machinery
-    and call ``scipy.special.ndtr`` or a direct Weibull formula -- scipy's
-    generic ``.cdf`` has ~2 ms of Python-level dispatch per call, and
-    ``get_not_repaired`` runs tens of thousands of times per cascade.
+    and call ``scipy.special.ndtr`` or a direct Weibull formula.
     """
-    key: tuple
     if data.get('use_lognormal') == 1:
-        key = ('lognorm', float(data['std']), float(data['loc']),
-               float(data['scale']), float(drift_speed))
+        key: tuple = ('lognorm', float(data['std']), float(data['loc']),
+                      float(data['scale']), float(drift_speed))
     else:
         key = ('func', str(data.get('func', '')), float(drift_speed))
-
     fn = _REPAIR_FN_CACHE.get(key)
     if fn is not None:
         return fn
-
     if data.get('use_lognormal') == 1:
-        # lognorm.cdf(x; s, loc, scale) = ndtr(log((x-loc)/scale) / s) for x>loc
-        s = float(data['std'])
-        loc = float(data['loc'])
-        scale = float(data['scale'])
-
-        def fn(distance: float, _s=s, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
-            drift_time = distance / _spd / 3600.0
-            t = drift_time - _loc
-            if t <= 0 or _scale <= 0:
-                return 1.0
-            return 1.0 - float(ndtr(log(t / _scale) / _s))
+        fn = _make_lognorm_repair_fn(float(data['std']), float(data['loc']),
+                                      float(data['scale']), drift_speed)
     else:
         func_str = str(data.get('func', ''))
         m = _NORM_FUNC_RE.search(func_str)
         if m is not None:
-            loc = float(m['loc'])
-            scale = float(m['scale'])
-
-            def fn(distance: float, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
-                drift_time = distance / _spd / 3600.0
-                if _scale <= 0:
-                    return 1.0
-                return 1.0 - float(ndtr((drift_time - _loc) / _scale))
+            fn = _make_norm_repair_fn(float(m['loc']), float(m['scale']), drift_speed)
         else:
             wm = _WEIBULL_FUNC_RE.search(func_str)
             if wm is not None:
-                c = float(wm['c'])
-                loc = float(wm['loc'])
-                scale = float(wm['scale'])
-
-                def fn(distance: float, _c=c, _loc=loc, _scale=scale, _spd=drift_speed) -> float:
-                    drift_time = distance / _spd / 3600.0
-                    t = drift_time - _loc
-                    if t <= 0 or _scale <= 0:
-                        return 1.0
-                    return float(exp(-((t / _scale) ** _c)))
+                fn = _make_weibull_repair_fn(float(wm['c']), float(wm['loc']),
+                                              float(wm['scale']), drift_speed)
             else:
-                # Fallback: validate, compile + safe-eval the raw expression
-                # once.  Still slower than the analytical path but keeps
-                # backward compatibility with any user-crafted func strings.
-                code = _safe_compile(func_str)
-
-                def fn(distance: float, _code=code, _spd=drift_speed) -> float:
-                    x = distance / _spd / 3600.0
-                    return 1.0 - float(_safe_eval(_code, x))
-
+                fn = _make_fallback_repair_fn(func_str, drift_speed)
     _REPAIR_FN_CACHE[key] = fn
     return fn
 

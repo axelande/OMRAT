@@ -37,100 +37,79 @@ class ConsequenceValidation:
     warnings: list[str] = field(default_factory=list)
 
 
+def _validate_spill_probability(spill_prob: list, errors: list[str]) -> None:
+    for i, row in enumerate(spill_prob):
+        if not isinstance(row, (list, tuple)):
+            errors.append(f"spill_probability row {i}: not a list"); continue
+        try:
+            row_sum = float(sum(float(v) for v in row))
+        except (TypeError, ValueError):
+            errors.append(f"spill_probability row {i}: non-numeric value"); continue
+        if abs(row_sum - 100.0) > _ROW_SUM_TOLERANCE_PCT:
+            errors.append(f"spill_probability row {i}: sums to {row_sum:.2f}, "
+                          f"expected 100.0 (+/- {_ROW_SUM_TOLERANCE_PCT})")
+
+
+def _validate_spill_fraction(spill_frac: list, errors: list[str]) -> None:
+    for i, row in enumerate(spill_frac):
+        if not isinstance(row, (list, tuple)):
+            errors.append(f"spill_fraction row {i}: not a list"); continue
+        for j, v in enumerate(row):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                errors.append(f"spill_fraction row {i} col {j}: non-numeric value"); continue
+            if not 0.0 <= f <= 100.0:
+                errors.append(f"spill_fraction row {i} col {j}: {f:.2f} outside [0, 100]")
+
+
+def _validate_catastrophe_levels(levels: list, errors: list[str], warnings: list[str]) -> None:
+    if len(levels) < 2:
+        errors.append(f"catastrophe_levels: need at least 2, got {len(levels)}")
+    seen: set[float] = set()
+    for i, lvl in enumerate(levels):
+        if not isinstance(lvl, dict):
+            errors.append(f"catastrophe_levels[{i}]: not a dict"); continue
+        try:
+            q = float(lvl.get('quantity', 0.0))
+        except (TypeError, ValueError):
+            errors.append(f"catastrophe_levels[{i}]: non-numeric quantity"); continue
+        if q <= 0:
+            errors.append(f"catastrophe_levels[{i}]: quantity {q} must be positive")
+        if q in seen:
+            warnings.append(f"catastrophe_levels[{i}]: duplicate quantity {q} -- "
+                            "exceedance will be double-counted")
+        seen.add(q)
+
+
+def _validate_oil_onboard(oil: list, errors: list[str]) -> None:
+    for i, row in enumerate(oil):
+        if not isinstance(row, (list, tuple)):
+            errors.append(f"oil_onboard row {i}: not a list"); continue
+        for j, v in enumerate(row):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                errors.append(f"oil_onboard row {i} col {j}: non-numeric value"); continue
+            if f < 0:
+                errors.append(f"oil_onboard row {i} col {j}: {f} is negative")
+
+
 def validate_consequence(consequence: dict[str, Any] | None) -> ConsequenceValidation:
     """Check that a consequence block is internally consistent.
-
-    Mirrors the constraints the dialog UI enforces (rows sum to 100,
-    minimum two catastrophe levels) so headless / batch callers can run
-    the same checks before invoking
-    :func:`compute_catastrophe_exceedance`.
 
     The checker never raises — it returns the report so callers can
     decide how to surface the issues.
     """
     errors: list[str] = []
     warnings: list[str] = []
-
     if not isinstance(consequence, dict):
-        return ConsequenceValidation(
-            ok=False, errors=["consequence block missing or not a dict"],
-        )
-
-    spill_prob = consequence.get('spill_probability') or []
-    for i, row in enumerate(spill_prob):
-        if not isinstance(row, (list, tuple)):
-            errors.append(f"spill_probability row {i}: not a list")
-            continue
-        try:
-            row_sum = float(sum(float(v) for v in row))
-        except (TypeError, ValueError):
-            errors.append(f"spill_probability row {i}: non-numeric value")
-            continue
-        if abs(row_sum - 100.0) > _ROW_SUM_TOLERANCE_PCT:
-            errors.append(
-                f"spill_probability row {i}: sums to {row_sum:.2f}, "
-                f"expected 100.0 (+/- {_ROW_SUM_TOLERANCE_PCT})"
-            )
-
-    spill_frac = consequence.get('spill_fraction') or []
-    for i, row in enumerate(spill_frac):
-        if not isinstance(row, (list, tuple)):
-            errors.append(f"spill_fraction row {i}: not a list")
-            continue
-        for j, v in enumerate(row):
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                errors.append(f"spill_fraction row {i} col {j}: non-numeric value")
-                continue
-            if not 0.0 <= f <= 100.0:
-                errors.append(
-                    f"spill_fraction row {i} col {j}: {f:.2f} outside [0, 100]"
-                )
-
-    levels = consequence.get('catastrophe_levels') or []
-    if len(levels) < 2:
-        errors.append(
-            f"catastrophe_levels: need at least 2, got {len(levels)}"
-        )
-    seen_quantities: set[float] = set()
-    for i, lvl in enumerate(levels):
-        if not isinstance(lvl, dict):
-            errors.append(f"catastrophe_levels[{i}]: not a dict")
-            continue
-        try:
-            q = float(lvl.get('quantity', 0.0))
-        except (TypeError, ValueError):
-            errors.append(f"catastrophe_levels[{i}]: non-numeric quantity")
-            continue
-        if q <= 0:
-            errors.append(
-                f"catastrophe_levels[{i}]: quantity {q} must be positive"
-            )
-        if q in seen_quantities:
-            warnings.append(
-                f"catastrophe_levels[{i}]: duplicate quantity {q} -- "
-                "exceedance will be double-counted"
-            )
-        seen_quantities.add(q)
-
-    oil = consequence.get('oil_onboard') or []
-    for i, row in enumerate(oil):
-        if not isinstance(row, (list, tuple)):
-            errors.append(f"oil_onboard row {i}: not a list")
-            continue
-        for j, v in enumerate(row):
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                errors.append(f"oil_onboard row {i} col {j}: non-numeric value")
-                continue
-            if f < 0:
-                errors.append(f"oil_onboard row {i} col {j}: {f} is negative")
-
-    return ConsequenceValidation(
-        ok=not errors, errors=errors, warnings=warnings,
-    )
+        return ConsequenceValidation(ok=False, errors=["consequence block missing or not a dict"])
+    _validate_spill_probability(consequence.get('spill_probability') or [], errors)
+    _validate_spill_fraction(consequence.get('spill_fraction') or [], errors)
+    _validate_catastrophe_levels(consequence.get('catastrophe_levels') or [], errors, warnings)
+    _validate_oil_onboard(consequence.get('oil_onboard') or [], errors)
+    return ConsequenceValidation(ok=not errors, errors=errors, warnings=warnings)
 
 
 def _by_cell_for_accident(
@@ -199,6 +178,69 @@ def _lookup_oil(
     return 0.0
 
 
+def _accum_spill_levels(
+    freq: float, oil: float,
+    prob_row: list, frac_row: list,
+    sorted_levels: list,
+    results: dict,
+    accident_label: str,
+    by_accident: dict,
+) -> tuple[float, float]:
+    total_spill_freq = 0.0
+    mean_spill_vol = 0.0
+    for lvl_idx, prob_pct in enumerate(prob_row):
+        try:
+            p = float(prob_pct) / 100.0
+        except (TypeError, ValueError):
+            continue
+        if p <= 0.0:
+            continue
+        level_freq = freq * p
+        try:
+            frac_pct = float(frac_row[lvl_idx])
+        except (TypeError, ValueError, IndexError):
+            frac_pct = 0.0
+        spill_volume = oil * frac_pct / 100.0
+        if spill_volume > 0.0:
+            total_spill_freq += level_freq
+            mean_spill_vol += level_freq * spill_volume
+            by_accident[accident_label]['spill_m3'] += level_freq * spill_volume
+        for lvl in sorted_levels:
+            if spill_volume > lvl['quantity']:
+                results[lvl['name']]['exceedance'] += level_freq
+    return total_spill_freq, mean_spill_vol
+
+
+def _process_accident_cells(
+    accident_idx: int, accident_label: str,
+    cell_breakdown: dict,
+    oil_onboard: list, spill_prob: list, spill_frac: list,
+    sorted_levels: list, results: dict, by_accident: dict,
+) -> tuple[float, float]:
+    prob_row = spill_prob[accident_idx] if accident_idx < len(spill_prob) else [0.0, 0.0, 0.0, 0.0]
+    frac_row = spill_frac[accident_idx] if accident_idx < len(spill_frac) else [0.0, 0.0, 0.0, 0.0]
+    total_sf = 0.0
+    total_mv = 0.0
+    for cell_key, freq_value in cell_breakdown.items():
+        cell = _parse_cell_key(cell_key)
+        if cell is None:
+            continue
+        ship_type_idx, length_idx = cell
+        try:
+            freq = float(freq_value)
+        except (TypeError, ValueError):
+            continue
+        if freq <= 0.0:
+            continue
+        oil = _lookup_oil(oil_onboard, ship_type_idx, length_idx)
+        by_accident[accident_label]['frequency'] += freq
+        sf, mv = _accum_spill_levels(freq, oil, prob_row, frac_row,
+            sorted_levels, results, accident_label, by_accident)
+        total_sf += sf
+        total_mv += mv
+    return total_sf, total_mv
+
+
 def compute_catastrophe_exceedance(
     consequence: dict[str, Any],
     *,
@@ -236,103 +278,34 @@ def compute_catastrophe_exceedance(
     spill_prob: list[list[float]] = consequence.get('spill_probability', []) or []
     spill_frac: list[list[float]] = consequence.get('spill_fraction', []) or []
     levels = consequence.get('catastrophe_levels', []) or []
-
-    # Sort thresholds for the result so callers can rely on increasing order.
     sorted_levels = sorted(
-        ({
-            'name': str(lvl.get('name', '')),
-            'quantity': float(lvl.get('quantity', 0.0)),
-        } for lvl in levels),
+        ({'name': str(lvl.get('name', '')), 'quantity': float(lvl.get('quantity', 0.0))} for lvl in levels),
         key=lambda d: d['quantity'],
     )
-
-    results = {
-        lvl['name']: {
-            'name': lvl['name'],
-            'quantity': lvl['quantity'],
-            'exceedance': 0.0,
-        }
-        for lvl in sorted_levels
-    }
+    results = {lvl['name']: {'name': lvl['name'], 'quantity': lvl['quantity'], 'exceedance': 0.0}
+               for lvl in sorted_levels}
     by_accident: dict[str, dict[str, float]] = {
-        label: {'frequency': 0.0, 'spill_m3': 0.0}
-        for label in ACCIDENT_TYPES
+        label: {'frequency': 0.0, 'spill_m3': 0.0} for label in ACCIDENT_TYPES
     }
     mean_spill_volume_per_year = 0.0
     total_spill_frequency = 0.0
-
     for accident_idx, accident_key in enumerate(ACCIDENT_KEYS):
         accident_label = ACCIDENT_TYPES[accident_idx]
         cell_breakdown = _by_cell_for_accident(
-            accident_key,
-            drifting_report,
-            powered_grounding_report,
-            powered_allision_report,
-            collision_report,
+            accident_key, drifting_report, powered_grounding_report,
+            powered_allision_report, collision_report,
         )
         if not cell_breakdown:
             continue
-
-        # Per-row probability and fraction vectors (length 4, in percent).
-        prob_row = (
-            spill_prob[accident_idx]
-            if accident_idx < len(spill_prob)
-            else [0.0, 0.0, 0.0, 0.0]
+        sf, mv = _process_accident_cells(
+            accident_idx, accident_label, cell_breakdown,
+            oil_onboard, spill_prob, spill_frac,
+            sorted_levels, results, by_accident,
         )
-        frac_row = (
-            spill_frac[accident_idx]
-            if accident_idx < len(spill_frac)
-            else [0.0, 0.0, 0.0, 0.0]
-        )
-
-        for cell_key, freq_value in cell_breakdown.items():
-            cell = _parse_cell_key(cell_key)
-            if cell is None:
-                continue
-            ship_type_idx, length_idx = cell
-            try:
-                freq = float(freq_value)
-            except (TypeError, ValueError):
-                continue
-            if freq <= 0.0:
-                continue
-            oil = _lookup_oil(oil_onboard, ship_type_idx, length_idx)
-            by_accident[accident_label]['frequency'] += freq
-
-            # Each spill level contributes ``freq * P(level | accident)``
-            # events per year, with spill volume ``oil * fraction(level)``.
-            for lvl_idx, prob_pct in enumerate(prob_row):
-                try:
-                    p = float(prob_pct) / 100.0
-                except (TypeError, ValueError):
-                    continue
-                if p <= 0.0:
-                    continue
-                level_freq = freq * p
-                try:
-                    frac_pct = float(frac_row[lvl_idx])
-                except (TypeError, ValueError, IndexError):
-                    frac_pct = 0.0
-                spill_volume = oil * frac_pct / 100.0
-                # "No spill" contributes zero spill volume but still
-                # carries probability mass; track it for completeness in
-                # ``total_spill_frequency`` only when volume > 0.
-                if spill_volume > 0.0:
-                    total_spill_frequency += level_freq
-                    mean_spill_volume_per_year += level_freq * spill_volume
-                    by_accident[accident_label]['spill_m3'] += (
-                        level_freq * spill_volume
-                    )
-                # Catastrophe exceedance: this (accident, level) contributes
-                # to *every* catastrophe threshold whose quantity it crosses.
-                for lvl in sorted_levels:
-                    if spill_volume > lvl['quantity']:
-                        results[lvl['name']]['exceedance'] += level_freq
-
+        total_spill_frequency += sf
+        mean_spill_volume_per_year += mv
     return {
-        'levels': [
-            results[lvl['name']] for lvl in sorted_levels
-        ],
+        'levels': [results[lvl['name']] for lvl in sorted_levels],
         'total_spill_frequency': float(total_spill_frequency),
         'mean_spill_volume_per_year': float(mean_spill_volume_per_year),
         'by_accident': by_accident,
