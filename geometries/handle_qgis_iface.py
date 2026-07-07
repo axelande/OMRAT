@@ -26,10 +26,12 @@ def is_valid_point_pair(start: QgsPointXY, end: QgsPointXY) -> bool:
         (-1 <= end.x() <= 1 and -1 <= end.y() <= 1)
     )
 
-def calculate_tangent_line(mid: QgsPointXY, start: QgsPointXY, end: QgsPointXY, offset: float) -> tuple[QgsPointXY, QgsPointXY]:
+def calculate_tangent_line(mid: QgsPointXY, start: QgsPointXY, end: QgsPointXY, offset: float) -> tuple[QgsPointXY, QgsPointXY] | None:
     dx = end.x() - start.x()
     dy = end.y() - start.y()
     length = (dx**2 + dy**2)**0.5
+    if length < 1e-9:
+        return None
     unit_dx = dx / length
     unit_dy = dy / length
     perp_dx = -unit_dy
@@ -794,7 +796,10 @@ class HandleQGISIface:
         start_utm = to_utm.transform(start_point)
         end_utm = to_utm.transform(end_point)
 
-        tangent_start_utm, tangent_end_utm = calculate_tangent_line(mid_utm, start_utm, end_utm, offset_distance)
+        result = calculate_tangent_line(mid_utm, start_utm, end_utm, offset_distance)
+        if result is None:
+            return
+        tangent_start_utm, tangent_end_utm = result
         tangent_start = to_canvas.transform(tangent_start_utm)
         tangent_end = to_canvas.transform(tangent_end_utm)
 

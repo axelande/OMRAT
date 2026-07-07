@@ -43,8 +43,8 @@ def _assemble_ais_query(
     union_block: str, cte_block: str, ext_join: str,
     loa_fb: str, beam_fb: str, ship_type_expr: str, air_draught_expr: str,
 ) -> str:
-    return (  # nosec B608
-        "with segments as (" + union_block + ")" + cte_block + " "
+    return (
+        "with segments as (" + union_block + ")" + cte_block + " "  # nosec B608 -- false positive: all interpolated fragments are internal constants; user geometry arrives via %(pl)s parameterised placeholder
         "SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 "
         f"then {loa_fb} else dim_a + dim_b end as loa, "
         "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
