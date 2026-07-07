@@ -9,7 +9,7 @@ bandit>=1.7
 # behind and doesn't yet include the fixes this CI needs).  Swap the
 # ``@main`` suffix for a tag (``@v1.2.3``) or commit SHA once a stable
 # release is cut.
-pytest-qgis @ git+https://github.com/axelande/pytest-qgis.git@main
+pytest-qgis @ https://github.com/axelande/pytest-qgis/archive/refs/heads/main.tar.gz
 scipy
 shapely
 geopandas
