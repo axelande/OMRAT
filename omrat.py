@@ -26,10 +26,10 @@ from functools import partial
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QUrl
 from qgis.PyQt.QtGui import QIcon, QAction, QDesktopServices
 from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
-from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsProject, QgsMapCanvas)
+from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsProject)
 from qgis.core import QgsMessageLog, Qgis, QgsApplication
 
-from qgis.gui import QgsMapToolPan, QgisInterface
+from qgis.gui import QgsMapToolPan, QgisInterface, QgsMapCanvas
 import copy
 import gc
 import sys
