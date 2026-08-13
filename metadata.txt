@@ -23,7 +23,7 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
-  Version 0.13.2 (2026-08-13) - Minor bugfixes1
+  Version 0.13.2 (2026-08-13) - Minor bugfixes and flake8 fixes
   Version 0.13.1 (2026-07-07) - Now splits overlapping legs
   Version 0.13.0 (2026-07-06) - Some minor bug fixes.
   Version 0.12.3 (2026-06-18) - Minor bugfix.
