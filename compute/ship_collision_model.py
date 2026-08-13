@@ -49,11 +49,10 @@ class ShipCollisionModelMixin:
                 return (min_val + max_val) / 2.0
             except (ValueError, TypeError):
                 pass
-        # Default midpoints for typical LOA categories — clip to last entry
-        # rather than falling back to a fixed 150 m that would be wrong for
-        # larger-index bins beyond the list.
         default_midpoints = [25.0, 75.0, 150.0, 250.0, 350.0]
-        return default_midpoints[min(loa_idx, len(default_midpoints) - 1)]
+        if loa_idx < len(default_midpoints):
+            return default_midpoints[loa_idx]
+        return 150.0
 
     @staticmethod
     def estimate_beam(loa: float) -> float:
