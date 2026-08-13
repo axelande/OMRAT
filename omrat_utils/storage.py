@@ -13,13 +13,14 @@ from .validate_data import RootModelSchema
 if TYPE_CHECKING:
     from omrat import OMRAT
 
+
 class Storage:
     def __init__(self, parent: OMRAT) -> None:
         self.p = parent
-        
+
     def store_all(self):
         file_path = self.new_file_path(True, "Save Project", self.last_used_dir(),
-                                       "proj.omrat", "shapefiles (*.omrat *.OMRAT)" )[0]
+                                       "proj.omrat", "shapefiles (*.omrat *.OMRAT)")[0]
         if file_path == "":
             return
         gather = GatherData(self.p)
@@ -31,7 +32,7 @@ class Storage:
             print(e)
         with open(file_path, 'w') as f:
             f.write(json.dumps(data, indent=2))
-        
+
     def select_file(self) -> str:
         """Open a file dialog to select a .omrat file (or use test path).
 
@@ -171,7 +172,8 @@ class Storage:
             combi = str(repair.get('combi', ''))
             rep_type = str(repair.get('type', ''))
             use_ln = bool(repair.get('use_lognormal', False))
-            if use_ln and (rep_type.lower() == 'normal' or ('Mean' in combi and 'Std' in combi and 'Lower' not in combi)):
+            is_normal = rep_type.lower() == 'normal' or ('Mean' in combi and 'Std' in combi and 'Lower' not in combi)
+            if use_ln and is_normal:
                 mean = float(repair.get('param_0', repair.get('loc', 0.0)))
                 std = float(repair.get('param_1', repair.get('scale', 1.0)))
                 if std <= 0:
@@ -237,22 +239,22 @@ class Storage:
             return {'oil_onboard': [], 'spill_probability': [], 'spill_fraction': [], 'catastrophe_levels': []}
 
     def new_file_path(self, save, show_msg, dir_path, generic_name, filter_text):
-        """Open the QFileDialog and return a string with the folder and name of 
+        """Open the QFileDialog and return a string with the folder and name of
         the new file.
         """
         if save:
             output_filename = QFileDialog.getSaveFileName(None, show_msg,
-                                                      dir_path + os.sep + generic_name,
-                                                      filter_text)
+                                                          dir_path + os.sep + generic_name,
+                                                          filter_text)
         else:
             output_filename = QFileDialog.getOpenFileName(None, show_msg,
-                                                      dir_path + os.sep + generic_name,
-                                                      filter_text)
+                                                          dir_path + os.sep + generic_name,
+                                                          filter_text)
         if not output_filename:
             return ''
         else:
             return output_filename
-    
+
     def last_used_dir(self):
         """A function that remembers where you last open a vector file"""
         settings = QSettings()

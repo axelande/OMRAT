@@ -117,7 +117,11 @@ class DriftingReportMixin:
             avg_anchor = (d.get('anchor_factor_sum', 0.0) / w) if w > 0 else 0.0
             avg_not_rep = (d.get('not_repaired_sum', 0.0) / w) if w > 0 else 0.0
             avg_overlap = (d.get('overlap_sum', 0.0) / w) if w > 0 else 0.0
-            return f"| {angle}\u00b0 | {d.get('base_hours', 0.0):.2f} | {d.get('allision', 0.0):.3e} | {d.get('grounding', 0.0):.3e} | {avg_anchor:.3f} | {avg_not_rep:.3f} | {avg_overlap:.3f} |"
+            return (
+                f"| {angle}\u00b0 | {d.get('base_hours', 0.0):.2f}"
+                f" | {d.get('allision', 0.0):.3e} | {d.get('grounding', 0.0):.3e}"
+                f" | {avg_anchor:.3f} | {avg_not_rep:.3f} | {avg_overlap:.3f} |"
+            )
 
         md_lines: list[str] = []
         # Apply reduction factors to match GUI display
@@ -146,10 +150,16 @@ class DriftingReportMixin:
         md_lines.append("## Parameters")
         drift_speed_kts = float(drift.get('speed', 0.0)) if isinstance(drift, dict) else 0.0
         md_lines.append(f"- Drift speed: {drift_speed_kts} knots ({drift_speed_kts * 1852.0 / 3600.0:.3f} m/s)")
-        md_lines.append(f"- Blackout prob per ship-year: {float(drift.get('drift_p', 0.0)) if isinstance(drift, dict) else 0.0}")
-        md_lines.append(f"- Anchor prob: {float(drift.get('anchor_p', 0.0)) if isinstance(drift, dict) else 0.0}, distance factor: {float(drift.get('anchor_d', 0.0)) if isinstance(drift, dict) else 0.0}")
+        drift_p = float(drift.get('drift_p', 0.0)) if isinstance(drift, dict) else 0.0
+        md_lines.append(f"- Blackout prob per ship-year: {drift_p}")
+        anchor_p = float(drift.get('anchor_p', 0.0)) if isinstance(drift, dict) else 0.0
+        anchor_d = float(drift.get('anchor_d', 0.0)) if isinstance(drift, dict) else 0.0
+        md_lines.append(f"- Anchor prob: {anchor_p}, distance factor: {anchor_d}")
         if isinstance(repair, dict) and repair.get('use_lognormal', False):
-            md_lines.append(f"- Repair lognormal (std={float(repair.get('std', 0.0))}, loc={float(repair.get('loc', 0.0))}, scale={float(repair.get('scale', 1.0))})")
+            rep_std = float(repair.get('std', 0.0))
+            rep_loc = float(repair.get('loc', 0.0))
+            rep_scale = float(repair.get('scale', 1.0))
+            md_lines.append(f"- Repair lognormal (std={rep_std}, loc={rep_loc}, scale={rep_scale})")
         else:
             md_lines.append("- Repair model: not specified/lognormal disabled")
         if isinstance(rose, dict) and rose:
@@ -164,6 +174,7 @@ class DriftingReportMixin:
                 for seg_id, sd in seg_data.items():
                     sp = str(sd.get('Start_Point', '')).strip()
                     ep = str(sd.get('End_Point', '')).strip()
+
                     def _fmt_point(pt: str) -> str:
                         try:
                             s = pt.strip().lstrip('(').rstrip(')')
@@ -185,7 +196,7 @@ class DriftingReportMixin:
                     # Directions and distributions
                     dirs = list(sd.get('Dirs', []) or [])
                     for d_idx in (1, 2):
-                        label = str(dirs[d_idx-1]) if 0 <= (d_idx-1) < len(dirs) else str(d_idx)
+                        label = str(dirs[d_idx - 1]) if 0 <= (d_idx - 1) < len(dirs) else str(d_idx)
                         # Gather normal components
                         comps: list[str] = []
                         for i in range(1, 4):
@@ -209,7 +220,10 @@ class DriftingReportMixin:
             pass
 
         md_lines.append("## Directional Aggregates")
-        md_lines.append("| Direction | Base exposure | Allision | Grounding | Avg anchor | Avg not-repaired | Avg overlap |")
+        md_lines.append(
+            "| Direction | Base exposure | Allision | Grounding"
+            " | Avg anchor | Avg not-repaired | Avg overlap |"
+        )
         md_lines.append("|---:|---:|---:|---:|---:|---:|---:|")
         for ang in sorted(dir_agg.keys(), key=lambda x: int(x)):
             md_lines.append(dir_row(ang, dir_agg[ang]))
@@ -242,7 +256,10 @@ class DriftingReportMixin:
             # Only include structures; omit depths as requested
             for okey in sorted([k for k in by_obj.keys() if str(k).startswith('Structure - ')]):
                 ob = by_obj[okey]
-                md_lines.append(f"| {okey} | {float(ob.get('allision', 0.0)):.3e} | {float(ob.get('grounding', 0.0)):.3e} |")
+                md_lines.append(
+                    f"| {okey} | {float(ob.get('allision', 0.0)):.3e}"
+                    f" | {float(ob.get('grounding', 0.0)):.3e} |"
+                )
             md_lines.append("")
 
         # Ship Category Breakdown with names
@@ -277,7 +294,9 @@ class DriftingReportMixin:
                 except Exception:
                     pass
                 md_lines.append(
-                    f"| {legdir_key} | {disp} | {float(vals.get('freq', 0.0)):.0f} | {float(vals.get('allision', 0.0)):.3e} | {float(vals.get('grounding', 0.0)):.3e} |"
+                    f"| {legdir_key} | {disp} | {float(vals.get('freq', 0.0)):.0f}"
+                    f" | {float(vals.get('allision', 0.0)):.3e}"
+                    f" | {float(vals.get('grounding', 0.0)):.3e} |"
                 )
 
         md_lines.append("")
@@ -301,7 +320,10 @@ class DriftingReportMixin:
         md_lines.append("")
 
         md_lines.append("")
-        md_lines.append("_Generated by OMRA Tool drift model. Values are annual probabilities unless otherwise stated._")
+        md_lines.append(
+            "_Generated by OMRA Tool drift model."
+            " Values are annual probabilities unless otherwise stated._"
+        )
         return "\n".join(md_lines)
 
     def write_drifting_report_markdown(self, file_path: str, data: dict[str, Any] | None = None) -> str:

@@ -13,10 +13,8 @@ import numpy as np
 from shapely.geometry import LineString
 import time
 import logging
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import cpu_count
-import os
 from functools import wraps
 from dataclasses import dataclass, field
 from threading import Lock
@@ -139,13 +137,8 @@ def timed_function(func):
     """Decorator to time function execution and log slow calls."""
     @wraps(func)
     def wrapper(*args, **kwargs):
-        start = time.perf_counter()
-        try:
-            result = func(*args, **kwargs)
-            return result
-        finally:
-            elapsed = time.perf_counter() - start
-            # Note: logger.warning removed - causes errors in QGIS threads
+        # Note: timing/logger.warning removed - causes errors in QGIS threads
+        return func(*args, **kwargs)
     return wrapper
 
 
@@ -160,7 +153,7 @@ def _summary_lines_mc(stats: ProfilingStats) -> list[str]:
                 f"  Slow calls (>{SLOW_THRESHOLD}s): {stats.monte_carlo_slow_count}"]
         if stats.monte_carlo_times:
             t = np.array(stats.monte_carlo_times)
-            out += [f"  Time distribution:",
+            out += ["  Time distribution:",
                     f"    Min: {t.min():.4f}s",
                     f"    Median: {np.median(t):.4f}s",
                     f"    95th percentile: {np.percentile(t, 95):.4f}s",
@@ -174,18 +167,18 @@ def _summary_lines_geometry(stats: ProfilingStats) -> list[str]:
            f"  Distance checks: {stats.geometry_ops_calls}",
            f"  Total time: {stats.geometry_ops_total_time:.2f}s"]
     if stats.geometry_ops_calls > 0:
-        out += [f"  Average time: {stats.geometry_ops_total_time/stats.geometry_ops_calls:.6f}s",
+        out += [f"  Average time: {stats.geometry_ops_total_time / stats.geometry_ops_calls:.6f}s",
                 f"  Max time: {stats.geometry_ops_max_time:.6f}s"]
     out += ["\n[RAY-POLYGON INTERSECTION]",
             f"  Total calls: {stats.ray_intersection_calls}",
             f"  Total time: {stats.ray_intersection_total_time:.2f}s"]
     if stats.ray_intersection_calls > 0:
-        out.append(f"  Average time: {stats.ray_intersection_total_time/stats.ray_intersection_calls:.8f}s")
+        out.append(f"  Average time: {stats.ray_intersection_total_time / stats.ray_intersection_calls:.8f}s")
     out += ["\n[POLYGON EXTRACTION]",
             f"  Total calls: {stats.polygon_extraction_calls}",
             f"  Total time: {stats.polygon_extraction_total_time:.2f}s"]
     if stats.polygon_extraction_calls > 0:
-        out.append(f"  Average time: {stats.polygon_extraction_total_time/stats.polygon_extraction_calls:.6f}s")
+        out.append(f"  Average time: {stats.polygon_extraction_total_time / stats.polygon_extraction_calls:.6f}s")
     return out
 
 
@@ -197,11 +190,11 @@ def _summary_lines_tasks(stats: ProfilingStats) -> list[str]:
         durs = [t[2] for t in stats.task_times]
         total = sum(durs)
         out += [f"  Total task time: {total:.2f}s",
-                f"  Average task time: {total/len(durs):.4f}s",
+                f"  Average task time: {total / len(durs):.4f}s",
                 f"  Max task time: {max(durs):.4f}s",
-                f"  Top 5 slowest tasks:"]
+                "  Top 5 slowest tasks:"]
         for i, (li, di, dur) in enumerate(sorted(stats.task_times, key=lambda x: x[2], reverse=True)[:5]):
-            out.append(f"    {i+1}. Leg {li}, Dir {di}: {dur:.2f}s")
+            out.append(f"    {i + 1}. Leg {li}, Dir {di}: {dur:.2f}s")
     return out
 
 
@@ -210,10 +203,16 @@ def _summary_lines_breakdown(stats: ProfilingStats) -> list[str]:
              + stats.ray_intersection_total_time + stats.polygon_extraction_total_time)
     out = ["\n[TIME BREAKDOWN]"]
     if total > 0:
-        out += [f"  monte carlo: {stats.monte_carlo_total_time:.2f}s ({100*stats.monte_carlo_total_time/total:.1f}%)",
-                f"  geometry ops: {stats.geometry_ops_total_time:.2f}s ({100*stats.geometry_ops_total_time/total:.1f}%)",
-                f"  ray intersection: {stats.ray_intersection_total_time:.2f}s ({100*stats.ray_intersection_total_time/total:.1f}%)",
-                f"  polygon extraction: {stats.polygon_extraction_total_time:.2f}s ({100*stats.polygon_extraction_total_time/total:.1f}%)"]
+        out += [
+            f"  monte carlo: {stats.monte_carlo_total_time:.2f}s"
+            f" ({100 * stats.monte_carlo_total_time / total:.1f}%)",
+            f"  geometry ops: {stats.geometry_ops_total_time:.2f}s"
+            f" ({100 * stats.geometry_ops_total_time / total:.1f}%)",
+            f"  ray intersection: {stats.ray_intersection_total_time:.2f}s"
+            f" ({100 * stats.ray_intersection_total_time / total:.1f}%)",
+            f"  polygon extraction: {stats.polygon_extraction_total_time:.2f}s"
+            f" ({100 * stats.polygon_extraction_total_time / total:.1f}%)",
+        ]
     return out
 
 
@@ -344,7 +343,7 @@ def _compute_probability_monte_carlo(
 
 
 def _ray_intersects_polygon(ray_start: np.ndarray, ray_end: np.ndarray,
-                           polygon_rings: list[np.ndarray]) -> bool:
+                            polygon_rings: list[np.ndarray]) -> bool:
     """
     Fast ray-polygon intersection test using ray-crossing algorithm.
 
@@ -375,7 +374,7 @@ def _ray_intersects_polygon(ray_start: np.ndarray, ray_end: np.ndarray,
         ring_max = ring.max(axis=0)
 
         if (ray_max[0] < ring_min[0] or ray_min[0] > ring_max[0] or
-            ray_max[1] < ring_min[1] or ray_min[1] > ring_max[1]):
+                ray_max[1] < ring_min[1] or ray_min[1] > ring_max[1]):
             continue  # No overlap, skip this ring
 
         # Test ray-segment intersection for each edge in the ring
@@ -544,12 +543,12 @@ def _build_tasks(
 
 
 def _log_computation_start(n_lines: int, n_dirs: int, n_objs: int, n_total: int, max_workers: int) -> None:
-    _log(f"\n{'='*80}")
+    _log(f"\n{'=' * 80}")
     _log("COMPUTING PROBABILITY HOLES (PARALLEL OPTIMIZED)")
-    _log(f"{'='*80}")
+    _log(f"{'=' * 80}")
     _log(f"Legs: {n_lines} | Drift directions: {n_dirs} | Objects: {n_objs}")
     _log(f"Total hole calculations: {n_total} | Worker threads: {max_workers}")
-    _log(f"{'='*80}")
+    _log(f"{'=' * 80}")
 
 
 def _log_computation_end(
@@ -557,14 +556,17 @@ def _log_computation_end(
 ) -> None:
     total_time = time.time() - start_time
     actually_computed = total_holes - skipped_full - skipped_far
-    _log(f"\n{'='*80}")
+    _log(f"\n{'=' * 80}")
     _log("HOLE CALCULATION COMPLETE")
-    _log(f"{'='*80}")
-    _log(f"Total: {total_holes} | Computed: {actually_computed} | Skipped-coverage: {skipped_full} | Skipped-far: {skipped_far}")
-    _log(f"Total time: {int(total_time/60)}m {int(total_time%60)}s ({total_time:.1f}s)")
+    _log(f"{'=' * 80}")
+    _log(
+        f"Total: {total_holes} | Computed: {actually_computed}"
+        f" | Skipped-coverage: {skipped_full} | Skipped-far: {skipped_far}"
+    )
+    _log(f"Total time: {int(total_time / 60)}m {int(total_time % 60)}s ({total_time:.1f}s)")
     if actually_computed > 0:
-        _log(f"Avg time/computed hole: {total_time/actually_computed:.2f}s")
-    _log(f"{'='*80}\n")
+        _log(f"Avg time/computed hole: {total_time / actually_computed:.2f}s")
+    _log(f"{'=' * 80}\n")
 
 
 def _build_obj_index_map(objs_gdf_list: list) -> list[tuple[int, int]]:
@@ -592,7 +594,7 @@ def _check_progress_cancel(
     elapsed = time.time() - start_time
     avg = elapsed / completed_tasks if completed_tasks > 0 else 0
     eta_s = avg * (total_tasks - completed_tasks)
-    msg = f"Progress: {completed_tasks}/{total_tasks} tasks | ETA: {int(eta_s/60)}m {int(eta_s%60)}s"
+    msg = f"Progress: {completed_tasks}/{total_tasks} tasks | ETA: {int(eta_s / 60)}m {int(eta_s % 60)}s"
     if not progress_callback(completed_tasks, total_tasks, msg):
         logger.info("Calculation cancelled by user")
         for f in futures:
@@ -635,7 +637,8 @@ def _compute_single_direction(
     """
     task_start = time.perf_counter()
     w = np.array(wgts)
-    if w.sum() == 0: w = np.ones_like(w)
+    if w.sum() == 0:
+        w = np.ones_like(w)
     w = w / w.sum()
     leg_start, leg_vec, leg_len, perp_dir = _setup_leg_vars(line)
     angle_rad = np.radians(angle_deg)

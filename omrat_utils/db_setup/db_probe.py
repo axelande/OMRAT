@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import psycopg2
-from psycopg2 import sql
 
 from omrat_utils.db_setup.connection_profile import (
     ConnectionProfile,

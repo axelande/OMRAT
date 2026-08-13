@@ -363,7 +363,7 @@ def _compute_cat2_with_shadows(
                 offsets, pdf_vals)
     hit_matrix = _build_hit_matrix(offsets, obstacles, turn_pt, ext_dir, perp)
     ray_data, obs_accum = _accumulate_obs_hits(offsets, masses, hit_matrix, obstacles,
-                                                ai * speed_ms)
+                                               ai * speed_ms)
     return _build_summaries(obs_accum, ai, speed_ms), ray_data, offsets, pdf_vals
 
 
@@ -450,8 +450,8 @@ def _build_leg_entry(seg_id: str, seg: dict, traffic: dict, proj: "SimpleProject
         dir_info.append({
             "name": d_name, "speed_kn": spd_kn, "speed_ms": spd_kn * 1852.0 / 3600.0,
             "ai": ai_values[min(i, 1)],
-            "mean": float(seg.get(f"mean{i+1}_1", 0)),
-            "std": float(seg.get(f"std{i+1}_1", 100)),
+            "mean": float(seg.get(f"mean{i + 1}_1", 0)),
+            "std": float(seg.get(f"std{i + 1}_1", 100)),
         })
     return {"start": np.array([xs, ys]), "end": np.array([xe, ye]),
             "name": seg.get("Leg_name", ""), "start_wkt": seg["Start_Point"],
@@ -702,7 +702,7 @@ class PoweredOverlapVisualizer:
                                       label=f"Dir {di + 1} band ({N_SIGMA}s)"))
         for seg_id in self.legs:
             legend_items.append(plt.Line2D([0], [0], color=self.leg_colors[seg_id],
-                                            lw=2, label=f"Leg {seg_id}"))
+                                           lw=2, label=f"Leg {seg_id}"))
         if legend_items:
             ax.legend(handles=legend_items, fontsize=6, loc="upper left", ncol=2)
         ax.set_xlabel("Easting (m)")
@@ -827,7 +827,7 @@ class PoweredOverlapVisualizer:
                 )
 
         ax.axhline(d_info["mean"], color="red", linewidth=0.6,
-                    linestyle="--", alpha=0.5, label="dist. mean")
+                   linestyle="--", alpha=0.5, label="dist. mean")
         # Indicate the leg direction in the local frame: a thick black
         # arrow from x=0 toward +x at lateral offset 0 makes it
         # immediately obvious that "along-track" goes left -> right
@@ -916,7 +916,7 @@ class PoweredOverlapVisualizer:
             ax.plot(d_mean, p_contrib, marker="o", color=c, markersize=6,
                     markeredgecolor="white", markeredgewidth=0.8)
             ax.annotate(
-                f"{tag}\nmass={mass:.3f}\nd={d_mean/1000:.1f}km\n"
+                f"{tag}\nmass={mass:.3f}\nd={d_mean / 1000:.1f}km\n"
                 f"P={s.get('p_approx', p_contrib):.2e}",
                 xy=(d_mean, p_contrib),
                 xytext=(8, 8), textcoords="offset points",

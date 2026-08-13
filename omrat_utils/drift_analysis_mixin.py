@@ -39,13 +39,13 @@ if TYPE_CHECKING:
 # Direction -> hex colour for the categorised renderer.  Kept at module
 # level so tests / external callers can introspect the palette.
 _DIRECTION_COLOURS: dict[str, str] = {
-    'N':  '#e41a1c',
+    'N': '#e41a1c',
     'NE': '#377eb8',
-    'E':  '#4daf4a',
+    'E': '#4daf4a',
     'SE': '#984ea3',
-    'S':  '#ff7f00',
+    'S': '#ff7f00',
     'SW': '#ffff33',
-    'W':  '#a65628',
+    'W': '#a65628',
     'NW': '#f781bf',
 }
 

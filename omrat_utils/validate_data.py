@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, RootModel, field_validator
 from typing import Dict, List, Optional, Union
 
+
 class PC(BaseModel):
     p_pc: float
     d_pc: float
@@ -11,8 +12,10 @@ class PC(BaseModel):
     grounding: float = 1.6E-4
     allision: float = 1.9E-4
 
+
 class Rose(RootModel[Dict[str, float]]):
     pass  # keys like "0", "45", etc.
+
 
 class Repair(BaseModel):
     func: str
@@ -21,6 +24,7 @@ class Repair(BaseModel):
     scale: float
     use_lognormal: bool
 
+
 class Drift(BaseModel):
     drift_p: int
     anchor_p: float
@@ -28,6 +32,7 @@ class Drift(BaseModel):
     speed: float
     rose: Rose
     repair: Repair
+
 
 class TrafficDirectionData(BaseModel):
     Frequency_ships_per_year: List[List[float]] = Field(alias="Frequency (ships/year)")
@@ -41,6 +46,7 @@ class TrafficDirectionData(BaseModel):
     Scaling_percent: Optional[List[List[float]]] = Field(
         default=None, alias="Scaling (%)",
     )
+
 
 class TrafficLeg(RootModel[Dict[str, TrafficDirectionData]]):
     """A leg's traffic data, keyed by direction label.
@@ -67,8 +73,10 @@ class TrafficLeg(RootModel[Dict[str, TrafficDirectionData]]):
             )
         return v
 
+
 class TrafficData(RootModel[Dict[str, TrafficLeg]]):
     pass
+
 
 class Segment(BaseModel):
     Start_Point: str
@@ -106,31 +114,39 @@ class Segment(BaseModel):
     u_p2: int
     ai2: float
 
+
 class SegmentData(RootModel[Dict[str, Segment]]):
     pass
+
 
 class PolygonEntry(RootModel[List[str]]):
     pass  # ["1", "0.0-3.0", "MultiPolygon (...)"]
 
+
 class Depths(RootModel[List[PolygonEntry]]):
     pass
 
+
 class Objects(RootModel[List[PolygonEntry]]):
     pass
+
 
 class LengthInterval(BaseModel):
     min: Union[float, str]
     max: Union[float, str]
     label: str
 
+
 class ShipCategoriesModel(BaseModel):
     types: List[str]
     length_intervals: List[LengthInterval]
     selection_mode: Optional[str] = None
 
+
 class CatastropheLevel(BaseModel):
     name: str
     quantity: float
+
 
 class ConsequenceModel(BaseModel):
     """Project-level oil-spill consequence inputs.

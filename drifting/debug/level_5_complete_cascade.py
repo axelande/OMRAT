@@ -64,22 +64,22 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import numpy as np
-import matplotlib.pyplot as plt
-from shapely.geometry import LineString, Polygon, Point, box, MultiPolygon
-from shapely.affinity import translate as _translate
-from shapely.ops import unary_union as _unary_union
-from scipy import stats
-import pyproj
+import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from shapely.geometry import LineString, Polygon, Point  # noqa: E402
+from shapely.affinity import translate as _translate  # noqa: E402
+from shapely.ops import unary_union as _unary_union  # noqa: E402
+from scipy import stats  # noqa: E402
+import pyproj  # noqa: E402
 
-from drifting.engine import (
+from drifting.engine import (  # noqa: E402
     LegState, DriftConfig,
     compass_to_math_deg,
     build_directional_corridor,
     directional_distance_to_point_from_offset_leg,
 )
-from compute.basic_equations import get_not_repaired
-from geometries.analytical_probability import (
+from compute.basic_equations import get_not_repaired  # noqa: E402
+from geometries.analytical_probability import (  # noqa: E402
     compute_probability_analytical,
     _extract_polygon_rings,
 )
@@ -93,8 +93,10 @@ proj_wgs84 = pyproj.CRS("EPSG:4326")
 proj_utm = pyproj.CRS("EPSG:32633")
 transformer = pyproj.Transformer.from_crs(proj_wgs84, proj_utm, always_xy=True)
 
+
 def to_utm(lon, lat):
     return transformer.transform(lon, lat)
+
 
 leg3_start = to_utm(14.24187, 55.16728)
 leg3_end = to_utm(14.59271, 55.39937)
@@ -140,7 +142,7 @@ repair_data = {'use_lognormal': 1, 'std': 1.0, 'loc': 0.0, 'scale': 1.0}
 
 cfg = DriftConfig(reach_distance_m=reach_distance, corridor_sigma_multiplier=3.0)
 leg_state = LegState(leg_id="LEG_3", line=leg3_line,
-                      mean_offset_m=0.0, lateral_sigma_m=lateral_sigma)
+                     mean_offset_m=0.0, lateral_sigma_m=lateral_sigma)
 
 math_deg = compass_to_math_deg(drift_direction)
 angle_rad = np.radians(math_deg)
@@ -178,6 +180,7 @@ perp_dir = np.array([-leg_dir[1], leg_dir[0]])
 lateral_dist = stats.norm(0, lateral_sigma)
 lateral_range = 5.0 * lateral_sigma
 
+
 def compute_hole(geom):
     if geom is None or geom.is_empty:
         return 0.0
@@ -190,6 +193,7 @@ def compute_hole(geom):
         lateral_range=lateral_range, polygon_rings=rings,
         dists=[lateral_dist], weights=np.array([1.0]), n_slices=400,
     )
+
 
 def build_quad_shadow(poly, extrude_length):
     far = _translate(poly, xoff=drift_ux * extrude_length,
@@ -204,17 +208,19 @@ def build_quad_shadow(poly, extrude_length):
             quads.append(q)
     return _unary_union([poly, far] + quads)
 
+
 def directional_distance_mean(poly):
     verts = list(poly.exterior.coords)[:-1]
     ds = [directional_distance_to_point_from_offset_leg(
-              leg_state, drift_direction, Point(v))
-          for v in verts]
+        leg_state, drift_direction, Point(v))
+        for v in verts]
     ds = [d for d in ds if d is not None]
     return float(np.mean(ds)) if ds else 0.0
 
 # =============================================================================
 # 4. TARGET STATS
 # =============================================================================
+
 
 target_hole = compute_hole(target_polygon)
 d_target = directional_distance_mean(target_polygon)
@@ -250,6 +256,8 @@ target_cd_width = target_cd_hi - target_cd_lo
 anchor_center = target_centroid - 8000.0 * drift_vec_unit
 anchor_half_cross = 0.5 * target_cd_width + 300.0
 anchor_half_along = 500.0
+
+
 def _rect(center, half_cross, half_along):
     cx = half_cross * cross_drift_vec
     ay = half_along * drift_vec_unit
@@ -258,6 +266,8 @@ def _rect(center, half_cross, half_along):
                     tuple(center + cx + ay),
                     tuple(center - cx + ay),
                     tuple(center - cx - ay)])
+
+
 anchor_polygon = _rect(anchor_center, anchor_half_cross, anchor_half_along)
 
 # Structure (allision hazard): 4 km upstream of target, placed directly in
@@ -316,11 +326,11 @@ print("-" * 80)
 cov_struct_on_target = (target_hole - h_target_reach) / target_hole if target_hole > 0 else 0.0
 cov_anchor_on_reach = (h_target_reach_in_anchor / h_target_reach) if h_target_reach > 0 else 0.0
 cov_anchor_on_struct = (h_struct_in_anchor / h_struct) if h_struct > 0 else 0.0
-print(f"  Structure shadow covers {cov_struct_on_target*100:.1f}% of target hole (removed entirely)")
-print(f"  Anchor shadow covers {cov_anchor_on_reach*100:.1f}% of REACHABLE target hole "
+print(f"  Structure shadow covers {cov_struct_on_target * 100:.1f}% of target hole (removed entirely)")
+print(f"  Anchor shadow covers {cov_anchor_on_reach * 100:.1f}% of REACHABLE target hole "
       f"(reduced by factor a_p = {anchor_p})")
-print(f"  Anchor shadow covers {cov_anchor_on_struct*100:.1f}% of structure hole "
-      f"(reduced by factor a_p)")
+print(f"  Anchor shadow covers {cov_anchor_on_struct * 100:.1f}% of structure hole "
+      "(reduced by factor a_p)")
 print()
 
 # =============================================================================
@@ -333,21 +343,21 @@ P_ground = base * rose_prob * h_target_eff * p_nr_target
 
 print("PROBABILITY CALCULATIONS:")
 print("-" * 80)
-print(f"  P(anchor)  = base * r_p * a_p * h_anchor")
+print("  P(anchor)  = base * r_p * a_p * h_anchor")
 print(f"             = {base:.4e} * {rose_prob} * {anchor_p} * {h_anchor:.4e}")
 print(f"             = {P_anchor:.6e}")
 print()
-print(f"  h_struct_eff = h_struct - a_p * h(struct ^ shadow_anchor)")
+print("  h_struct_eff = h_struct - a_p * h(struct ^ shadow_anchor)")
 print(f"              = {h_struct:.4e} - {anchor_p} * {h_struct_in_anchor:.4e}")
 print(f"              = {h_struct_eff:.6e}")
-print(f"  P(allision) = base * r_p * h_struct_eff * P_NR(d_struct)")
+print("  P(allision) = base * r_p * h_struct_eff * P_NR(d_struct)")
 print(f"              = {base:.4e} * {rose_prob} * {h_struct_eff:.4e} * {p_nr_struct:.4e}")
 print(f"              = {P_struct:.6e}")
 print()
-print(f"  h_target_eff = h(target - shadow_struct) - a_p * h((target - shadow_struct) ^ shadow_anchor)")
+print("  h_target_eff = h(target - shadow_struct) - a_p * h((target - shadow_struct) ^ shadow_anchor)")
 print(f"               = {h_target_reach:.4e} - {anchor_p} * {h_target_reach_in_anchor:.4e}")
 print(f"               = {h_target_eff:.6e}")
-print(f"  P(ground)   = base * r_p * h_target_eff * P_NR(d_target)")
+print("  P(ground)   = base * r_p * h_target_eff * P_NR(d_target)")
 print(f"              = {base:.4e} * {rose_prob} * {h_target_eff:.4e} * {p_nr_target:.4e}")
 print(f"              = {P_ground:.6e}")
 print()
@@ -360,6 +370,7 @@ print()
 # =============================================================================
 # 9. COMPARISON SCENARIOS
 # =============================================================================
+
 
 def run(include_anchor, include_struct):
     """Compute P(anchor), P(allision), P(ground) for a given set of obstacles."""
@@ -383,17 +394,18 @@ def run(include_anchor, include_struct):
     P_anc = base * rose_prob * a_eff * h_anchor if include_anchor else 0.0
     return P_anc, P_str, P_tgt
 
+
 print("COMPARISON SCENARIOS:")
 print("-" * 80)
 print(f"  {'scenario':<32} {'P(anchor)':>12} {'P(allision)':>12} {'P(ground)':>12} {'Accident':>12}")
 for name, a, s in [
-    ("target only",              False, False),
-    ("target + anchor",          True,  False),
-    ("target + structure",       False, True),
-    ("target + anchor + struct", True,  True),
+    ("target only", False, False),
+    ("target + anchor", True, False),
+    ("target + structure", False, True),
+    ("target + anchor + struct", True, True),
 ]:
     pa, ps, pg = run(a, s)
-    print(f"  {name:<32} {pa:>12.4e} {ps:>12.4e} {pg:>12.4e} {ps+pg:>12.4e}")
+    print(f"  {name:<32} {pa:>12.4e} {ps:>12.4e} {pg:>12.4e} {ps + pg:>12.4e}")
 print()
 
 # =============================================================================
@@ -401,6 +413,7 @@ print()
 # =============================================================================
 
 fig, ax = plt.subplots(1, 1, figsize=(14, 11))
+
 
 def draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
     if geom is None or geom.is_empty:
@@ -417,6 +430,7 @@ def draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
             for interior in g.interiors:
                 ax_obj.fill(*interior.xy, fc='white', ec='darkred', lw=1)
             first = False
+
 
 cfg_disp = DriftConfig(reach_distance_m=1.2 * d_target, corridor_sigma_multiplier=3.0)
 corridor_display = build_directional_corridor(leg_state, drift_direction, cfg_disp)
@@ -490,27 +504,27 @@ ax.annotate('', xy=(center.x + dx, center.y + dy),
             xytext=(center.x, center.y),
             arrowprops=dict(arrowstyle='->', color='blue', lw=2.5))
 ax.text(center.x + dx * 0.5 + 200, center.y + dy * 0.5 + 200,
-        f'Drift NW\n(315 deg)', color='blue', fontsize=9)
+        'Drift NW\n(315 deg)', color='blue', fontsize=9)
 
 # Text box with the full breakdown
 cascade_text = (
     "CASCADE (shadow-coverage model):\n"
     f"  Anchor (50 m, ~{d_anchor:.0f} m):\n"
     f"    h_anchor = {h_anchor:.4e}\n"
-    f"    P(anchor) = base*r_p*a_p*h_anchor\n"
+    "    P(anchor) = base*r_p*a_p*h_anchor\n"
     f"             = {P_anchor:.4e}\n"
     f"  Structure (~{d_struct:.0f} m):\n"
     f"    h_struct = {h_struct:.4e}\n"
-    f"    anchor cov(struct) = {cov_anchor_on_struct*100:.1f}%\n"
+    f"    anchor cov(struct) = {cov_anchor_on_struct * 100:.1f}%\n"
     f"    h_struct_eff = {h_struct_eff:.4e}\n"
     f"    P(allision) = {P_struct:.4e}\n"
     f"  Target (~{d_target:.0f} m):\n"
-    f"    struct cov(target) = {cov_struct_on_target*100:.1f}%\n"
+    f"    struct cov(target) = {cov_struct_on_target * 100:.1f}%\n"
     f"    h(reach) = {h_target_reach:.4e}\n"
-    f"    anchor cov(reach)  = {cov_anchor_on_reach*100:.1f}%\n"
+    f"    anchor cov(reach)  = {cov_anchor_on_reach * 100:.1f}%\n"
     f"    h_target_eff = {h_target_eff:.4e}\n"
     f"    P(ground) = {P_ground:.4e}\n"
-    f"---\n"
+    "---\n"
     f"  Accident rate = {total_accident:.4e}/yr"
 )
 ax.text(0.02, 0.98, cascade_text, transform=ax.transAxes, fontsize=9,

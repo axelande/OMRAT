@@ -274,6 +274,8 @@ def compute_geometric_transition_matrix(
     if not bearings:
         return matrix
     leg_ids = list(bearings.keys())
+    if len(leg_ids) < 2:
+        return matrix
     if len(leg_ids) == 2:
         a, b = leg_ids
         matrix[a] = {b: 1.0}

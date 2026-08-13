@@ -23,8 +23,12 @@
  This script initializes the plugin, making it known to QGIS.
 """
 
-import os, sys; sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 # noinspection PyPep8Naming
+
+
 def classFactory(iface):  # pylint: disable=invalid-name
     """Load OMRAT class from file OMRAT.
 

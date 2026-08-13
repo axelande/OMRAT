@@ -23,6 +23,7 @@ class DB:
     time_out: int
         Set the timeout (sec) for a connection, default 24 hours.
     """
+
     def __init__(self, db_user: str = "", db_pass: str = "",
                  db_name: str = "", db_host: str = "",
                  db_port: int | str = 5432, time_out: int = 86400):
@@ -79,7 +80,7 @@ class DB:
 
     def _disconnect(self):
         if hasattr(self, 'conn'):
-            if self.conn != None:
+            if self.conn is not None:
                 self.conn.close()
 
     def _reconnect(self):
@@ -113,10 +114,10 @@ class DB:
             else:
                 return [False]
 
-    def execute_and_return(self, 
-        sql: str | psycopg2.sql.Composable, 
-        return_error: bool = False, 
-        params: tuple | list | dict | None = None) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
+    def execute_and_return(self,
+                           sql: str | psycopg2.sql.Composable,
+                           return_error: bool = False,
+                           params: tuple | list | dict | None = None) -> list[list[Any]] | tuple[bool, list[list[Any]]]:
         """Execute the query and returns the result as a list of list
         Parameters
         ----------
@@ -159,17 +160,17 @@ class DB:
         sql: str
             Your query
         commit: bool
-            Could be set to False if a db.commit is run later (in order to save 
+            Could be set to False if a db.commit is run later (in order to save
             time)
         return_error: bool
             If true the function returns False, error_failure else it just return False
         Examples
         --------
-        >>> execute('''INSERT INTO 
-                    SELECT 
-                    FROM 
+        >>> execute('''INSERT INTO
+                    SELECT
+                    FROM
                     WHERE''')
-        
+
         """
         c = self.conn.cursor()
         try:

@@ -55,23 +55,22 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import numpy as np
-import matplotlib.pyplot as plt
-from shapely.geometry import LineString, Polygon, Point, box, MultiPolygon
-from shapely.affinity import translate as _translate
-from shapely.ops import unary_union as _unary_union
-from scipy import stats
-import pyproj
+import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from shapely.geometry import LineString, Polygon, Point  # noqa: E402
+from shapely.affinity import translate as _translate  # noqa: E402
+from shapely.ops import unary_union as _unary_union  # noqa: E402
+from scipy import stats  # noqa: E402
+import pyproj  # noqa: E402
 
-from drifting.engine import (
+from drifting.engine import (  # noqa: E402
     LegState, DriftConfig,
     compass_to_math_deg,
     build_directional_corridor,
-    edge_average_distance_m,
     directional_distance_to_point_from_offset_leg,
 )
-from compute.basic_equations import get_not_repaired
-from geometries.analytical_probability import (
+from compute.basic_equations import get_not_repaired  # noqa: E402
+from geometries.analytical_probability import (  # noqa: E402
     compute_probability_analytical,
     _extract_polygon_rings,
 )
@@ -85,8 +84,10 @@ proj_wgs84 = pyproj.CRS("EPSG:4326")
 proj_utm = pyproj.CRS("EPSG:32633")
 transformer = pyproj.Transformer.from_crs(proj_wgs84, proj_utm, always_xy=True)
 
+
 def to_utm(lon, lat):
     return transformer.transform(lon, lat)
+
 
 # Leg 3
 leg3_start = to_utm(14.24187, 55.16728)
@@ -128,7 +129,7 @@ repair_data = {'use_lognormal': 1, 'std': 1.0, 'loc': 0.0, 'scale': 1.0}
 
 cfg = DriftConfig(reach_distance_m=reach_distance, corridor_sigma_multiplier=3.0)
 leg_state = LegState(leg_id="LEG_3", line=leg3_line,
-                      mean_offset_m=0.0, lateral_sigma_m=lateral_sigma)
+                     mean_offset_m=0.0, lateral_sigma_m=lateral_sigma)
 
 math_deg = compass_to_math_deg(drift_direction)
 angle_rad = np.radians(math_deg)
@@ -167,6 +168,7 @@ perp_dir = np.array([-leg_dir[1], leg_dir[0]])
 lateral_dist = stats.norm(0, lateral_sigma)
 lateral_range = 5.0 * lateral_sigma
 
+
 def compute_hole(geom):
     """Analytical probability hole for any Polygon or MultiPolygon geom."""
     if geom is None or geom.is_empty:
@@ -180,6 +182,7 @@ def compute_hole(geom):
         lateral_range=lateral_range, polygon_rings=rings,
         dists=[lateral_dist], weights=np.array([1.0]), n_slices=400,
     )
+
 
 def build_quad_shadow(poly, extrude_length):
     """Quad-sweep shadow: sweep each polygon edge along the drift direction."""
@@ -199,12 +202,13 @@ def build_quad_shadow(poly, extrude_length):
 # 4. TARGET HOLE (reference value) AND DISTANCE
 # =============================================================================
 
+
 target_hole = compute_hole(target_polygon)
 
 target_vertices = list(target_polygon.exterior.coords)[:-1]
 target_dists = [directional_distance_to_point_from_offset_leg(
-                    leg_state, drift_direction, Point(v))
-                for v in target_vertices]
+    leg_state, drift_direction, Point(v))
+    for v in target_vertices]
 target_dists = [d for d in target_dists if d is not None]
 d_target = float(np.mean(target_dists))
 p_nr_target = get_not_repaired(repair_data, drift_speed_ms, d_target)
@@ -219,9 +223,11 @@ print()
 # 5. CONSTRUCT THE THREE BLOCKERS AT 0%, 30%, 100% SHADOW COVERAGE
 # =============================================================================
 
+
 def cross_drift_interval(poly_coords):
     projs = [np.dot(np.array(pt), cross_drift_vec) for pt in poly_coords]
     return min(projs), max(projs)
+
 
 target_cd_lo, target_cd_hi = cross_drift_interval(target_vertices)
 target_cd_center = 0.5 * (target_cd_lo + target_cd_hi)
@@ -234,6 +240,7 @@ blocker_half_along = 400.0   # 800 m deep in drift direction
 
 # Compute shadow polygons (quad-sweep).  Extrude at least target_distance + 5 km.
 extrude_len = d_target + 5000.0
+
 
 def make_blocker(center_cross_offset_m, half_cross_m):
     """Rectangular blocker aligned to the drift axis."""
@@ -249,6 +256,7 @@ def make_blocker(center_cross_offset_m, half_cross_m):
     ]
     return coords, Polygon(coords)
 
+
 # Scenario A -- 0% coverage: blocker shifted WELL clear of target on cross-drift
 blocker_A_offset = +1500.0   # meters along the cross-drift axis from target center
 blocker_A_half_cross = 300.0
@@ -258,6 +266,8 @@ blocker_A_utm, blocker_A_poly = make_blocker(blocker_A_offset, blocker_A_half_cr
 # that yields ~30% hole coverage by a small search.  The blocker sits on one
 # side of the target's cross-drift interval so the shadow covers a band of
 # one edge rather than straddling the centre.
+
+
 def _coverage_for_half(half_cross_m):
     cx_offset = (target_cd_hi - half_cross_m) - target_cd_center
     _, poly = make_blocker(cx_offset, half_cross_m)
@@ -265,6 +275,7 @@ def _coverage_for_half(half_cross_m):
     unshadow = target_polygon.difference(sh)
     h = compute_hole(unshadow)
     return 1.0 - h / target_hole if target_hole > 0 else 0.0
+
 
 # Binary search for the half-width that gives ~30% coverage
 lo, hi = 50.0, target_cd_width
@@ -293,6 +304,7 @@ shadow_C = build_quad_shadow(blocker_C_poly, extrude_len)
 # 6. EFFECTIVE TARGET HOLE PER SCENARIO
 # =============================================================================
 
+
 def scenario_stats(name, blocker_poly, shadow_poly):
     target_unshadowed = target_polygon.difference(shadow_poly)
     target_shadowed = target_polygon.intersection(shadow_poly)
@@ -308,8 +320,8 @@ def scenario_stats(name, blocker_poly, shadow_poly):
     h_blocker = compute_hole(blocker_poly)
     blocker_verts = list(blocker_poly.exterior.coords)[:-1]
     blocker_dists = [directional_distance_to_point_from_offset_leg(
-                          leg_state, drift_direction, Point(v))
-                      for v in blocker_verts]
+        leg_state, drift_direction, Point(v))
+        for v in blocker_verts]
     blocker_dists = [d for d in blocker_dists if d is not None]
     d_blocker = float(np.mean(blocker_dists)) if blocker_dists else 0.0
     p_nr_blocker = get_not_repaired(repair_data, drift_speed_ms, d_blocker)
@@ -331,6 +343,7 @@ def scenario_stats(name, blocker_poly, shadow_poly):
         'P_blocker': P_blocker,
     }
 
+
 # Base exposure factor (same for every scenario)
 hours_present = (leg_len / (ship_speed_kts * 1852)) * ship_freq
 base = hours_present * blackout_per_hour
@@ -345,22 +358,22 @@ print()
 # Baseline (no blocker)
 P_target_baseline = base * rose_prob * target_hole * p_nr_target
 print("BASELINE (no blocker):")
-print(f"  P(target) = base * r_p * h_target * P_NR(d_target)")
+print("  P(target) = base * r_p * h_target * P_NR(d_target)")
 print(f"            = {base:.4e} * {rose_prob} * {target_hole:.4e} * {p_nr_target:.4e}")
 print(f"            = {P_target_baseline:.6e}")
 print()
 
 scenarios = [
-    scenario_stats("A: 0% coverage  (offset blocker)",  blocker_A_poly, shadow_A),
+    scenario_stats("A: 0% coverage  (offset blocker)", blocker_A_poly, shadow_A),
     scenario_stats("B: ~30% coverage (partial shadow)", blocker_B_poly, shadow_B),
-    scenario_stats("C: 100% coverage (full shadow)",    blocker_C_poly, shadow_C),
+    scenario_stats("C: 100% coverage (full shadow)", blocker_C_poly, shadow_C),
 ]
 
 print("SHADOW COVERAGE AND EFFECTIVE TARGET HOLE:")
 print("-" * 80)
 print(f"  {'Scenario':<36} {'cov(area)':>10} {'cov(hole)':>10} {'h_eff':>12} {'P(target)':>12}")
 for s in scenarios:
-    print(f"  {s['name']:<36} {s['coverage_area']*100:>9.1f}% {s['coverage_hole']*100:>9.1f}% "
+    print(f"  {s['name']:<36} {s['coverage_area'] * 100:>9.1f}% {s['coverage_hole'] * 100:>9.1f}% "
           f"{s['h_target_unshadowed']:>12.4e} {s['P_target']:>12.4e}")
 print()
 print("  Notes:")
@@ -380,8 +393,8 @@ for s in scenarios:
     print(f"    blocker P_NR                    = {s['p_nr_blocker']:.6e}")
     print(f"    blocker contribution P_blocker = {s['P_blocker']:.6e}")
     print(f"    target effective hole h_eff     = {s['h_target_unshadowed']:.6e}")
-    print(f"    target coverage (hole fraction) = {s['coverage_hole']*100:.2f}%")
-    print(f"    target contribution  P(target) = base * r_p * h_eff * P_NR(d_target)")
+    print(f"    target coverage (hole fraction) = {s['coverage_hole'] * 100:.2f}%")
+    print("    target contribution  P(target) = base * r_p * h_eff * P_NR(d_target)")
     print(f"                                    = {base:.4e} * {rose_prob} * "
           f"{s['h_target_unshadowed']:.4e} * {p_nr_target:.4e}")
     print(f"                                    = {s['P_target']:.6e}")
@@ -392,6 +405,7 @@ for s in scenarios:
 # =============================================================================
 
 fig, axes = plt.subplots(1, 3, figsize=(21, 9))
+
 
 def draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
     if geom.is_empty:
@@ -408,6 +422,7 @@ def draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
             for interior in g.interiors:
                 ax_obj.fill(*interior.xy, fc='white', ec='darkred', lw=1)
             first = False
+
 
 for ax, s in zip(axes, scenarios):
     # Corridor for display
@@ -459,11 +474,11 @@ for ax, s in zip(axes, scenarios):
                 xytext=(center.x, center.y),
                 arrowprops=dict(arrowstyle='->', color='blue', lw=2))
     ax.text(center.x + dx * 0.5 + 200, center.y + dy * 0.5 + 200,
-            f'Drift NW\n(315 deg)', color='blue', fontsize=9)
+            'Drift NW\n(315 deg)', color='blue', fontsize=9)
 
     # Summary box
     txt = (
-        f"Shadow coverage (hole) = {s['coverage_hole']*100:.1f}%\n"
+        f"Shadow coverage (hole) = {s['coverage_hole'] * 100:.1f}%\n"
         f"h_target (ref)   = {target_hole:.4e}\n"
         f"h_target (eff)   = {s['h_target_unshadowed']:.4e}\n"
         f"d_target         = {d_target:.0f} m\n"
@@ -511,7 +526,7 @@ print("=" * 80)
 print(f"  Baseline (no blocker)            : P(target) = {P_target_baseline:.6e}")
 for s in scenarios:
     print(f"  {s['name']:<36}: P(target) = {s['P_target']:.6e} "
-          f"(coverage {s['coverage_hole']*100:.1f}%)")
+          f"(coverage {s['coverage_hole'] * 100:.1f}%)")
 print()
 print("  Key point: the blocker's effect on the TARGET is determined by the")
 print("  fraction of the target's probability hole that falls inside the blocker's")

@@ -44,7 +44,8 @@ def _assemble_ais_query(
     loa_fb: str, beam_fb: str, ship_type_expr: str, air_draught_expr: str,
 ) -> str:
     return (
-        "with segments as (" + union_block + ")" + cte_block + " "  # nosec B608 -- false positive: all interpolated fragments are internal constants; user geometry arrives via %(pl)s parameterised placeholder
+        "with segments as (" + union_block + ")" + cte_block + " "  # nosec B608
+        # false positive: all interpolated fragments are internal constants; user geometry arrives via %(pl)s
         "SELECT case when dim_a + dim_b < 2 or dim_a > 510 or dim_b > 510 "
         f"then {loa_fb} else dim_a + dim_b end as loa, "
         "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
@@ -74,7 +75,8 @@ def _validate_sql_identifier(name: str) -> str:
         raise ValueError(f"Invalid SQL identifier: {name!r}")
     return name
 
-def update_ais_settings_file(db_host:str, db_user:str, db_pass:str, db_name:str):
+
+def update_ais_settings_file(db_host: str, db_user: str, db_pass: str, db_name: str):
     ais_settings_path = os.path.join(os.path.dirname(__file__), '..', 'ui', 'ais_settings.py')
     with open(ais_settings_path, 'w', encoding='utf-8') as f:
         f.write(f"""db_host = '{db_host}'
@@ -84,19 +86,27 @@ db_name = '{db_name}'
 """)
 
 
-def get_pl(db:DB, lat1:float, lat2:float, lon1:float, lon2:float, l_width:float) -> str:
+def get_pl(db: DB, lat1: float, lat2: float, lon1: float, lon2: float, l_width: float) -> str:
     """Collects the passage line as text"""
-    sql = f"""SELECT st_astext(st_makeline(ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
-    {l_width/2}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(90))::geometry,
-    ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography, 
-    {l_width/2}, ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography) + radians(270))::geometry
-    ))"""
+    half = l_width / 2
+    sql = (
+        f"SELECT st_astext(st_makeline("
+        f"ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography,"
+        f" {half},"
+        f" ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography)"
+        f" + radians(90))::geometry,"
+        f" ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography,"
+        f" {half},"
+        f" ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography)"
+        f" + radians(270))::geometry))"
+    )
     ok, res = cast(tuple[bool, list[list[Any]]], db.execute_and_return(sql, return_error=True))
     if ok:
         pl: str = res[0][0]
     else:
         pl = ""
     return pl
+
 
 def get_type(toc: float) -> int:
     """Return ship type index matching the UI ship category list.
@@ -150,7 +160,8 @@ def get_type(toc: float) -> int:
         return 19
     return 20
 
-def close_to_line(bearing:float, cog:float, max_angle:float) -> bool:
+
+def close_to_line(bearing: float, cog: float, max_angle: float) -> bool:
     """Returns True if the cog is less than the max_angle towards the bearing else False"""
     if max_angle > 180:
         raise ValueError("Maximum deviation must be lower than 180 degrees")
@@ -171,8 +182,9 @@ def close_to_line(bearing:float, cog:float, max_angle:float) -> bool:
         else:
             return False
 
+
 class AIS:
-    def __init__(self, omrat:"OMRAT"):
+    def __init__(self, omrat: "OMRAT"):
         self.settings: QSettings = QSettings()
         self.db: DB | None = None
         self.omrat = omrat
@@ -199,16 +211,16 @@ class AIS:
         if isinstance(raw, str):
             return raw.strip().lower() == "true"
         return bool(raw)
-        
+
     def unload(self):
         """If signals from omrat was used they are disconnected"""
         pass
-        
+
     def run(self):
         self.acw.show()
         self.acw.accepted.connect(self.update_ais_settings)
         self.acw.exec()
-    
+
     def set_start_ais_settings(self):
         db_host: str = self.settings.value("omrat/db_host", "")
         db_name: str = self.settings.value("omrat/db_name", "")
@@ -244,14 +256,14 @@ class AIS:
                 self.months.append(i)
         try:
             self.db = DB(db_host=db_host,
-                        db_name=db_name,
-                        db_user=db_user,
-                        db_pass=db_pass,
-                        db_port=db_port)
+                         db_name=db_name,
+                         db_user=db_user,
+                         db_pass=db_pass,
+                         db_port=db_port)
         except Exception:
             self.db = None
         self.max_deviation = float(self.acw.leMaxDev.text())
-    
+
     def _read_months_from_ui(self) -> list[int]:
         months = []
         for i in range(1, 13):
@@ -406,7 +418,7 @@ class AIS:
         if btn is not None:
             btn.setEnabled(False)
         QgsApplication.taskManager().addTask(task)
-        
+
     def convert_list2avg(self):
         for key1 in self.omrat.traffic.traffic_data.keys():
             for key2 in self.omrat.traffic.traffic_data[key1].keys():
@@ -419,7 +431,7 @@ class AIS:
                                 else:
                                     self.omrat.traffic.traffic_data[key1][key2][key3][idx1][idx2] = np.inf
 
-    def update_dist_data(self, line1:np.ndarray, line2:np.ndarray, key:str) -> None:
+    def update_dist_data(self, line1: np.ndarray, line2: np.ndarray, key: str) -> None:
         # Keep a dedicated distribution cache used by Distributions.run_update_plot.
         self.dist_data[key] = {
             'line1': line1,
@@ -448,7 +460,7 @@ class AIS:
             self.omrat.segment_data[key][f'u_p{j}'] = 0
         self.omrat.segment_data[key]['ai1'] = 180
         self.omrat.segment_data[key]['ai2'] = 180
-    
+
     def _validate_months(self) -> list[int]:
         months: list[int] = []
         for m in self.months:
@@ -589,7 +601,7 @@ class AIS:
             l_width=float(leg_d.get('Width', 5000)),
         )
         try:
-            rows = self.run_sql(pl)
+            self.run_sql(pl)
         except Exception:
             return {}
         # ``run_sql`` returns the per-ping row used by ``update_ais_data``;
@@ -710,7 +722,7 @@ class AIS:
     def get_segment_data_from_table(self) -> dict[str, dict[str, str]]:
         """Extract segment data from the QTableWidget (twRouteList)."""
         segment_data: dict[str, dict[str, str]] = {}
-        table:QTableWidget = self.omrat.main_widget.twRouteList
+        table: QTableWidget = self.omrat.main_widget.twRouteList
         row_count: int = table.rowCount()
 
         for row in range(row_count):
@@ -719,7 +731,7 @@ class AIS:
             leg_name: str | None = table.item(row, 2).text() if table.item(row, 2) else None
             start_point: str | None = table.item(row, 3).text() if table.item(row, 3) else None
             end_point: str | None = table.item(row, 4).text() if table.item(row, 4) else None
-            width: str|None = table.item(row, 5).text() if table.item(row, 5) else None
+            width: str | None = table.item(row, 5).text() if table.item(row, 5) else None
 
             if segment_id and route_id and start_point and end_point and width:
                 segment_data[segment_id] = {

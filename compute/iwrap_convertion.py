@@ -23,7 +23,7 @@ import math
 import os
 import re
 import uuid
-import xml.etree.ElementTree as ET  # nosec B405 - parsing is delegated to defusedxml; this import is only used to build trees (ET.Element / ET.SubElement / ET.tostring)
+import xml.etree.ElementTree as ET  # nosec B405 - parsing delegated to defusedxml; used only to build trees
 from typing import Dict, List, Optional, Tuple
 
 # defusedxml protects against XML attacks (XXE, billion laughs, etc.) when
@@ -35,10 +35,15 @@ from defusedxml import minidom as defused_minidom
 
 # Geometry fixing utilities
 try:
-    from shapely.geometry import Polygon as ShpPolygon, MultiPolygon as ShpMultiPolygon, GeometryCollection as ShpGeometryCollection
+    from shapely.geometry import (  # noqa: E501
+        Polygon as ShpPolygon,
+        MultiPolygon as ShpMultiPolygon,
+        GeometryCollection as ShpGeometryCollection,
+    )
     HAVE_SHAPELY = True
 except Exception:
     HAVE_SHAPELY = False
+
 
 def parse_wkt_polygon(wkt):
     if not isinstance(wkt, str):
@@ -63,6 +68,7 @@ def parse_wkt_polygon(wkt):
     except Exception:
         return []
 
+
 def parse_point_str(point_str):
     try:
         lon_str, lat_str = point_str.strip().split()
@@ -74,10 +80,12 @@ def parse_point_str(point_str):
 def new_guid() -> str:
     return str(uuid.uuid4()).upper()
 
+
 def prettify_xml(elem: ET.Element) -> str:
     rough_string = ET.tostring(elem, encoding='utf-8')
     reparsed = defused_minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="  ")
+
 
 def build_drifting(parent: ET.Element, drift: dict):
     drifting = ET.SubElement(parent, 'drifting')
@@ -124,6 +132,7 @@ def build_drifting(parent: ET.Element, drift: dict):
             iwrap_angle = (angle + 180) % 360
             dd.set(f'angle_{iwrap_angle}', str(rose.get(akey)))
 
+
 def build_bridges(parent: ET.Element, objects: list):
     if not objects:
         return
@@ -131,9 +140,9 @@ def build_bridges(parent: ET.Element, objects: list):
     for obj in objects:
         # Support dict or row
         if isinstance(obj, dict):
-            name = str(obj.get('id',''))
-            height = obj.get('height', obj.get('heights',''))
-            polygon = obj.get('polygon','')
+            name = str(obj.get('id', ''))
+            height = obj.get('height', obj.get('heights', ''))
+            polygon = obj.get('polygon', '')
         else:
             name = str(obj[0]) if len(obj) > 0 else ''
             height = obj[1] if len(obj) > 1 else ''
@@ -150,6 +159,7 @@ def build_bridges(parent: ET.Element, objects: list):
                 item.set('height', str(height))
             item.set('lat', str(lat))
             item.set('lon', str(lon))
+
 
 def build_waypoints(parent: ET.Element, segment_data: dict):
     # Build waypoints with attributes per XSD and required child leg_leg_distributions
@@ -175,6 +185,7 @@ def build_waypoints(parent: ET.Element, segment_data: dict):
             ET.SubElement(w, 'leg_leg_distributions')  # required container
             added[key] = guid
     return added
+
 
 def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
     legs = ET.SubElement(parent, 'legs')
@@ -220,6 +231,7 @@ def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
         }
     return leg_map
 
+
 def build_leg_leg_distributions(parent_waypoints: ET.Element, segment_data: dict, waypoint_lookup: dict, leg_map: dict):
     # Build a mapping from waypoint coordinates to waypoint elements (attributes present)
     waypoint_nodes = {}
@@ -254,6 +266,7 @@ def build_leg_leg_distributions(parent_waypoints: ET.Element, segment_data: dict
         dist.set('season', '-1')
         dist.set('fraction', '1')
         counter += 1
+
 
 def _as_float(v) -> float:
     try:
@@ -328,6 +341,7 @@ def build_manoeuvring_aspects_legs(parent: ET.Element, segment_data: dict, td_gu
         mal_guid_map[str(seg_id)] = {'ftl': guid_ftl, 'ltf': guid_ltf}
     return mal_guid_map
 
+
 _ROOT_META_DEFAULTS: dict[str, str] = {
     'fv': '2', 'major': '1', 'minor': '0', 'seasons': '0', 'current_season': '-1',
     'data_job_id': '', 'denc_used': '', 'data_country': '', 'data_start': '', 'data_end': '',
@@ -347,7 +361,11 @@ _ROOT_META_DEFAULTS: dict[str, str] = {
     'ship_type_def_dont_care': '', 'shared_area_store_file': '', 'height_mode': '0',
     'height_scale_factor': '1', 'height_test': '0', 'fixed_to_year_factor': '0',
     'use_fixed_to_year_factor': 'false',
-    'misc': 'B|calc_allision|1@B|calc_area|1@B|calc_collisions|1@B|calc_crossing|1@B|calc_drifting_allision|1@B|calc_drifting_grounding|1@B|calc_grounding|1@B|calc_headon_overtaking|1@B|calc_powered_allision|1@B|calc_powered_grounding|1',
+    'misc': (
+        'B|calc_allision|1@B|calc_area|1@B|calc_collisions|1@B|calc_crossing|1'
+        '@B|calc_drifting_allision|1@B|calc_drifting_grounding|1@B|calc_grounding|1'
+        '@B|calc_headon_overtaking|1@B|calc_powered_allision|1@B|calc_powered_grounding|1'
+    ),
     'default_class_a_length': '50', 'default_class_b_length': '25',
     'default_class_a_type': 'Other ship', 'default_class_b_type': 'Other ship',
 }
@@ -441,6 +459,7 @@ def generate_iwrap_xml(data: dict) -> ET.Element:
     ET.SubElement(root, 'tug_boats')
     _add_global_settings(root)
     return root
+
 
 def _make_simple_polygons(
     parts: List[List[Tuple[float, float]]]
@@ -569,6 +588,7 @@ def build_areas(parent: ET.Element, depths: list):
         polygons = _make_simple_polygons(_collect_coords_from_polygon(polygon))
         _emit_area_polygons(areas, dep_id, dep_depth, is_object_area, polygons)
 
+
 def parse_generic_polygon(s: str) -> list:
     """Parse generic polygon coordinate strings.
 
@@ -596,6 +616,7 @@ def parse_generic_polygon(s: str) -> list:
         return []
     return coords
 
+
 def parse_wkt_multipolygon(s: str) -> list:
     """Parse WKT MULTIPOLYGON into list of polygons, each a list of (lat, lon).
 
@@ -612,7 +633,7 @@ def parse_wkt_multipolygon(s: str) -> list:
         start = s.upper().find('MULTIPOLYGON')
         open_paren = s.find('(', start)
         close_paren = s.rfind(')')
-        inner = s[open_paren+1:close_paren].strip()
+        inner = s[open_paren + 1:close_paren].strip()
 
         # Find all outer rings: sequences wrapped as (( ... )) ignoring inner holes
         import re
@@ -758,7 +779,7 @@ def _emit_shiptypes_from_matrices(shiptypes_el: ET.Element, freq_mat, speed_mat,
 
 
 def _emit_shiptypes_grouped(shiptypes_el: ET.Element, freq_mat, speed_mat, draft_mat,
-                             height_mat, beam_mat, types: list, intervals: list):
+                            height_mat, beam_mat, types: list, intervals: list):
     groups: dict[str, list[int]] = {}
     for r, type_name in enumerate(types):
         groups.setdefault(_UI_TO_IWRAP.get(type_name, 'Other ship'), []).append(r)
@@ -782,7 +803,7 @@ def _emit_shiptypes_grouped(shiptypes_el: ET.Element, freq_mat, speed_mat, draft
 
 
 def _emit_td_shiptypes(shiptypes_el: ET.Element, dir_data: dict, types: list, intervals: list,
-                        global_shiptypes: list, global_categories: list, leg_td: dict):
+                       global_shiptypes: list, global_categories: list, leg_td: dict):
     freq_mat = _get_matrix(dir_data, 'Frequency (ships/year)')
     speed_mat = _get_matrix(dir_data, 'Speed (knots)')
     draft_mat = _get_matrix(dir_data, 'Draught (meters)')
@@ -790,7 +811,7 @@ def _emit_td_shiptypes(shiptypes_el: ET.Element, dir_data: dict, types: list, in
     beam_mat = _get_matrix(dir_data, 'Ship Beam (meters)')
     if not types:
         leg_st = global_shiptypes or [{'name': 'General cargo ship',
-                                        'categories': global_categories or leg_td.get('categories', [])}]
+                                       'categories': global_categories or leg_td.get('categories', [])}]
         pre_cats = [c for st in leg_st for c in (st.get('categories', []) or [])]
         if pre_cats:
             _emit_shiptypes_prebuilt(shiptypes_el, leg_st)
@@ -801,7 +822,7 @@ def _emit_td_shiptypes(shiptypes_el: ET.Element, dir_data: dict, types: list, in
 
 
 def build_traffic_distributions(parent: ET.Element, traffic_data: dict, segment_data: dict,
-                                 ship_categories: dict | None = None) -> dict[str, dict[str, str]]:
+                                ship_categories: dict | None = None) -> dict[str, dict[str, str]]:
     """Map .omrat traffic_data into IWRAP traffic_distributions XML elements."""
     td_root = ET.SubElement(parent, 'traffic_distributions')
     td_guid_map: dict[str, dict[str, str]] = {}
@@ -823,6 +844,7 @@ def build_traffic_distributions(parent: ET.Element, traffic_data: dict, segment_
             _emit_td_shiptypes(shiptypes_el, dir_data, types, intervals,
                                global_shiptypes, global_categories, leg_td)
     return td_guid_map
+
 
 def write_iwrap_xml(json_path: str, output_path: str):
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -981,8 +1003,12 @@ def _fill_repair_combi(repair_el, repair_dict: dict, debug: bool) -> None:
             print(f"    Normal repair: mean={p0}, std={norm_std}")
     elif ('Delta' in combi and 'Beta' in combi) or dist_type == 'Weibull':
         repair_dict.update({
-            'use_lognormal': False, 'dist_type': 'weibull', 'wb_shape': p1, 'wb_loc': p2, 'wb_scale': p0,
-            'func': f"__import__('scipy.stats', fromlist=['weibull_min']).weibull_min(c={p1}, loc={p2}, scale={p0}).cdf(x)",
+            'use_lognormal': False, 'dist_type': 'weibull',
+            'wb_shape': p1, 'wb_loc': p2, 'wb_scale': p0,
+            'func': (
+                f"__import__('scipy.stats', fromlist=['weibull_min'])"
+                f".weibull_min(c={p1}, loc={p2}, scale={p0}).cdf(x)"
+            ),
         })
         if debug:
             print(f"    Weibull repair: shape={p1}, loc={p2}, scale={p0}")
@@ -1038,7 +1064,7 @@ def _parse_drifting_el(drifting_el, debug: bool) -> dict:
 
 
 def _parse_category_el(cat_el, omrat_type: str, ship_code: int, length_interval: str,
-                        ship_type_codes: dict, debug: bool) -> dict:
+                       ship_type_codes: dict, debug: bool) -> dict:
     draught_val = float(cat_el.get('draught', 0))
     height_val = float(cat_el.get('height_1', 0))
     beam_val = float(cat_el.get('width', 0))
@@ -1171,7 +1197,7 @@ def _haversine_m(start_point: str, end_point: str) -> float:
         sp, ep = start_point.split(), end_point.split()
         if len(sp) == 2 and len(ep) == 2:
             lon1, lat1, lon2, lat2 = map(radians, [float(sp[0]), float(sp[1]), float(ep[0]), float(ep[1])])
-            a = sin((lat2-lat1)/2)**2 + cos(lat1)*cos(lat2)*sin((lon2-lon1)/2)**2
+            a = sin((lat2 - lat1) / 2)**2 + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2)**2
             return 2 * asin(sqrt(a)) * 6371000
     except Exception:
         pass
@@ -1226,7 +1252,7 @@ def _build_ship_categories_from_intervals(all_length_intervals: set) -> tuple[li
 
 
 def _fill_direction_from_td(direction_data: dict, td_info: dict,
-                             omrat_types: list, intervals_list: list, debug: bool) -> None:
+                            omrat_types: list, intervals_list: list, debug: bool) -> None:
     for (ship_type, li), cat_data in td_info['categories'].items():
         try:
             ti = omrat_types.index(ship_type)
@@ -1242,7 +1268,7 @@ def _fill_direction_from_td(direction_data: dict, td_info: dict,
 
 
 def _build_traffic_matrices_el(legs_el, td_map: dict, omrat_types: list,
-                                intervals_list: list, debug: bool) -> dict:
+                               intervals_list: list, debug: bool) -> dict:
     traffic_data: dict = {}
     if legs_el is None:
         return traffic_data
@@ -1252,10 +1278,10 @@ def _build_traffic_matrices_el(legs_el, td_map: dict, omrat_types: list,
     for idx, leg_el in enumerate(legs_el.findall('leg'), start=1):
         ftl_guid = leg_el.get('traffic_distribution_first_to_last_guid', '')
         ltf_guid = leg_el.get('traffic_distribution_last_to_first_guid', '')
-        east_data = {k: [[0.0]*ni for _ in range(nt)] for k in td_keys}
-        east_data['Scaling (%)'] = [[100.0]*ni for _ in range(nt)]
-        west_data = {k: [[0.0]*ni for _ in range(nt)] for k in td_keys}
-        west_data['Scaling (%)'] = [[100.0]*ni for _ in range(nt)]
+        east_data = {k: [[0.0] * ni for _ in range(nt)] for k in td_keys}
+        east_data['Scaling (%)'] = [[100.0] * ni for _ in range(nt)]
+        west_data = {k: [[0.0] * ni for _ in range(nt)] for k in td_keys}
+        west_data['Scaling (%)'] = [[100.0] * ni for _ in range(nt)]
         if ftl_guid in td_map:
             _fill_direction_from_td(east_data, td_map[ftl_guid], omrat_types, intervals_list, debug)
         if ltf_guid in td_map:
@@ -1289,7 +1315,8 @@ def _classify_area_el(area_el) -> tuple[str, str, str, bool, str]:
         height_val = str(abs(depth_num)) if depth_num < 0 else ('0' if is_obj else depth_val)
     except ValueError:
         is_obj = depth_val.strip().startswith('-') or str(area_type).strip() != '0'
-        height_val = depth_val.strip().lstrip('-') if depth_val.strip().startswith('-') else ('0' if is_obj else depth_val)
+        stripped = depth_val.strip()
+        height_val = stripped.lstrip('-') if stripped.startswith('-') else ('0' if is_obj else depth_val)
     return name, depth_val, wkt, is_obj, height_val
 
 
@@ -1357,8 +1384,8 @@ def _compute_bend_angles(segment_data: dict, debug: bool) -> None:
                 try:
                     sp1, ep1 = seg['Start_Point'].split(), seg['End_Point'].split()
                     sp2, ep2 = other['Start_Point'].split(), other['End_Point'].split()
-                    b1 = math.degrees(math.atan2(float(ep1[0])-float(sp1[0]), float(ep1[1])-float(sp1[1]))) % 360
-                    b2 = math.degrees(math.atan2(float(ep2[0])-float(sp2[0]), float(ep2[1])-float(sp2[1]))) % 360
+                    b1 = math.degrees(math.atan2(float(ep1[0]) - float(sp1[0]), float(ep1[1]) - float(sp1[1]))) % 360
+                    b2 = math.degrees(math.atan2(float(ep2[0]) - float(sp2[0]), float(ep2[1]) - float(sp2[1]))) % 360
                     bend = abs(b2 - b1)
                     if bend > 180:
                         bend = 360 - bend
@@ -1404,10 +1431,10 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
     _parse_global_settings_el(root.find('global_settings'), result, debug)
     _compute_bend_angles(result['segment_data'], debug)
     if debug:
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print(f"Segments: {len(result['segment_data'])}, Depths: {len(result['depths'])}, "
               f"Objects: {len(result['objects'])}, Traffic legs: {len(result['traffic_data'])}")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
     return result
 
 

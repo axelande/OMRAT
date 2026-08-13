@@ -14,13 +14,13 @@ from qgis.PyQt.QtWidgets import QWidget
 sys.path.append('.')
 
 # --- Backward-compatible re-exports ---
-from compute.drift_corridor_geometry import (  # noqa: F401
+from compute.drift_corridor_geometry import (  # noqa: F401,E402
     _compass_idx_to_math_idx,
     _extract_obstacle_segments,
     _create_drift_corridor,
     _segment_intersects_corridor,
 )
-from compute.data_preparation import (  # noqa: F401
+from compute.data_preparation import (  # noqa: F401,E402
     get_distribution,
     clean_traffic,
     safe_load_wkt,
@@ -31,11 +31,11 @@ from compute.data_preparation import (  # noqa: F401
 )
 
 # --- Mixin imports ---
-from compute.drifting_model import DriftingModelMixin
-from compute.ship_collision_model import ShipCollisionModelMixin
-from compute.powered_model import PoweredModelMixin
-from compute.drifting_report import DriftingReportMixin
-from compute.visualization import VisualizationMixin
+from compute.drifting_model import DriftingModelMixin  # noqa: E402
+from compute.ship_collision_model import ShipCollisionModelMixin  # noqa: E402
+from compute.powered_model import PoweredModelMixin  # noqa: E402
+from compute.drifting_report import DriftingReportMixin  # noqa: E402
+from compute.visualization import VisualizationMixin  # noqa: E402
 
 if TYPE_CHECKING:
     from omrat import OMRAT
@@ -111,9 +111,9 @@ class Calculation(
         # Phase weights (must sum to 1.0)
         phase_weights = {
             'spatial': (0.0, 0.40),
-            'shadow':  (0.40, 0.60),
+            'shadow': (0.40, 0.60),
             'cascade': (0.60, 0.90),
-            'layers':  (0.90, 1.0),
+            'layers': (0.90, 1.0),
         }
 
         start, end = phase_weights.get(phase, (0.0, 1.0))

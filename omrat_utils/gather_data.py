@@ -21,6 +21,7 @@ def dict_ndarray_to_list(data: dict[str, dict[str, np.ndarray]]) -> dict[str, di
                 result[key][subkey] = value
     return result
 
+
 def dict_list_to_ndarray(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Convert all list values in a nested dict to np.ndarray."""
     result: dict[str, dict[str, Any]] = {}
@@ -32,12 +33,13 @@ def dict_list_to_ndarray(data: dict[str, dict[str, Any]]) -> dict[str, dict[str,
             else:
                 result[key][subkey] = value
     return result
-    
+
+
 class GatherData:
     def __init__(self, parent: OMRAT) -> None:
         self.p = parent
         self.data = {}
-               
+
     def get_segment_tbl(self):
         """Extends the segment_data in self.data, must be called after it is created."""
         for j, col in enumerate(['Segment_Id', 'Route_Id', 'Leg_name', 'Start_Point', 'End_Point', 'Width']):
@@ -47,18 +49,18 @@ class GatherData:
                     return
                 value = item.text()
                 self.data["segment_data"][key][col] = copy.deepcopy(value)
-        
+
     def get_all_for_save(self) -> dict[str, Any]:
         self.data['pc'] = copy.deepcopy(self.p.causation_f.data)
         self.data['drift'] = copy.deepcopy(self.p.drift_values)
-        self.p.distributions.change_dist_segment(self.p.distributions.last_id) # Saves the current settings on the leg
+        self.p.distributions.change_dist_segment(self.p.distributions.last_id)  # Saves the current settings on the leg
         self.data['traffic_data'] = copy.deepcopy(self.p.traffic_data)
         self.data['segment_data'] = copy.deepcopy(self.p.segment_data)
         for key, item in self.data['segment_data'].items():
             self.data['segment_data'][key]['dist1'] = copy.deepcopy(item['dist1'].tolist())
             self.data['segment_data'][key]['dist2'] = copy.deepcopy(item['dist2'].tolist())
         self.get_segment_tbl()
-        
+
         self.data['depths'] = []
         self.data['objects'] = []
         self.copy_depths_and_objects()
@@ -157,7 +159,7 @@ class GatherData:
             'spill_fraction': default_spill_fraction(),
             'catastrophe_levels': default_catastrophe_levels(),
         }
-    
+
     def copy_depths_and_objects(self):
         # Read rows from QTableWidget instead of iterating the widget
         depth_rows = self.obtain_table_data(self.p.main_widget.twDepthList)
@@ -246,7 +248,7 @@ class GatherData:
             # If widget not available, leave defaults (empty) to avoid breaking save
             pass
         return result
-    
+
     def obtain_table_data(self, tbl) -> list:
         """Obtain data from a table"""
         tbl_data = []
@@ -293,7 +295,7 @@ class GatherData:
             except Exception:
                 rows.append([str(item), '', ''])
         return rows
-    
+
     def _load_traffic_scaling(self, data: dict) -> None:
         from omrat_utils.handle_traffic import _default_traffic_scaling
         scaling_block = data.get('traffic_scaling')
@@ -382,7 +384,7 @@ class GatherData:
         self.populate_tbl(object_rows, self.p.main_widget.twObjectList)
         self._populate_objects_and_canvas(data, depth_rows, object_rows)
         self._populate_consequence_and_junctions(data)
-            
+
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.
 
@@ -424,14 +426,14 @@ class GatherData:
             self.p.main_widget.cbTrafficSelectSeg.addItem(str(key))
         self.p.traffic.c_seg = self.p.main_widget.cbTrafficSelectSeg.currentText()
 
-    def populate_tbl(self, data:list, tbl:QTableWidget):
+    def populate_tbl(self, data: list, tbl: QTableWidget):
         tbl.setRowCount(len(data))
         for i, line in enumerate(data):
             for j, value in enumerate(line):
                 item = QTableWidgetItem(value)
                 tbl.setItem(i, j, item)
-    
-    def populate_segment_tbl(self, data:dict [str, dict[str, Any]], tbl:QTableWidget):
+
+    def populate_segment_tbl(self, data: dict[str, dict[str, Any]], tbl: QTableWidget):
         tbl.setRowCount(len(data))
         for j, col in enumerate(['Segment_Id', 'Route_Id', 'Leg_name', 'Start_Point', 'End_Point', 'Width']):
             for i, key in enumerate(data.keys()):

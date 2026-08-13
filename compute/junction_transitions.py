@@ -14,7 +14,6 @@ the transition logic end-to-end.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Iterable
 
 # Default tolerance for matching an inbound and outbound passage as
 # belonging to the same trip.  Tracks that pass two legs more than this

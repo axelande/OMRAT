@@ -72,6 +72,7 @@ def _quote_sqlite_ident(name: str) -> str:
         raise ValueError(f"Invalid SQL identifier: {name!r}")
     return f'"{name}"'
 
+
 # WGS84 mean radius (metres) — same value used inside aissegments.tdkc.
 _EARTH_RADIUS_M = 6_371_008.8
 

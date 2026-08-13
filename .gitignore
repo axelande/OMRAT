@@ -11,6 +11,7 @@ litterature/
 tmpclaude-*
 drifting_report.md
 examples/
+tool_comparison_study/
 
 .vscode/*
 .qgis-settings/

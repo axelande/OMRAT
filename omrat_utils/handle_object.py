@@ -17,6 +17,7 @@ import tempfile
 if TYPE_CHECKING:
     from omrat import OMRAT
 
+
 def get_leg_coordinates(tbl: QTableWidget) -> list[tuple[float, float]]:
     """Extract all start/end coordinates from the route table."""
     coords: list[tuple[float, float]] = []
@@ -35,19 +36,24 @@ def get_leg_coordinates(tbl: QTableWidget) -> list[tuple[float, float]]:
                 continue
     return coords
 
+
 def get_bbox(coords: list[tuple[float, float]]) -> tuple[float, float, float, float]:
     """Return min/max lat/lon from a list of (lon, lat) tuples."""
     lats = [lat for _, lat in coords]
     lons = [lon for lon, _ in coords]
     return min(lats), max(lats), min(lons), max(lons)
 
-def expand_bbox(min_lat: float, max_lat: float, min_lon: float, max_lon: float, extension_percent: float) -> tuple[float, float, float, float]:
+
+def expand_bbox(
+    min_lat: float, max_lat: float, min_lon: float, max_lon: float, extension_percent: float
+) -> tuple[float, float, float, float]:
     """Expand the bounding box by a percentage."""
     lat_range = max_lat - min_lat
     lon_range = max_lon - min_lon
     lat_ext = lat_range * extension_percent / 100.0
     lon_ext = lon_range * extension_percent / 100.0
     return min_lat - lat_ext, max_lat + lat_ext, min_lon - lon_ext, max_lon + lon_ext
+
 
 def get_depth_color(depth: float, max_depth: float = 50.0) -> QColor:
     """Get a blue color for depth: 0m = dark blue (danger), max_depth = light/white (safe).
@@ -72,14 +78,16 @@ def get_depth_color(depth: float, max_depth: float = 50.0) -> QColor:
 
     return QColor(r, g, b)
 
+
 def build_gebco_url(min_lat: float, max_lat: float, min_lon: float, max_lon: float, api_key: str) -> str:
     return (
-        f"https://portal.opentopography.org/API/globaldem?"
+        "https://portal.opentopography.org/API/globaldem?"
         f"demtype=GEBCOIceTopo&south={min_lat}&north={max_lat}&west={min_lon}&east={max_lon}"
         f"&outputFormat=GTiff&API_Key={api_key}"
     )
 
-def download_geotiff(url: str, save_path: str = "gebco_download.tif", timeout: float = 60.0) -> str:
+
+def download_geotiff(url: str, save_path: str = "gebco_download.ti", timeout: float = 60.0) -> str:
     """
     Download a GeoTIFF file from the given URL and save it to disk.
     Returns the path to the saved file.
@@ -94,6 +102,7 @@ def download_geotiff(url: str, save_path: str = "gebco_download.tif", timeout: f
         for chunk in response.iter_content(chunk_size=8192):
             f.write(chunk)
     return save_path
+
 
 class OObject:
     def __init__(self, parent: "OMRAT") -> None:
@@ -110,7 +119,7 @@ class OObject:
         self.loaded_object_areas: list[QgsVectorLayer] = []
         self.object_layer_row: dict[str, int] = {}
         self.object_buffer_edits = []
-        
+
     # ------------------------------------------------------------------
     # Consolidated depth layer helpers
     # ------------------------------------------------------------------
@@ -125,7 +134,7 @@ class OObject:
         if pr is not None:
             pr.addAttributes([
                 QgsField("id", QVariant.Int),      # type: ignore[arg-type]
-                QgsField("depth", QVariant.Double), # type: ignore[arg-type]
+                QgsField("depth", QVariant.Double),  # type: ignore[arg-type]
             ])
             layer.updateFields()
 
@@ -247,7 +256,7 @@ class OObject:
         self.area.featureAdded.connect(self.on_feature_added)
         self.p.iface.actionAddFeature().trigger()
         QgsProject.instance().addMapLayer(self.area)
-    
+
     def on_feature_added(self, fid):
         """This will be called after the user right-clicks to finish the polygon"""
         try:
@@ -259,7 +268,7 @@ class OObject:
             self.add_simple_depth()
         if self.area_type == 'object':
             self.add_simple_object()
-    
+
     def load_area(self, name: str, wkt: str, row: int | None = None,
                   value: str | None = None, value_field: str | None = None,
                   defer_style: bool = False):
@@ -306,7 +315,9 @@ class OObject:
                 row = self.p.main_widget.twObjectList.rowCount() - 1
             self.object_layer_row[layer_id] = row
             if buf is not None:
-                buf.geometryChanged.connect(lambda fid, geom, lid=layer_id: self.on_area_geometry_changed_wrapper(lid, 'object', fid, geom))
+                buf.geometryChanged.connect(
+                    lambda fid, geom, lid=layer_id: self.on_area_geometry_changed_wrapper(lid, 'object', fid, geom)
+                )
                 self.object_buffer_edits.append(buf)
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         if self.area_type == 'object':
@@ -340,7 +351,7 @@ class OObject:
         if value - interval < max_depth:
             self.p.main_widget.TWDepthIntervals.insertRow(row)
             self.p.main_widget.TWDepthIntervals.setItem(row, 0, QTableWidgetItem(str(max_depth)))
-            
+
     def obtain_gebco_data(self):
         tbl = self.p.main_widget.twRouteList
         coords = get_leg_coordinates(tbl)
@@ -363,9 +374,10 @@ class OObject:
         # Download geotiff to local temp folder
         temp_dir = tempfile.gettempdir()
         geotiff_path = download_geotiff(url, save_path=os.path.join(temp_dir, 'gebco_download.tif'))
-        intervals = [float(self.p.main_widget.TWDepthIntervals.item(i, 0).text()) for i in range(self.p.main_widget.TWDepthIntervals.rowCount())]
+        tw = self.p.main_widget.TWDepthIntervals
+        intervals = [float(tw.item(i, 0).text()) for i in range(tw.rowCount())]
         self.vectorize_and_add_geotiff(geotiff_path, intervals)
-        
+
     def vectorize_and_add_geotiff(
         self,
         geotiff_path: str,
@@ -375,7 +387,7 @@ class OObject:
         Vectorize the GeoTIFF raster using depth intervals and add the resulting polygons to QGIS.
         """
         # Create a unique layer name for the memory layer
-        
+
         temp_path = os.path.join(tempfile.gettempdir(), "tmp.gpkg")
 
         processing.run(
@@ -414,7 +426,7 @@ class OObject:
             row = self.p.main_widget.twDepthList.rowCount()
             self.p.main_widget.twDepthList.insertRow(row)
             self.p.main_widget.twDepthList.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-            self.p.main_widget.twDepthList.setItem(row, 1, QTableWidgetItem(f"{interval}-{intervals[idx+1]}"))
+            self.p.main_widget.twDepthList.setItem(row, 1, QTableWidgetItem(f"{interval}-{intervals[idx + 1]}"))
             self.p.main_widget.twDepthList.setItem(row, 2, QTableWidgetItem(wkt))
 
             # Add to consolidated depth layer (defer styling until after loop)
@@ -422,7 +434,7 @@ class OObject:
             self._add_depth_feature(row + 1, depth_val, wkt, row, defer_style=True)
 
         self._apply_depth_graduated_style()
-    
+
     def add_simple_depth(self):
         self.area_type = 'depth'
         if self.p.main_widget.pbAddSimpleDepth.text() == 'Save':
@@ -462,7 +474,7 @@ class OObject:
 
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
-        
+
     def add_simple_object(self):
         self.area_type = 'object'
         if self.p.main_widget.pbAddSimpleObject.text() == 'Save':
@@ -551,7 +563,8 @@ class OObject:
         if layer is None:
             return
 
-        self._populate_table(layer, self.p.main_widget.twObjectList, "object")  # Use the correct attribute name if different
+        # Use the correct attribute name if different
+        self._populate_table(layer, self.p.main_widget.twObjectList, "object")
 
     def load_depths(self) -> None:
         file_path = self._select_file("Välj shapefil med djupområden")
@@ -561,7 +574,7 @@ class OObject:
         # Load shapefile as temporary layer (not added to project)
         temp_layer = QgsVectorLayer(file_path, "temp_depths", "ogr")
         if not temp_layer.isValid():
-            print(f"Ogiltigt lager: Loaded Depths")
+            print("Ogiltigt lager: Loaded Depths")
             return
 
         tr = self._wgs84_transform(temp_layer)
@@ -587,7 +600,6 @@ class OObject:
 
         self._apply_depth_graduated_style()
 
-    
     def remove_depth(self) -> None:
         table = self.p.main_widget.twDepthList
         selected_rows: set[int] = {item.row() for item in table.selectedItems()}

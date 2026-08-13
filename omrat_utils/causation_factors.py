@@ -8,12 +8,13 @@ from qgis.PyQt.QtWidgets import QDialogButtonBox
 from compute.iwrap_defaults import default_pc_values
 from ui.causation_factor_widget import CausationFactorsWidget
 
+
 class CausationFactors:
     def __init__(self, parent: "OMRAT") -> None:
         self.p = parent
         self.cfw = CausationFactorsWidget()
         self.data: dict[str, float] = default_pc_values()
-        
+
     def commit_changes(self):
         # Powered and drifting causation factors
         self.data['p_pc'] = float(self.cfw.lePoweredPc.text())
@@ -28,7 +29,7 @@ class CausationFactors:
         # Grounding and allision causation factors
         self.data['grounding'] = float(self.cfw.leGroundingCf.text())
         self.data['allision'] = float(self.cfw.leAllisionCf.text())
-    
+
     def set_values(self):
         # Powered and drifting causation factors
         self.cfw.lePoweredPc.setText(f"{self.data['p_pc']}")
@@ -43,7 +44,7 @@ class CausationFactors:
         # Grounding and allision causation factors
         self.cfw.leGroundingCf.setText(f"{self.data['grounding']}")
         self.cfw.leAllisionCf.setText(f"{self.data['allision']}")
-    
+
     def run(self):
         self.cfw.show()
         self.set_values()

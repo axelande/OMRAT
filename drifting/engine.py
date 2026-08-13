@@ -67,7 +67,9 @@ def available_targets(depths: Iterable[DepthTarget], structures: Iterable[Struct
     }
 
 
-def interesting_targets(ship: ShipState, depths: Iterable[DepthTarget], structures: Iterable[StructureTarget]) -> dict[str, list]:
+def interesting_targets(
+    ship: ShipState, depths: Iterable[DepthTarget], structures: Iterable[StructureTarget]
+) -> dict[str, list]:
     anchoring_limit = ship.draught_m * ship.anchor_d
     grounding_depths = [d for d in depths if d.depth_m < ship.draught_m]
     anchoring_depths = [d for d in depths if d.depth_m < anchoring_limit]

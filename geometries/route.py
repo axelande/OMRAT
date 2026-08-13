@@ -8,7 +8,7 @@ from pyproj.aoi import AreaOfInterest
 from pyproj.database import query_utm_crs_info
 
 
-def get_best_utm(l_obj:list[BaseGeometry]) -> CRS:
+def get_best_utm(l_obj: list[BaseGeometry]) -> CRS:
     """returns the best CRS text for the project."""
     ll, ur = _get_ll_ur(l_obj)
     utm_crs_list = query_utm_crs_info(
@@ -24,7 +24,7 @@ def get_best_utm(l_obj:list[BaseGeometry]) -> CRS:
     return utm_crs
 
 
-def _get_ll_ur(l_obj:list[BaseGeometry]) -> list[list[float]]:
+def _get_ll_ur(l_obj: list[BaseGeometry]) -> list[list[float]]:
     """Get lower left and upper right based on a list of object"""
     ll: list[float] = [90, 180]
     ur: list[float] = [-90, -180]
@@ -41,7 +41,7 @@ def _get_ll_ur(l_obj:list[BaseGeometry]) -> list[list[float]]:
             ur[0] = max(xx)
         if max(yy) > ur[1]:
             ur[1] = max(yy)
-        
+
     return [ll, ur]
 
 
@@ -55,7 +55,7 @@ def cut(line, distance):
         pd = line.project(Point(p))
         if pd == distance:
             return [
-                LineString(coords[:i+1]),
+                LineString(coords[:i + 1]),
                 LineString(coords[i:])]
         if pd > distance:
             cp = line.interpolate(distance)
@@ -63,17 +63,20 @@ def cut(line, distance):
                 LineString(coords[:i] + [(cp.x, cp.y)]),
                 LineString([(cp.x, cp.y)] + coords[i:])]
 
-def proj_point(point:Point, distance:float, direction:float) -> Point:
+
+def proj_point(point: Point, distance: float, direction: float) -> Point:
     """Project a point at a disatnce and bearing"""
     new_y = point.xy[1][0] + math.cos(math.radians(direction)) * distance
     new_x = point.xy[0][0] + math.sin(math.radians(direction)) * distance
     return Point(new_x, new_y)
+
 
 def get_angle(pt1, pt2):
     """Returns the angle between p1, and p2 in degrees"""
     x_diff = pt2[1] - pt1[1]
     y_diff = pt2[0] - pt1[0]
     return math.degrees(math.atan2(y_diff, x_diff))
+
 
 def create_line_grid(line_utm: LineString, mu, std, width=100, height=100) -> list:
     line_utm_parts = []
@@ -90,9 +93,10 @@ def create_line_grid(line_utm: LineString, mu, std, width=100, height=100) -> li
     points = []
     for part in line_utm_parts:
         for dist in dist_90_line:
-            dist_point = proj_point(part.centroid, dist, line_dir+90)
+            dist_point = proj_point(part.centroid, dist, line_dir + 90)
             points.append(dist_point)
     return points
+
 
 def get_proj_transformer(line):
     wgs84 = CRS('EPSG:4326')
@@ -100,14 +104,15 @@ def get_proj_transformer(line):
     project = Transformer.from_crs(wgs84, utm, always_xy=True).transform
     return project
 
-def get_multiple_ed(line:LineString, objs:list, mu:float, std:float, 
-                       max_distance:float, width: int =100):
+
+def get_multiple_ed(line: LineString, objs: list, mu: float, std: float,
+                    max_distance: float, width: int = 100):
     distribution_line = []
     for i in range(1, width + 1):
         distribution_line.append(stats.norm.ppf(i / 100, mu, std))
     project = get_proj_transformer(line)
     line_utm = transform(project, line)
-    
+
     line_dir = get_angle(line_utm.coords[1], line_utm.coords[0])
     distances = {}
     lines = {}
@@ -116,11 +121,11 @@ def get_multiple_ed(line:LineString, objs:list, mu:float, std:float,
         distances[key] = []
         lines[key] = []
     for dist in distribution_line:
-        dist_point = proj_point(Point(line_utm.coords[1]), dist, line_dir-90)
+        dist_point = proj_point(Point(line_utm.coords[1]), dist, line_dir - 90)
         points.append(dist_point)
         for key, obj in enumerate(objs):
             object_utm = transform(project, obj["wkt"])
-            new_line = LineString((dist_point, proj_point(dist_point, max_distance, line_dir+180)))
+            new_line = LineString((dist_point, proj_point(dist_point, max_distance, line_dir + 180)))
             dist = split(new_line, object_utm).geoms[0]
             if not dist.is_valid:
                 lines[key].append(max_distance)
@@ -131,8 +136,9 @@ def get_multiple_ed(line:LineString, objs:list, mu:float, std:float,
                 break
     return distances, lines, points
 
-def get_multi_drift_distance(line:LineString, objs:list[BaseGeometry], mu: float, std: float, 
-                             width:int = 100, height:int = 100) -> float:
+
+def get_multi_drift_distance(line: LineString, objs: list[BaseGeometry], mu: float, std: float,
+                             width: int = 100, height: int = 100) -> float:
     project = get_proj_transformer(line)
     line_utm = transform(project, line)
     utm_objs: list[BaseGeometry] = []
@@ -150,11 +156,10 @@ def get_multi_drift_distance(line:LineString, objs:list[BaseGeometry], mu: float
         for direction in range(0, 360, 45):
             for key, obj in enumerate(utm_objs):
                 p2 = proj_point(point, max_distance, direction)
-                new_line = LineString((point, p2))    
+                new_line = LineString((point, p2))
                 if new_line.intersects(obj):
                     distances[key].append(point.distance(new_line.intersection(obj)))
                     directions[key].append(direction)
             lines.append(new_line)
-                    
-    return distances, lines, points, directions
 
+    return distances, lines, points, directions

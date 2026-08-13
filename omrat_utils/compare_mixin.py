@@ -18,7 +18,7 @@ existing wiring keeps working.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from qgis.core import Qgis, QgsMessageLog
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox

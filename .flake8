@@ -1,0 +1,28 @@
+[flake8]
+# 120 keeps lines readable without forcing awkward wraps in scientific code.
+max-line-length = 120
+
+# W503/W504 conflict with each other (line-break before vs after binary
+# operator).  E203 conflicts with numpy/pandas slice notation.
+extend-ignore =
+    W503,
+    W504,
+    E203,
+
+# Only check the code that ships to plugins.qgis.org.
+# Mirrors SHIPPED_TARGETS in tools/run_flake8.py — keep in sync.
+per-file-ignores =
+    # __init__ files commonly re-export symbols; F401 is noise there.
+    __init__.py:F401
+
+exclude =
+    .git,
+    __pycache__,
+    *.egg-info,
+    tests,
+    tools,
+    examples,
+    docs,
+    help,
+    zip_build,
+    tool_comparison_study,

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Iterable
+from typing import Any
 
 from compute.iwrap_defaults import (
     IWRAP_PC_DEFAULTS,

@@ -26,9 +26,6 @@ from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 from compute.iwrap_convertion import parse_iwrap_xml, write_iwrap_xml
 from omrat_utils.gather_data import GatherData
 
-if TYPE_CHECKING:
-    from omrat import OMRAT
-
 
 class IwrapIOMixin:
     """File-dialog-driven IWRAP export / import slots."""

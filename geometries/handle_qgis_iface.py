@@ -19,14 +19,16 @@ from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 from omrat_utils import PointTool
 
 
-
 def is_valid_point_pair(start: QgsPointXY, end: QgsPointXY) -> bool:
     return not (
         (-1 <= start.x() <= 1 and -1 <= start.y() <= 1) or
         (-1 <= end.x() <= 1 and -1 <= end.y() <= 1)
     )
 
-def calculate_tangent_line(mid: QgsPointXY, start: QgsPointXY, end: QgsPointXY, offset: float) -> tuple[QgsPointXY, QgsPointXY] | None:
+
+def calculate_tangent_line(
+    mid: QgsPointXY, start: QgsPointXY, end: QgsPointXY, offset: float
+) -> tuple[QgsPointXY, QgsPointXY] | None:
     dx = end.x() - start.x()
     dy = end.y() - start.y()
     length = (dx**2 + dy**2)**0.5
@@ -40,6 +42,7 @@ def calculate_tangent_line(mid: QgsPointXY, start: QgsPointXY, end: QgsPointXY, 
     start_tangent = QgsPointXY(mid.x() - perp_dx * offset, mid.y() - perp_dy * offset)
     end_tangent = QgsPointXY(mid.x() + perp_dx * offset, mid.y() + perp_dy * offset)
     return start_tangent, end_tangent
+
 
 class HandleQGISIface:
     def __init__(self, omrat: "OMRAT"):
@@ -86,7 +89,7 @@ class HandleQGISIface:
         if isinstance(prov, QgsVectorDataProvider):
             prov.addFeature(feat)
         self.current_start_point = QgsPointXY(point.x(), point.y())
-        
+
     def create_fields(self) -> QgsFields:
         fields = QgsFields()
         fields.append(QgsField("segmentId", QMetaType.Type.Int))
@@ -138,7 +141,7 @@ class HandleQGISIface:
             # Style the layer
             self.style_layer(vl)
             fet.setId(self.segment_id)
-                
+
             # Add the feature to the layer
             if pr is not None:
                 pr.addFeature(fet)
@@ -175,15 +178,15 @@ class HandleQGISIface:
             if edit_buffer is None:
                 print("Error: editBuffer is None")
                 return
-            
+
             edit_buffer.geometryChanged.connect(partial(self.on_geometry_changed_wrapper, self.segment_id))
             self.buffer_edits.append(edit_buffer)
             self.current_start_point = QgsPointXY(point.x(), point.y())
             self.point_layer = None
             self.save_route(QgsPoint(start_point.x(), start_point.y()), end_point)
-            
+
             vl.setCustomProperty("segment_id", self.segment_id)
-    
+
     def unload(self):
         """Remove temporary layers and disconnect signals."""
         # Remove the point layer
@@ -198,7 +201,7 @@ class HandleQGISIface:
         for obj in self.buffer_edits:
             try:
                 obj.geometryChanged.disconnect()
-            except:
+            except BaseException:
                 pass
         self.buffer_edits = []
         for layer in self.vector_layers:
@@ -517,7 +520,7 @@ class HandleQGISIface:
         if canvas is not None:
             canvas.refresh()
 
-    def on_geometry_changed(self, fid:int, geom:QgsGeometry):
+    def on_geometry_changed(self, fid: int, geom: QgsGeometry):
         """Handle geometry changes for a feature."""
         # Get the segment ID from the feature's attributes
         polyline: list[QgsGeometry] = geom.asPolyline()
@@ -540,7 +543,7 @@ class HandleQGISIface:
         assert isinstance(start_point, QgsPoint)
         assert isinstance(end_point, QgsPoint)
         # Update the start and end points in the table
-        assert(self.omrat.main_widget is not None)
+        assert (self.omrat.main_widget is not None)
 
         # Capture the OLD endpoints of this leg before we overwrite them
         # so the shared-vertex propagation (below) can match siblings.
@@ -644,7 +647,7 @@ class HandleQGISIface:
 
     def save_route(self, point1: QgsPoint, point2: QgsPoint):
         """Save route information to the twRouteList table."""
-        assert(self.omrat.main_widget is not None)
+        assert (self.omrat.main_widget is not None)
         row_id = self.omrat.main_widget.twRouteList.rowCount()
         self.omrat.main_widget.twRouteList.setRowCount(row_id + 1)
 
@@ -653,7 +656,7 @@ class HandleQGISIface:
         item2 = QTableWidgetItem(f'{self.cur_route_id}')
         item3 = QTableWidgetItem(f'{point1.asWkt(precision=5).split("(")[1].split(")")[0]}')
         item4 = QTableWidgetItem(f'{point2.asWkt(precision=5).split("(")[1].split(")")[0]}')
-        item5 = QTableWidgetItem(f'5000')  # Default width
+        item5 = QTableWidgetItem('5000')  # Default width
         item6 = QTableWidgetItem(f'LEG_{self.cur_route_id}_{self.segment_id}')  # Leg name
 
         # Add items to the table
@@ -671,7 +674,7 @@ class HandleQGISIface:
         if not self.item_changed_connected:
             self.omrat.main_widget.twRouteList.itemChanged.connect(self.on_width_changed)
             self.item_changed_connected = True
-            
+
     def on_route_table_cell_clicked(self, row: int, column: int):
         """Called when any cell in the route table is clicked."""
         segment_id_item = self.omrat.main_widget.twRouteList.item(row, 0)
@@ -682,11 +685,11 @@ class HandleQGISIface:
             except ValueError:
                 pass  # Handle or log invalid segment_id if needed
 
-    def update_segment_data(self, point:QgsPoint) -> None:
+    def update_segment_data(self, point: QgsPoint) -> None:
         main_widget = self.omrat.main_widget
-        assert(self.current_start_point is not None)
+        assert (self.current_start_point is not None)
         pointXY = QgsPointXY(point.x(), point.y())
-        degrees:float = (self.current_start_point.azimuth(pointXY) + 360) % 360
+        degrees: float = (self.current_start_point.azimuth(pointXY) + 360) % 360
         if degrees > 315 or degrees <= 45:
             main_widget.laDir1.setText('North going')
             main_widget.laDir2.setText('South going')
@@ -708,25 +711,30 @@ class HandleQGISIface:
         longitude = (pointXY.x() + self.current_start_point.x()) / 2
         utm_zone = int((longitude + 180) / 6) + 1
         is_northern = self.current_start_point.y() >= 0
-        utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{32600 + utm_zone if is_northern else 32700 + utm_zone}")
-        
-        transform_to_utm = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:4326"), utm_crs, QgsProject.instance())
+        utm_epsg = 32600 + utm_zone if is_northern else 32700 + utm_zone
+        utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+
+        transform_to_utm = QgsCoordinateTransform(
+            QgsCoordinateReferenceSystem("EPSG:4326"), utm_crs, QgsProject.instance()
+        )
         start_utm = transform_to_utm.transform(self.current_start_point)
         dist = start_utm.distance(transform_to_utm.transform(pointXY))
-        if f'{self.segment_id}' in self.omrat.segment_data:
-            self.omrat.segment_data[f'{self.segment_id}']['Start_Point'] = QgsPoint(self.current_start_point.x(),
-                                                                                    self.current_start_point.y()).asWkt()
-            self.omrat.segment_data[f'{self.segment_id}']['End_Point'] = point.asWkt()
-            self.omrat.segment_data[f'{self.segment_id}']['Dirs'] = dirs
-            self.omrat.segment_data[f'{self.segment_id}']['line_length'] = dist
+        seg_key = f'{self.segment_id}'
+        start_wkt = QgsPoint(self.current_start_point.x(), self.current_start_point.y()).asWkt()
+        if seg_key in self.omrat.segment_data:
+            self.omrat.segment_data[seg_key]['Start_Point'] = start_wkt
+            self.omrat.segment_data[seg_key]['End_Point'] = point.asWkt()
+            self.omrat.segment_data[seg_key]['Dirs'] = dirs
+            self.omrat.segment_data[seg_key]['line_length'] = dist
         else:
-            self.omrat.segment_data[f'{self.segment_id}'] = {'Start_Point': QgsPoint(self.current_start_point.x(),
-                                                                                     self.current_start_point.y()).asWkt(),
-                                                'End_Point': point.asWkt(),
-                                                'Dirs': dirs, 'Width': 5000, 'line_length': dist,
-                                                'Route_Id': self.cur_route_id,
-                                                'Segment_Id': self.segment_id,
-                                                'Leg_name': f'LEG_{self.cur_route_id}_{self.segment_id}'}
+            self.omrat.segment_data[seg_key] = {
+                'Start_Point': start_wkt,
+                'End_Point': point.asWkt(),
+                'Dirs': dirs, 'Width': 5000, 'line_length': dist,
+                'Route_Id': self.cur_route_id,
+                'Segment_Id': self.segment_id,
+                'Leg_name': f'LEG_{self.cur_route_id}_{self.segment_id}',
+            }
             # Stamp the write-once import baseline for the audit report.
             imported = getattr(self.omrat, 'segments_imported', None)
             if isinstance(imported, dict) and f'{self.segment_id}' not in imported:
@@ -741,7 +749,7 @@ class HandleQGISIface:
         main_widget.cbTrafficSelectSeg.addItem(f'{self.segment_id}')
         self.omrat.traffic.c_seg = f'{self.segment_id}'
         self.current_start_point = None
-        
+
     def ensure_tangent_layer(self):
         if self.tangent_layer is None:
             self.tangent_layer = QgsVectorLayer("LineString?crs=EPSG:4326", "Tangent Line", "memory")
@@ -751,28 +759,34 @@ class HandleQGISIface:
             self.vector_layers.append(self.tangent_layer)
         self.tangent_layer.startEditing()
 
-
     def ensure_tangent_fields(self):
         if self.tangent_layer.fields().lookupField("type") < 0:
             pr = self.tangent_layer.dataProvider()
             pr.addAttributes([QgsField("type", QMetaType.Type.QString)])
             self.tangent_layer.updateFields()
 
-    def calculate_midpoint_utm(self, start: QgsPointXY, end: QgsPointXY) -> tuple[QgsPointXY, QgsCoordinateTransform, QgsCoordinateTransform]:
+    def calculate_midpoint_utm(
+        self, start: QgsPointXY, end: QgsPointXY
+    ) -> tuple[QgsPointXY, QgsCoordinateTransform, QgsCoordinateTransform]:
         longitude = (start.x() + end.x()) / 2
         utm_zone = int((longitude + 180) / 6) + 1
         is_northern = start.y() >= 0
-        utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{32600 + utm_zone if is_northern else 32700 + utm_zone}")
-        
-        transform_to_utm = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:4326"), utm_crs, QgsProject.instance())
-        transform_to_canvas = QgsCoordinateTransform(utm_crs, QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
+        utm_epsg = 32600 + utm_zone if is_northern else 32700 + utm_zone
+        utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+
+        transform_to_utm = QgsCoordinateTransform(
+            QgsCoordinateReferenceSystem("EPSG:4326"), utm_crs, QgsProject.instance()
+        )
+        transform_to_canvas = QgsCoordinateTransform(
+            utm_crs, QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance()
+        )
 
         start_utm = transform_to_utm.transform(start)
         end_utm = transform_to_utm.transform(end)
         mid_utm = QgsPointXY((start_utm.x() + end_utm.x()) / 2, (start_utm.y() + end_utm.y()) / 2)
 
         return mid_utm, transform_to_utm, transform_to_canvas
-    
+
     def remove_existing_tangent(self, segment_id: int):
         ids = [f.id() for f in self.tangent_layer.getFeatures() if f["type"] == f"Tangent Line {segment_id}"]
         if ids:
@@ -785,7 +799,9 @@ class HandleQGISIface:
         fet.setAttributes([f"Tangent Line {segment_id}"])
         self.tangent_layer.dataProvider().addFeatures([fet])
 
-    def create_offset_lines(self, start_point: QgsPointXY, end_point: QgsPointXY, offset_distance: float, segment_id: int):
+    def create_offset_lines(
+        self, start_point: QgsPointXY, end_point: QgsPointXY, offset_distance: float, segment_id: int
+    ):
         if not is_valid_point_pair(start_point, end_point):
             return
 
@@ -807,7 +823,6 @@ class HandleQGISIface:
         self.tangent_layer.commitChanges()
         self.tangent_layer.triggerRepaint()
 
-        
     def on_width_changed(self, item: QTableWidgetItem):
         """Handle changes to the width in the twRouteList table."""
         column = item.column()
@@ -829,7 +844,7 @@ class HandleQGISIface:
                 # Remove the existing tangent line and redraw it with the updated width
                 self.create_offset_lines(start_point, end_point, width / 2, segment_id)
 
-    def point4326_from_wkt(self, wkt:str) -> QgsPoint:
+    def point4326_from_wkt(self, wkt: str) -> QgsPoint:
         """Converts a WKT string to a QgsGeometry in EPSG:4326."""
         q_point_base: QgsGeometry = QgsGeometry.fromWkt(wkt)
         assert isinstance(q_point_base, QgsGeometry)
@@ -837,12 +852,12 @@ class HandleQGISIface:
         q_point = QgsPoint(pointXY.x(), pointXY.y())
         crs = self.omrat.iface.mapCanvas().mapSettings().destinationCrs().authid()
         tr = QgsCoordinateTransform(QgsCoordinateReferenceSystem(crs),
-                                     QgsCoordinateReferenceSystem("EPSG:4326"),
-                                     QgsProject.instance())
+                                    QgsCoordinateReferenceSystem("EPSG:4326"),
+                                    QgsProject.instance())
         q_point.transform(tr)
         return q_point
 
-    def format_wkt(self, point:QgsPoint):
+    def format_wkt(self, point: QgsPoint):
         """Formats a point as a WKT string with six decimal places."""
         return f'{point.x():.6f} {point.y():.6f}'
 
@@ -989,7 +1004,6 @@ class HandleQGISIface:
             except Exception:
                 pass
 
-    def on_geometry_changed_wrapper(self, segment_id:int, fid:int, geom:QgsGeometry):
+    def on_geometry_changed_wrapper(self, segment_id: int, fid: int, geom: QgsGeometry):
         """Wrapper for the geometryChanged signal to pass the segment ID."""
         self.on_geometry_changed(segment_id, geom)
-        

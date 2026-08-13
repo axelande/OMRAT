@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any, TYPE_CHECKING, cast, Union
+from typing import Optional, Any, TYPE_CHECKING, cast
 import numpy as np
 from scipy import stats
 from matplotlib.axes import Axes
@@ -12,9 +12,10 @@ except ImportError:
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 if TYPE_CHECKING:
-    from omrat import OMRAT, OMRATMainWidget
-    
+    from omrat import OMRAT
+
 WidgetType = QLineEdit | QSpinBox | QDoubleSpinBox
+
 
 @dataclass
 class Normal:
@@ -22,11 +23,13 @@ class Normal:
     std: float = 0.0
     probability: float = 0.0
 
+
 @dataclass
 class Uniform:
     lower: float = 0.0
     upper: float = 0.0
     probability: float = 100.0
+
 
 @dataclass
 class Params:
@@ -38,16 +41,15 @@ class Params:
     def __iter__(self):
         return iter([self.normal1, self.normal2, self.normal3, self.uniform])
 
-        
+
 class Distributions:
-    def __init__(self, parent:"OMRAT"):
+    def __init__(self, parent: "OMRAT"):
         self.omrat = parent
         self.dw = parent.main_widget
         self.canvas: FigureCanvas | None = None
         self.last_id: str = '1'
         self.new_id: str = '1'
         self.main_connect()
-
 
     def main_connect(self):
         """Connects the values in the main widget"""
@@ -60,12 +62,12 @@ class Distributions:
                 widget.editingFinished.connect(lambda w=widget: self.adjust_weights(w))
             elif hasattr(widget, 'leaveEvent'):
                 widget.leaveEvent.connect(lambda w=widget: self.adjust_weights(w))
-            
+
         self.dw.sbUniformP1.valueChanged.connect(lambda _, w=self.dw.sbUniformP1: self.adjust_weights(w))
         self.dw.sbUniformP2.valueChanged.connect(lambda _, w=self.dw.sbUniformP2: self.adjust_weights(w))
 
         # Connect other widgets to run_update_plot
-        widgets_to_update:list[Any] = [
+        widgets_to_update: list[Any] = [
             self.dw.leNormMean1_1, self.dw.leNormMean1_2, self.dw.leNormMean1_3,
             self.dw.leNormStd1_1, self.dw.leNormStd1_2, self.dw.leNormStd1_3,
             self.dw.leUniformMin1, self.dw.leUniformMax1,
@@ -103,8 +105,8 @@ class Distributions:
             p.uniform.upper = self._assign(getattr(self.dw, f'leUniformMax{di}'))
             p.uniform.probability = self._assign(getattr(self.dw, f'sbUniformP{di}'))
         return p1, p2
-    
-    def change_dist_segment(self, new_id:str | None):
+
+    def change_dist_segment(self, new_id: str | None):
         """Change the segment information in the main widget upon user changing the
         segment in the combobox"""
         if new_id == '' or new_id is None:
@@ -148,8 +150,8 @@ class Distributions:
             return
         if 'mean1_1' not in self.omrat.segment_data[new_id]:
             self.omrat.segment_data[new_id].update({
-                'mean1_1': 0,'mean2_1': 0, 'weight1_1': 100,
-                'std1_1': 0,'std2_1': 0, 'weight2_1': 100, 
+                'mean1_1': 0, 'mean2_1': 0, 'weight1_1': 100,
+                'std1_1': 0, 'std2_1': 0, 'weight2_1': 100,
                 'mean1_2': 0, 'mean1_3': 0,
                 'std1_2': 0, 'std1_3': 0,
                 'mean2_2': 0, 'mean2_3': 0,
@@ -200,10 +202,10 @@ class Distributions:
         self.dw.LEMeanTimeSeconds2.setText(str(self.omrat.segment_data[new_id]['ai2']))
         self.last_id = new_id
 
-    def add_dist2plot(self, ax: Axes, parameters: Params, data: np.ndarray, first: bool, update_dist: bool=True):
+    def add_dist2plot(self, ax: Axes, parameters: Params, data: np.ndarray, first: bool, update_dist: bool = True):
         try:
             if update_dist:
-                fit_result: tuple[float, float] = stats.norm.fit(data) # type: ignore
+                fit_result: tuple[float, float] = stats.norm.fit(data)  # type: ignore
                 mean, std = fit_result
                 parameters.normal1.mean = round(mean)
                 parameters.normal1.std = round(std)
@@ -215,7 +217,7 @@ class Distributions:
                     self.dw.leNormMean2_1.setText(str(parameters.normal1.mean))
                     self.dw.leNormStd2_1.setText(str(parameters.normal1.std))
                     self.dw.leNormWeight2_1.setText("100")
-                parameters.normal1.probability = 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+                parameters.normal1.probability = 1
                 parameters.uniform.lower = data.min()
                 parameters.uniform.upper = data.max()
             x: np.ndarray = np.linspace(data.min(), data.max(), 1000, dtype=float)
@@ -231,7 +233,7 @@ class Distributions:
                         else:
                             ax.plot(x, y, f'--{c}', label=f'Normal2_{i}')
                     elif isinstance(dist, Uniform):
-                        y = stats.uniform.pdf(x, dist.lower, dist.upper-dist.lower)
+                        y = stats.uniform.pdf(x, dist.lower, dist.upper - dist.lower)
                         if first:
                             ax.plot(x, y, 'y', label='Uniform')
                         else:
@@ -247,8 +249,8 @@ class Distributions:
                 ax.set_ylim(current_ylim)
         except Exception as e:
             print(e)
-            
-    def run_update_plot(self, segment_id:str| None=None) -> None:
+
+    def run_update_plot(self, segment_id: str | None = None) -> None:
         print(f"[Distributions] run_update_plot called with segment_id={segment_id}, last_id={self.last_id}")
         self.change_dist_segment(segment_id)
         if segment_id is None:
@@ -260,7 +262,10 @@ class Distributions:
         if segment_id in self.omrat.ais.dist_data:
             d = self.omrat.ais.dist_data[segment_id]
         else:
-            print(f"[Distributions] segment_id={segment_id} not found in ais.dist_data keys={list(self.omrat.ais.dist_data.keys())}")
+            print(
+                f"[Distributions] segment_id={segment_id} not found in ais.dist_data"
+                f" keys={list(self.omrat.ais.dist_data.keys())}"
+            )
             segment = self.omrat.segment_data.get(segment_id, {})
             if 'dist1' in segment and 'dist2' in segment:
                 d = {'line1': segment['dist1'], 'line2': segment['dist2']}
@@ -273,15 +278,21 @@ class Distributions:
         except Exception:
             line1_len = 'n/a'
             line2_len = 'n/a'
-        print(f"[Distributions] dist_data ready for segment_id={segment_id}, line1_len={line1_len}, line2_len={line2_len}")
+        print(
+            f"[Distributions] dist_data ready for segment_id={segment_id},"
+            f" line1_len={line1_len}, line2_len={line2_len}"
+        )
         p1, p2 = self.get_leg_params()
         self.plot_data(d['line1'], d['line2'], p1, p2, update_dist)
         self.last_id = segment_id
-        
-    def plot_data(self, data: np.ndarray, data2: np.ndarray, parameters1: Params, parameters2: Params, 
-                  update_dist:bool=True) -> None:
+
+    def plot_data(self, data: np.ndarray, data2: np.ndarray, parameters1: Params, parameters2: Params,
+                  update_dist: bool = True) -> None:
         """Makes the plot in the top left corner"""
-        print(f"[Distributions] plot_data called: len(data)={len(data)}, len(data2)={len(data2)}, update_dist={update_dist}")
+        print(
+            f"[Distributions] plot_data called: len(data)={len(data)},"
+            f" len(data2)={len(data2)}, update_dist={update_dist}"
+        )
         import matplotlib.pyplot as plt
         import matplotlib.gridspec as gridspec
         import matplotlib
@@ -289,9 +300,9 @@ class Distributions:
         from matplotlib.axes import Axes
         print(f"[Distributions] matplotlib backend={matplotlib.get_backend()}")
 
-        fig: Figure = plt.figure(figsize=(10, 6)) # type: ignore
+        fig: Figure = plt.figure(figsize=(10, 6))  # type: ignore
         gs = gridspec.GridSpec(1, 1)
-        ax: Axes = fig.add_subplot(gs[0, 0]) # type: ignore
+        ax: Axes = fig.add_subplot(gs[0, 0])  # type: ignore
         ax.hist(data, bins=50, density=True, alpha=0.6, color='b', label=self.dw.laDir1.text())
         ax.hist(data2, bins=50, density=True, alpha=0.6, color='g', label=self.dw.laDir2.text())
         self.add_dist2plot(ax, parameters1, data, True, update_dist)
@@ -378,7 +389,7 @@ class Distributions:
         self.ensure_total_sum(widgets)
         self.run_update_plot(self.last_id)
 
-    def ensure_total_sum(self, widgets:list[Any]):
+    def ensure_total_sum(self, widgets: list[Any]):
         """Ensure the total sum of weights equals 100."""
         total = sum(
             float(w.text()) if hasattr(w, 'text') and w.text() != '' else w.value() if hasattr(w, 'value') else 0
@@ -393,7 +404,7 @@ class Distributions:
             last_widget.setText(str(last_value + difference))
         else:
             last_widget.setValue(last_widget.value() + int(difference))
-            
+
     def unload(self):
         """Cleanup resources and disconnect signals."""
         # Disconnect signals connected to self.dw
@@ -427,7 +438,6 @@ class Distributions:
                 if hasattr(widget, 'textChanged'):
                     widget.textChanged.disconnect()
                 elif hasattr(widget, 'valueChanged'):
-                    widget.valueChanged.disconnect() # type: ignore
+                    widget.valueChanged.disconnect()  # type: ignore
             except TypeError:
                 pass
-

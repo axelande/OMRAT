@@ -13,6 +13,7 @@ from compute.basic_equations import _safe_compile, _safe_eval
 if TYPE_CHECKING:
     from omrat_utils.handle_settings import DriftSettings
 
+
 class Repair:
     def __init__(self, settings: DriftSettings) -> None:
         self.sett = settings
@@ -20,8 +21,8 @@ class Repair:
         self.figure = plt.figure()
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
-        self.ax.tick_params(axis="y",direction="in", pad=-10)
-        self.ax.tick_params(axis="x",direction="in", pad=-10)
+        self.ax.tick_params(axis="y", direction="in", pad=-10)
+        self.ax.tick_params(axis="x", direction="in", pad=-10)
         self.figure.tight_layout()
         self.sett.dsw.canRepairViewLay.addWidget(self.canvas)
 

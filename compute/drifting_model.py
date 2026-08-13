@@ -17,46 +17,46 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
 logger = logging.getLogger(__name__)
-from pathlib import Path
+from pathlib import Path  # noqa: E402
 
-import geopandas as gpd
-from scipy import stats
-from shapely.geometry import LineString, Polygon
-from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
+import geopandas as gpd  # noqa: E402
+from scipy import stats  # noqa: E402
+from shapely.geometry import LineString, Polygon  # noqa: E402
+from shapely.geometry.base import BaseGeometry  # noqa: E402
+from shapely.ops import unary_union  # noqa: E402
 
 try:
     from shapely import make_valid as shp_make_valid
 except Exception:
     shp_make_valid = None
 
-from compute.basic_equations import get_not_repaired
-from compute.drift_corridor_geometry import (
+from compute.basic_equations import get_not_repaired  # noqa: E402
+from compute.drift_corridor_geometry import (  # noqa: E402
     _compass_idx_to_math_idx,
     _extract_obstacle_segments,
     _create_drift_corridor,
     segment_corridor_overlap_length,
 )
-from compute.data_preparation import (
+from compute.data_preparation import (  # noqa: E402
     clean_traffic,
     split_structures_and_depths,
     transform_to_utm,
     prepare_traffic_lists,
 )
-from geometries.get_drifting_overlap import (
+from geometries.get_drifting_overlap import (  # noqa: E402
     compute_min_distance_by_object,
     directional_distances_to_points,
 )
-from geometries.calculate_probability_holes import compute_probability_holes
-from geometries.analytical_probability import (
+from geometries.calculate_probability_holes import compute_probability_holes  # noqa: E402
+from geometries.analytical_probability import (  # noqa: E402
     compute_probability_holes_analytical,
     compute_probability_analytical,
     _extract_polygon_rings,
 )
-from geometries.drift.shadow import create_obstacle_shadow, extract_polygons
-from geometries.result_layers import create_result_layers
-from compute.drifting_report_builder import DriftingReportBuilderMixin
-from drifting.engine import LegState, compass_to_math_deg
+from geometries.drift.shadow import create_obstacle_shadow, extract_polygons  # noqa: E402
+from geometries.result_layers import create_result_layers  # noqa: E402
+from compute.drifting_report_builder import DriftingReportBuilderMixin  # noqa: E402
+from drifting.engine import LegState, compass_to_math_deg  # noqa: E402
 
 
 class DriftingModelMixin(DriftingReportBuilderMixin):
@@ -78,293 +78,293 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
 
     # --- Drifting model helpers ---
     def _compute_reach_distance(self, data: dict[str, Any], longest_length: float) -> float:
-            reach_distance = longest_length * 10.0
-            try:
-                rep = data.get('drift', {}).get('repair', {})
-                use_ln = rep.get('use_lognormal', False)
-                dist_type = rep.get('dist_type', '')
-                t99_h = None
+        reach_distance = longest_length * 10.0
+        try:
+            rep = data.get('drift', {}).get('repair', {})
+            use_ln = rep.get('use_lognormal', False)
+            dist_type = rep.get('dist_type', '')
+            t99_h = None
 
-                if dist_type == 'weibull':
-                    wb_shape = float(rep.get('wb_shape', 1.0))
-                    wb_loc = float(rep.get('wb_loc', 0.0))
-                    wb_scale = float(rep.get('wb_scale', 1.0))
-                    t99_h = float(stats.weibull_min(c=wb_shape, loc=wb_loc, scale=wb_scale).ppf(0.99))
-                elif use_ln:
-                    s = float(rep.get('std', 0.0))
-                    loc = float(rep.get('loc', 0.0))
-                    scale = float(rep.get('scale', 1.0))
-                    t99_h = float(stats.lognorm(s, loc=loc, scale=scale).ppf(0.99))
+            if dist_type == 'weibull':
+                wb_shape = float(rep.get('wb_shape', 1.0))
+                wb_loc = float(rep.get('wb_loc', 0.0))
+                wb_scale = float(rep.get('wb_scale', 1.0))
+                t99_h = float(stats.weibull_min(c=wb_shape, loc=wb_loc, scale=wb_scale).ppf(0.99))
+            elif use_ln:
+                s = float(rep.get('std', 0.0))
+                loc = float(rep.get('loc', 0.0))
+                scale = float(rep.get('scale', 1.0))
+                t99_h = float(stats.lognorm(s, loc=loc, scale=scale).ppf(0.99))
 
-                if t99_h is not None and t99_h > 0:
-                    drift_speed_kts = float(data.get('drift', {}).get('speed', 0.0))
-                    drift_speed = drift_speed_kts * 1852.0 / 3600.0  # Convert knots to m/s
-                    if drift_speed > 0:
-                        reach_distance = drift_speed * 3600.0 * t99_h
-                        reach_distance = min(reach_distance, longest_length * 10.0)
-            except Exception:
-                pass
-            return reach_distance
+            if t99_h is not None and t99_h > 0:
+                drift_speed_kts = float(data.get('drift', {}).get('speed', 0.0))
+                drift_speed = drift_speed_kts * 1852.0 / 3600.0  # Convert knots to m/s
+                if drift_speed > 0:
+                    reach_distance = drift_speed * 3600.0 * t99_h
+                    reach_distance = min(reach_distance, longest_length * 10.0)
+        except Exception:
+            pass
+        return reach_distance
 
     def _distribution_centerline_stats(
-            self,
-            leg_distributions: list[Any],
-            leg_weights: list[float],
-        ) -> tuple[float, float]:
-            """Approximate a mixed lateral distribution by mean offset and sigma."""
-            if not leg_distributions or not leg_weights:
-                return 0.0, 1.0
+        self,
+        leg_distributions: list[Any],
+        leg_weights: list[float],
+    ) -> tuple[float, float]:
+        """Approximate a mixed lateral distribution by mean offset and sigma."""
+        if not leg_distributions or not leg_weights:
+            return 0.0, 1.0
 
-            weighted_entries: list[tuple[float, float, float]] = []
-            for dist, weight in zip(leg_distributions, leg_weights):
-                try:
-                    w = float(weight)
-                    if w <= 0:
-                        continue
-                    mean_val = float(dist.mean())
-                    std_val = float(dist.std())
-                    if not np.isfinite(mean_val) or not np.isfinite(std_val):
-                        continue
-                    weighted_entries.append((w, mean_val, max(0.0, std_val)))
-                except Exception:
+        weighted_entries: list[tuple[float, float, float]] = []
+        for dist, weight in zip(leg_distributions, leg_weights):
+            try:
+                w = float(weight)
+                if w <= 0:
                     continue
+                mean_val = float(dist.mean())
+                std_val = float(dist.std())
+                if not np.isfinite(mean_val) or not np.isfinite(std_val):
+                    continue
+                weighted_entries.append((w, mean_val, max(0.0, std_val)))
+            except Exception:
+                continue
 
-            if not weighted_entries:
-                return 0.0, 1.0
+        if not weighted_entries:
+            return 0.0, 1.0
 
-            total_weight = sum(w for w, _, _ in weighted_entries)
-            if total_weight <= 0:
-                return 0.0, 1.0
+        total_weight = sum(w for w, _, _ in weighted_entries)
+        if total_weight <= 0:
+            return 0.0, 1.0
 
-            mean_offset = sum(w * mean_val for w, mean_val, _ in weighted_entries) / total_weight
-            variance = sum(
-                w * (std_val ** 2 + (mean_val - mean_offset) ** 2)
-                for w, mean_val, std_val in weighted_entries
-            ) / total_weight
-            return float(mean_offset), float(np.sqrt(max(variance, 1.0)))
+        mean_offset = sum(w * mean_val for w, mean_val, _ in weighted_entries) / total_weight
+        variance = sum(
+            w * (std_val ** 2 + (mean_val - mean_offset) ** 2)
+            for w, mean_val, std_val in weighted_entries
+        ) / total_weight
+        return float(mean_offset), float(np.sqrt(max(variance, 1.0)))
 
     # ------------------------------------------------------------------
     # Shadow-coverage helpers (used by the cascade)
     # ------------------------------------------------------------------
     def _build_blocker_shadow(
-            self,
-            geom: BaseGeometry | None,
-            compass_angle: float,
-            corridor_bounds: tuple[float, float, float, float] | None,
-            shadow_cache: dict[tuple[int, float], BaseGeometry] | None = None,
-        ) -> BaseGeometry:
-            """Quad-sweep shadow of a Polygon/MultiPolygon obstacle.
+        self,
+        geom: BaseGeometry | None,
+        compass_angle: float,
+        corridor_bounds: tuple[float, float, float, float] | None,
+        shadow_cache: dict[tuple[int, float], BaseGeometry] | None = None,
+    ) -> BaseGeometry:
+        """Quad-sweep shadow of a Polygon/MultiPolygon obstacle.
 
-            Returns an empty Polygon if the input is empty or corridor_bounds is
-            None.  MultiPolygons are handled by shadowing each component polygon
-            and unioning the results.
+        Returns an empty Polygon if the input is empty or corridor_bounds is
+        None.  MultiPolygons are handled by shadowing each component polygon
+        and unioning the results.
 
-            When ``shadow_cache`` is provided, the *full* obstacle shadow (union
-            over all MultiPolygon components) is memoised by
-            ``(id(geom), compass_angle)``.  ``geom`` is the obstacle's stored
-            ``wkt`` field -- the same Python object across every (leg, dir)
-            call -- so the cache hits across legs.  Caching at the component
-            level doesn't work because ``shapely.MultiPolygon.geoms`` yields
-            fresh Polygon objects per iteration, so component ``id(p)`` is
-            different on every call.
+        When ``shadow_cache`` is provided, the *full* obstacle shadow (union
+        over all MultiPolygon components) is memoised by
+        ``(id(geom), compass_angle)``.  ``geom`` is the obstacle's stored
+        ``wkt`` field -- the same Python object across every (leg, dir)
+        call -- so the cache hits across legs.  Caching at the component
+        level doesn't work because ``shapely.MultiPolygon.geoms`` yields
+        fresh Polygon objects per iteration, so component ``id(p)`` is
+        different on every call.
 
-            The caller must guarantee that ``corridor_bounds`` is the same for
-            every cache hit (e.g. a global bound covering all legs) --
-            ``create_obstacle_shadow`` computes an extrude distance from those
-            bounds, so reusing shadows is only correct when they were built
-            against the same bound.
-            """
-            if geom is None or geom.is_empty or corridor_bounds is None:
-                return Polygon()
+        The caller must guarantee that ``corridor_bounds`` is the same for
+        every cache hit (e.g. a global bound covering all legs) --
+        ``create_obstacle_shadow`` computes an extrude distance from those
+        bounds, so reusing shadows is only correct when they were built
+        against the same bound.
+        """
+        if geom is None or geom.is_empty or corridor_bounds is None:
+            return Polygon()
 
-            if shadow_cache is not None:
-                geom_key = (id(geom), float(compass_angle))
-                cached = shadow_cache.get(geom_key)
-                if cached is not None:
-                    return cached
+        if shadow_cache is not None:
+            geom_key = (id(geom), float(compass_angle))
+            cached = shadow_cache.get(geom_key)
+            if cached is not None:
+                return cached
 
-            try:
-                polys = extract_polygons(geom)
-            except Exception:
-                polys = []
-            if not polys:
-                result: BaseGeometry = Polygon()
-            else:
-                shadows: list[BaseGeometry] = []
-                for p in polys:
-                    try:
-                        s = create_obstacle_shadow(p, compass_angle, corridor_bounds)
-                    except Exception:
-                        s = Polygon()
-                    if s is not None and not s.is_empty:
-                        shadows.append(s)
-                if not shadows:
-                    result = Polygon()
-                elif len(shadows) == 1:
-                    result = shadows[0]
-                else:
-                    try:
-                        result = unary_union(shadows)
-                    except Exception:
-                        result = shadows[0]
-
-            if shadow_cache is not None:
-                shadow_cache[(id(geom), float(compass_angle))] = result
-            return result
-
-    def _analytical_hole_for_geom(
-            self,
-            geom: BaseGeometry | None,
-            leg: LineString,
-            compass_angle: float,
-            dists_list: list,
-            weights_arr: np.ndarray,
-            reach_distance: float,
-            lateral_range: float,
-            n_slices: int = 200,
-        ) -> float:
-            """Compute the analytical probability hole of a (possibly carved) geom.
-
-            Mirrors ``compute_hole`` from the ``drifting/debug`` scripts.  Extracts
-            all exterior + interior rings across Polygon / MultiPolygon /
-            GeometryCollection inputs and passes them to
-            :func:`compute_probability_analytical`.
-            """
-            if geom is None or geom.is_empty or reach_distance <= 0.0:
-                return 0.0
-            try:
-                polys = extract_polygons(geom)
-            except Exception:
-                polys = []
-            if not polys:
-                return 0.0
-            rings: list[np.ndarray] = []
+        try:
+            polys = extract_polygons(geom)
+        except Exception:
+            polys = []
+        if not polys:
+            result: BaseGeometry = Polygon()
+        else:
+            shadows: list[BaseGeometry] = []
             for p in polys:
                 try:
-                    rings.extend(_extract_polygon_rings(p))
+                    s = create_obstacle_shadow(p, compass_angle, corridor_bounds)
                 except Exception:
-                    continue
-            if not rings:
-                return 0.0
+                    s = Polygon()
+                if s is not None and not s.is_empty:
+                    shadows.append(s)
+            if not shadows:
+                result = Polygon()
+            elif len(shadows) == 1:
+                result = shadows[0]
+            else:
+                try:
+                    result = unary_union(shadows)
+                except Exception:
+                    result = shadows[0]
+
+        if shadow_cache is not None:
+            shadow_cache[(id(geom), float(compass_angle))] = result
+        return result
+
+    def _analytical_hole_for_geom(
+        self,
+        geom: BaseGeometry | None,
+        leg: LineString,
+        compass_angle: float,
+        dists_list: list,
+        weights_arr: np.ndarray,
+        reach_distance: float,
+        lateral_range: float,
+        n_slices: int = 200,
+    ) -> float:
+        """Compute the analytical probability hole of a (possibly carved) geom.
+
+        Mirrors ``compute_hole`` from the ``drifting/debug`` scripts.  Extracts
+        all exterior + interior rings across Polygon / MultiPolygon /
+        GeometryCollection inputs and passes them to
+        :func:`compute_probability_analytical`.
+        """
+        if geom is None or geom.is_empty or reach_distance <= 0.0:
+            return 0.0
+        try:
+            polys = extract_polygons(geom)
+        except Exception:
+            polys = []
+        if not polys:
+            return 0.0
+        rings: list[np.ndarray] = []
+        for p in polys:
             try:
-                coords = np.array(leg.coords)
-                if len(coords) < 2:
-                    return 0.0
-                leg_start = coords[0]
-                leg_vec = coords[-1] - coords[0]
-                leg_len = float(leg.length)
-                leg_dir = leg_vec / leg_len if leg_len > 0 else np.array([1.0, 0.0])
-                perp_dir = np.array([-leg_dir[1], leg_dir[0]])
-                math_angle = compass_to_math_deg(compass_angle)
-                rad = np.radians(math_angle)
-                drift_vec = np.array([np.cos(rad), np.sin(rad)])
-                h = compute_probability_analytical(
-                    leg_start=leg_start,
-                    leg_vec=leg_vec,
-                    perp_dir=perp_dir,
-                    drift_vec=drift_vec,
-                    distance=float(reach_distance),
-                    lateral_range=float(lateral_range),
-                    polygon_rings=rings,
-                    dists=dists_list,
-                    weights=weights_arr,
-                    n_slices=n_slices,
-                )
-                return max(0.0, float(h))
+                rings.extend(_extract_polygon_rings(p))
             except Exception:
+                continue
+        if not rings:
+            return 0.0
+        try:
+            coords = np.array(leg.coords)
+            if len(coords) < 2:
                 return 0.0
+            leg_start = coords[0]
+            leg_vec = coords[-1] - coords[0]
+            leg_len = float(leg.length)
+            leg_dir = leg_vec / leg_len if leg_len > 0 else np.array([1.0, 0.0])
+            perp_dir = np.array([-leg_dir[1], leg_dir[0]])
+            math_angle = compass_to_math_deg(compass_angle)
+            rad = np.radians(math_angle)
+            drift_vec = np.array([np.cos(rad), np.sin(rad)])
+            h = compute_probability_analytical(
+                leg_start=leg_start,
+                leg_vec=leg_vec,
+                perp_dir=perp_dir,
+                drift_vec=drift_vec,
+                distance=float(reach_distance),
+                lateral_range=float(lateral_range),
+                polygon_rings=rings,
+                dists=dists_list,
+                weights=weights_arr,
+                n_slices=n_slices,
+            )
+            return max(0.0, float(h))
+        except Exception:
+            return 0.0
 
     def _edge_weighted_holes(
-            self,
-            obs_geom: BaseGeometry | None,
-            drift_corridor: Polygon | None,
-            drift_angle: float,
-            leg: LineString | None,
-            hole_pct: float,
-            width_m: float | None = None,
-        ) -> list[tuple[int | None, float]]:
-            """Split obstacle hole percentage into edge-level fractions by overlap length.
+        self,
+        obs_geom: BaseGeometry | None,
+        drift_corridor: Polygon | None,
+        drift_angle: float,
+        leg: LineString | None,
+        hole_pct: float,
+        width_m: float | None = None,
+    ) -> list[tuple[int | None, float]]:
+        """Split obstacle hole percentage into edge-level fractions by overlap length.
 
-            Distributes the analytically-computed *hole_pct* across individual
-            edges in proportion to each edge's overlap length with the drift
-            corridor.  The sum of all edge fractions equals *hole_pct*, which
-            preserves the correct total probability while allowing per-edge
-            distance weighting downstream.
-            """
-            if obs_geom is None or drift_corridor is None:
+        Distributes the analytically-computed *hole_pct* across individual
+        edges in proportion to each edge's overlap length with the drift
+        corridor.  The sum of all edge fractions equals *hole_pct*, which
+        preserves the correct total probability while allowing per-edge
+        distance weighting downstream.
+        """
+        if obs_geom is None or drift_corridor is None:
+            return [(None, hole_pct)]
+
+        try:
+            segments = _extract_obstacle_segments(obs_geom)
+            if not segments:
                 return [(None, hole_pct)]
 
-            try:
-                segments = _extract_obstacle_segments(obs_geom)
-                if not segments:
-                    return [(None, hole_pct)]
+            leg_centroid = None
+            if leg is not None:
+                c = leg.centroid
+                leg_centroid = (c.x, c.y)
 
-                leg_centroid = None
-                if leg is not None:
-                    c = leg.centroid
-                    leg_centroid = (c.x, c.y)
+            # Batched drift-direction pre-filter.  ``segment_corridor_overlap_length``
+            # runs this same test per-call, but at ~1.9M total calls for
+            # proj.omrat the per-call ``np.radians``/``cos``/``sin`` and
+            # vector allocations cost real time.  Here we do it once per
+            # polygon in numpy and pass the surviving segment indices to
+            # the shapely-heavy helper.
+            skip = [False] * len(segments)
+            if drift_angle is not None and leg_centroid is not None:
+                seg_arr = np.asarray(segments, dtype=float)  # (N, 2, 2)
+                p1 = seg_arr[:, 0, :]
+                p2 = seg_arr[:, 1, :]
+                dx = p2[:, 0] - p1[:, 0]
+                dy = p2[:, 1] - p1[:, 1]
+                seg_len_sq = dx * dx + dy * dy
+                ok_len = seg_len_sq > 0.0
+                inv_len = np.where(ok_len, seg_len_sq ** -0.5, 0.0)
+                # Outward normal for CCW polygons
+                nx = dy * inv_len
+                ny = -dx * inv_len
 
-                # Batched drift-direction pre-filter.  ``segment_corridor_overlap_length``
-                # runs this same test per-call, but at ~1.9M total calls for
-                # proj.omrat the per-call ``np.radians``/``cos``/``sin`` and
-                # vector allocations cost real time.  Here we do it once per
-                # polygon in numpy and pass the surviving segment indices to
-                # the shapely-heavy helper.
-                skip = [False] * len(segments)
-                if drift_angle is not None and leg_centroid is not None:
-                    seg_arr = np.asarray(segments, dtype=float)  # (N, 2, 2)
-                    p1 = seg_arr[:, 0, :]
-                    p2 = seg_arr[:, 1, :]
-                    dx = p2[:, 0] - p1[:, 0]
-                    dy = p2[:, 1] - p1[:, 1]
-                    seg_len_sq = dx * dx + dy * dy
-                    ok_len = seg_len_sq > 0.0
-                    inv_len = np.where(ok_len, seg_len_sq ** -0.5, 0.0)
-                    # Outward normal for CCW polygons
-                    nx = dy * inv_len
-                    ny = -dx * inv_len
+                drift_rad = np.radians(drift_angle)
+                drift_ux = float(np.cos(drift_rad))
+                drift_uy = float(np.sin(drift_rad))
 
-                    drift_rad = np.radians(drift_angle)
-                    drift_ux = float(np.cos(drift_rad))
-                    drift_uy = float(np.sin(drift_rad))
+                drift_into_segment = drift_ux * nx + drift_uy * ny
+                facing_ok = (np.abs(drift_into_segment) >= 0.17) & (drift_into_segment <= 0)
 
-                    drift_into_segment = drift_ux * nx + drift_uy * ny
-                    facing_ok = (np.abs(drift_into_segment) >= 0.17) & (drift_into_segment <= 0)
+                mx = 0.5 * (p1[:, 0] + p2[:, 0])
+                my = 0.5 * (p1[:, 1] + p2[:, 1])
+                vx = mx - leg_centroid[0]
+                vy = my - leg_centroid[1]
+                dist_to_segment = np.sqrt(vx * vx + vy * vy)
+                distance_ahead = vx * drift_ux + vy * drift_uy
+                ahead_ok = distance_ahead >= -0.5 * dist_to_segment
 
-                    mx = 0.5 * (p1[:, 0] + p2[:, 0])
-                    my = 0.5 * (p1[:, 1] + p2[:, 1])
-                    vx = mx - leg_centroid[0]
-                    vy = my - leg_centroid[1]
-                    dist_to_segment = np.sqrt(vx * vx + vy * vy)
-                    distance_ahead = vx * drift_ux + vy * drift_uy
-                    ahead_ok = distance_ahead >= -0.5 * dist_to_segment
+                pass_mask = ok_len & facing_ok & ahead_ok
+                skip = (~pass_mask).tolist()
 
-                    pass_mask = ok_len & facing_ok & ahead_ok
-                    skip = (~pass_mask).tolist()
+            weighted: list[tuple[int, float]] = []
+            for seg_idx, segment in enumerate(segments):
+                if skip[seg_idx]:
+                    continue
+                overlap_len = segment_corridor_overlap_length(
+                    segment, drift_corridor, drift_angle, leg_centroid,
+                )
+                if overlap_len > 0.0:
+                    weighted.append((seg_idx, overlap_len))
 
-                weighted: list[tuple[int, float]] = []
-                for seg_idx, segment in enumerate(segments):
-                    if skip[seg_idx]:
-                        continue
-                    overlap_len = segment_corridor_overlap_length(
-                        segment, drift_corridor, drift_angle, leg_centroid,
-                    )
-                    if overlap_len > 0.0:
-                        weighted.append((seg_idx, overlap_len))
-
-                if not weighted:
-                    return [(None, hole_pct)]
-
-                total_overlap = sum(v for _, v in weighted)
-                if total_overlap <= 0.0:
-                    return [(None, hole_pct)]
-
-                return [
-                    (seg_idx, hole_pct * (overlap_len / total_overlap))
-                    for seg_idx, overlap_len in weighted
-                ]
-            except Exception:
+            if not weighted:
                 return [(None, hole_pct)]
+
+            total_overlap = sum(v for _, v in weighted)
+            if total_overlap <= 0.0:
+                return [(None, hole_pct)]
+
+            return [
+                (seg_idx, hole_pct * (overlap_len / total_overlap))
+                for seg_idx, overlap_len in weighted
+            ]
+        except Exception:
+            return [(None, hole_pct)]
 
     # ------------------------------------------------------------------
     # Shadow + edge-geometry precompute (ship-independent)
@@ -483,13 +483,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             endpoints = np.empty((2 * len(selected), 2), dtype=float)
             for i, (si, _) in enumerate(selected):
                 e = segments[si]
-                endpoints[2 * i, 0] = e[0][0]; endpoints[2 * i, 1] = e[0][1]
-                endpoints[2 * i + 1, 0] = e[1][0]; endpoints[2 * i + 1, 1] = e[1][1]
+                endpoints[2 * i, 0] = e[0][0]
+                endpoints[2 * i, 1] = e[0][1]
+                endpoints[2 * i + 1, 0] = e[1][0]
+                endpoints[2 * i + 1, 1] = e[1][1]
             dists = directional_distances_to_points(
                 endpoints, line, compass_angle, use_leg_offset=use_leg_offset)
             items: list[dict[str, Any]] = []
             for i, (si, frac) in enumerate(selected):
-                valid = [float(d) for d in [dists[2*i], dists[2*i+1]] if np.isfinite(d)]
+                valid = [float(d) for d in [dists[2 * i], dists[2 * i + 1]] if np.isfinite(d)]
                 if not valid:
                     continue
                 edge_dist = sum(valid) / len(valid)
@@ -586,32 +588,34 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             for s in structures:
                 g = s.get('wkt')
                 if g is not None and not g.is_empty:
-                    xs.extend([g.bounds[0], g.bounds[2]]); ys.extend([g.bounds[1], g.bounds[3]])
+                    xs.extend([g.bounds[0], g.bounds[2]])
+                    ys.extend([g.bounds[1], g.bounds[3]])
             for dep in depths:
                 g = dep.get('wkt')
                 if g is not None and not g.is_empty:
-                    xs.extend([g.bounds[0], g.bounds[2]]); ys.extend([g.bounds[1], g.bounds[3]])
+                    xs.extend([g.bounds[0], g.bounds[2]])
+                    ys.extend([g.bounds[1], g.bounds[3]])
             pad = max(1000.0, (max(xs) - min(xs)) * 0.1)
             return drift_corridor, (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
         except Exception:
             return drift_corridor, None
 
     def _precompute_shadow_layer(
-            self,
-            transformed_lines: list[LineString],
-            distributions: list[list[Any]],
-            weights: list[list[float]],
-            structures: list[dict[str, Any]],
-            depths: list[dict[str, Any]],
-            struct_min_dists,
-            depth_min_dists,
-            reach_distance: float,
-            drift_repair: dict[str, Any],
-            drift_speed: float,
-            use_leg_offset_for_distance: bool,
-            progress_base: float = 0.0,
-            progress_span: float = 1.0,
-        ) -> dict[tuple[int, int], dict[str, Any]]:
+        self,
+        transformed_lines: list[LineString],
+        distributions: list[list[Any]],
+        weights: list[list[float]],
+        structures: list[dict[str, Any]],
+        depths: list[dict[str, Any]],
+        struct_min_dists,
+        depth_min_dists,
+        reach_distance: float,
+        drift_repair: dict[str, Any],
+        drift_speed: float,
+        use_leg_offset_for_distance: bool,
+        progress_base: float = 0.0,
+        progress_span: float = 1.0,
+    ) -> dict[tuple[int, int], dict[str, Any]]:
         cache: dict[tuple[int, int], dict[str, Any]] = {}
         n_legs = len(transformed_lines)
         total_units = max(1, n_legs * 8)
@@ -720,7 +724,6 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         _report("Drifting - shadows done")
         return cache
 
-
     def _build_obstacle_list_for_bucket(
         self, leg_idx: int, d_idx: int, cell: dict,
         anchor_d: float, structures: list, depths: list,
@@ -765,7 +768,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 geom_X = d_obj.get('wkt') if d_obj is not None else None
             if geom_X is None or geom_X.is_empty:
                 entries.append({'obs_type': obs_type, 'obs_idx': obs_idx,
-                    'dist': dist, 'hole_pct': hole_pct, 'h_reach': float(hole_pct), 'h_in_anchor': 0.0})
+                                'dist': dist, 'hole_pct': hole_pct, 'h_reach': float(hole_pct), 'h_in_anchor': 0.0})
                 continue
             carve = blocker_union is not None and not blocker_union.is_empty
             # Short-circuit when blocker shadow doesn't touch this obstacle --
@@ -802,7 +805,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 except Exception:
                     h_in_anchor = 0.0
             entries.append({'obs_type': obs_type, 'obs_idx': obs_idx,
-                'dist': dist, 'hole_pct': hole_pct, 'h_reach': h_reach, 'h_in_anchor': h_in_anchor})
+                            'dist': dist, 'hole_pct': hole_pct, 'h_reach': h_reach, 'h_in_anchor': h_in_anchor})
             # Anchoring obstacles reference depth polygons; map 'anchoring' -> 'depth'
             # so the shadow lookup populates anchor_union correctly.
             lookup_type = 'depth' if obs_type == 'anchoring' else obs_type
@@ -896,21 +899,21 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             memo['__cancelled__'] = True  # type: ignore[index]
 
     def _precompute_bucket_memo(
-            self,
-            data: dict[str, Any],
-            transformed_lines: list[LineString],
-            structures: list[dict[str, Any]],
-            depths: list[dict[str, Any]],
-            struct_min_dists,
-            depth_min_dists,
-            struct_probability_holes,
-            depth_probability_holes,
-            shadow_cache: dict[tuple[int, int], dict[str, Any]],
-            threshold_to_idx: dict[float, int] | None,
-            reach_distance: float,
-            progress_base: float = 0.5,
-            progress_span: float = 0.5,
-        ) -> dict[tuple[int, int, tuple], list[dict[str, Any]]]:
+        self,
+        data: dict[str, Any],
+        transformed_lines: list[LineString],
+        structures: list[dict[str, Any]],
+        depths: list[dict[str, Any]],
+        struct_min_dists,
+        depth_min_dists,
+        struct_probability_holes,
+        depth_probability_holes,
+        shadow_cache: dict[tuple[int, int], dict[str, Any]],
+        threshold_to_idx: dict[float, int] | None,
+        reach_distance: float,
+        progress_base: float = 0.5,
+        progress_span: float = 0.5,
+    ) -> dict[tuple[int, int, tuple], list[dict[str, Any]]]:
         drift = data['drift']
         anchor_d = float(drift.get('anchor_d', 0.0))
         traffic_by_leg: list[list[dict[str, float]]] = [
@@ -929,212 +932,213 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         return memo
 
     def _build_transformed(self, data: dict[str, Any]) -> tuple[
-            list[LineString], list[list[Any]], list[list[float]], list[str],
-            list[dict[str, Any]], list[dict[str, Any]],
-            list[gpd.GeoDataFrame], list[gpd.GeoDataFrame],
-            list[LineString]
-        ]:
-            from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject
-            from shapely.ops import transform
-            from compute.data_preparation import _is_qgis_available
+        list[LineString], list[list[Any]], list[list[float]], list[str],
+        list[dict[str, Any]], list[dict[str, Any]],
+        list[gpd.GeoDataFrame], list[gpd.GeoDataFrame],
+        list[LineString]
+    ]:
+        from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject
+        from shapely.ops import transform
+        from compute.data_preparation import _is_qgis_available
 
-            lines, distributions, weights, line_names = prepare_traffic_lists(data)
-            structures, depths = split_structures_and_depths(data)
-            structure_geoms = [s['wkt'] for s in structures]
-            depth_geoms = [d['wkt'] for d in depths]
-            transformed_lines, transformed_objs_all, utm_epsg = transform_to_utm(lines, structure_geoms + depth_geoms)
-            # Persist CRS info for downstream runtime-debug geometry export
-            self._last_utm_epsg = utm_epsg
-            n_struct = len(structure_geoms)
-            transformed_structs = transformed_objs_all[:n_struct]
-            transformed_depths = transformed_objs_all[n_struct:]
+        lines, distributions, weights, line_names = prepare_traffic_lists(data)
+        structures, depths = split_structures_and_depths(data)
+        structure_geoms = [s['wkt'] for s in structures]
+        depth_geoms = [d['wkt'] for d in depths]
+        transformed_lines, transformed_objs_all, utm_epsg = transform_to_utm(lines, structure_geoms + depth_geoms)
+        # Persist CRS info for downstream runtime-debug geometry export
+        self._last_utm_epsg = utm_epsg
+        n_struct = len(structure_geoms)
+        transformed_structs = transformed_objs_all[:n_struct]
+        transformed_depths = transformed_objs_all[n_struct:]
 
-            # Create reverse transform (UTM -> WGS84) for converting fixed geometries back
-            # This ensures wkt_wgs84 has the same vertex order as wkt (UTM)
-            if _is_qgis_available():
-                wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
-                utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
-                transform_context = QgsProject.instance().transformContext()
-                reverse_transform = QgsCoordinateTransform(utm_crs, wgs84_crs, transform_context)
+        # Create reverse transform (UTM -> WGS84) for converting fixed geometries back
+        # This ensures wkt_wgs84 has the same vertex order as wkt (UTM)
+        if _is_qgis_available():
+            wgs84_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+            utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
+            transform_context = QgsProject.instance().transformContext()
+            reverse_transform = QgsCoordinateTransform(utm_crs, wgs84_crs, transform_context)
 
-                def transform_utm_to_wgs84(geom):
-                    """Transform a shapely geometry from UTM back to WGS84."""
-                    from qgis.core import QgsPointXY
-                    def reverse_coords(x, y):
-                        point = reverse_transform.transform(QgsPointXY(x, y))
-                        return point.x(), point.y()
-                    return transform(reverse_coords, geom)
-            else:
-                from pyproj import Transformer as _RevTransformer
-                _rev_proj = _RevTransformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326", always_xy=True)
+            def transform_utm_to_wgs84(geom):
+                """Transform a shapely geometry from UTM back to WGS84."""
+                from qgis.core import QgsPointXY
 
-                def transform_utm_to_wgs84(geom):
-                    return transform(lambda x, y: _rev_proj.transform(x, y), geom)
+                def reverse_coords(x, y):
+                    point = reverse_transform.transform(QgsPointXY(x, y))
+                    return point.x(), point.y()
+                return transform(reverse_coords, geom)
+        else:
+            from pyproj import Transformer as _RevTransformer
+            _rev_proj = _RevTransformer.from_crs(f"EPSG:{utm_epsg}", "EPSG:4326", always_xy=True)
 
-            # Cache converter for runtime segment-level debug metadata
-            self._segment_utm_to_wgs84 = transform_utm_to_wgs84
+            def transform_utm_to_wgs84(geom):
+                return transform(lambda x, y: _rev_proj.transform(x, y), geom)
 
-            # Fix invalid geometries and split any MultiPolygons that may arise from make_valid
-            # Note: split_structures_and_depths already splits MultiPolygons, but make_valid
-            # can sometimes create new MultiPolygons from invalid geometries
-            fixed_structs = []
-            fixed_structs_meta = []  # Track original structure metadata
-            for i, g in enumerate(transformed_structs):
-                try:
-                    fixed = shp_make_valid(g) if shp_make_valid is not None else g.buffer(0)
-                except Exception:
-                    fixed = g
+        # Cache converter for runtime segment-level debug metadata
+        self._segment_utm_to_wgs84 = transform_utm_to_wgs84
 
-                # Split MultiPolygons into individual Polygons (safety for make_valid results)
-                orig = structures[i] if i < len(structures) else {'id': f'struct_{i}', 'height': 0.0}
-                if fixed.geom_type == 'MultiPolygon':
-                    for j, poly in enumerate(fixed.geoms):
-                        fixed_structs.append(poly)
-                        # Transform the UTM polygon back to WGS84 so segment indices match
-                        poly_wgs84 = transform_utm_to_wgs84(poly)
-                        fixed_structs_meta.append({
-                            'id': f"{orig['id']}_{j}" if len(fixed.geoms) > 1 else orig['id'],
-                            'height': orig['height'],
-                            'wkt': poly,
-                            'wkt_wgs84': poly_wgs84,  # Transformed back from UTM for consistent segment indices
-                        })
-                else:
-                    fixed_structs.append(fixed)
-                    # Transform the UTM geometry back to WGS84 so segment indices match
-                    fixed_wgs84 = transform_utm_to_wgs84(fixed)
+        # Fix invalid geometries and split any MultiPolygons that may arise from make_valid
+        # Note: split_structures_and_depths already splits MultiPolygons, but make_valid
+        # can sometimes create new MultiPolygons from invalid geometries
+        fixed_structs = []
+        fixed_structs_meta = []  # Track original structure metadata
+        for i, g in enumerate(transformed_structs):
+            try:
+                fixed = shp_make_valid(g) if shp_make_valid is not None else g.buffer(0)
+            except Exception:
+                fixed = g
+
+            # Split MultiPolygons into individual Polygons (safety for make_valid results)
+            orig = structures[i] if i < len(structures) else {'id': f'struct_{i}', 'height': 0.0}
+            if fixed.geom_type == 'MultiPolygon':
+                for j, poly in enumerate(fixed.geoms):
+                    fixed_structs.append(poly)
+                    # Transform the UTM polygon back to WGS84 so segment indices match
+                    poly_wgs84 = transform_utm_to_wgs84(poly)
                     fixed_structs_meta.append({
-                        'id': orig['id'],
+                        'id': f"{orig['id']}_{j}" if len(fixed.geoms) > 1 else orig['id'],
                         'height': orig['height'],
-                        'wkt': fixed,
-                        'wkt_wgs84': fixed_wgs84,  # Transformed back from UTM for consistent segment indices
+                        'wkt': poly,
+                        'wkt_wgs84': poly_wgs84,  # Transformed back from UTM for consistent segment indices
                     })
+            else:
+                fixed_structs.append(fixed)
+                # Transform the UTM geometry back to WGS84 so segment indices match
+                fixed_wgs84 = transform_utm_to_wgs84(fixed)
+                fixed_structs_meta.append({
+                    'id': orig['id'],
+                    'height': orig['height'],
+                    'wkt': fixed,
+                    'wkt_wgs84': fixed_wgs84,  # Transformed back from UTM for consistent segment indices
+                })
 
-            fixed_depths = []
-            fixed_depths_meta = []  # Track original depth metadata
-            for i, g in enumerate(transformed_depths):
-                try:
-                    fixed = shp_make_valid(g) if shp_make_valid is not None else g.buffer(0)
-                except Exception:
-                    fixed = g
+        fixed_depths = []
+        fixed_depths_meta = []  # Track original depth metadata
+        for i, g in enumerate(transformed_depths):
+            try:
+                fixed = shp_make_valid(g) if shp_make_valid is not None else g.buffer(0)
+            except Exception:
+                fixed = g
 
-                # Get the depth value for this geometry
-                depth_val = depths[i]['depth'] if i < len(depths) else 0.0
-                depth_id = depths[i]['id'] if i < len(depths) else f'depth_{i}'
+            # Get the depth value for this geometry
+            depth_val = depths[i]['depth'] if i < len(depths) else 0.0
+            depth_id = depths[i]['id'] if i < len(depths) else f'depth_{i}'
 
-                # Split MultiPolygons into individual Polygons (safety for make_valid results)
-                if fixed.geom_type == 'MultiPolygon':
-                    for j, poly in enumerate(fixed.geoms):
-                        fixed_depths.append(poly)
-                        # Transform the UTM polygon back to WGS84 so segment indices match
-                        poly_wgs84 = transform_utm_to_wgs84(poly)
-                        fixed_depths_meta.append({
-                            'id': f"{depth_id}_{j}" if len(fixed.geoms) > 1 else depth_id,
-                            'depth': depth_val,
-                            'wkt': poly,
-                            'wkt_wgs84': poly_wgs84,  # Transformed back from UTM for consistent segment indices
-                        })
-                else:
-                    fixed_depths.append(fixed)
-                    # Transform the UTM geometry back to WGS84 so segment indices match
-                    fixed_wgs84 = transform_utm_to_wgs84(fixed)
+            # Split MultiPolygons into individual Polygons (safety for make_valid results)
+            if fixed.geom_type == 'MultiPolygon':
+                for j, poly in enumerate(fixed.geoms):
+                    fixed_depths.append(poly)
+                    # Transform the UTM polygon back to WGS84 so segment indices match
+                    poly_wgs84 = transform_utm_to_wgs84(poly)
                     fixed_depths_meta.append({
-                        'id': depth_id,
+                        'id': f"{depth_id}_{j}" if len(fixed.geoms) > 1 else depth_id,
                         'depth': depth_val,
-                        'wkt': fixed,
-                        'wkt_wgs84': fixed_wgs84,  # Transformed back from UTM for consistent segment indices
+                        'wkt': poly,
+                        'wkt_wgs84': poly_wgs84,  # Transformed back from UTM for consistent segment indices
                     })
+            else:
+                fixed_depths.append(fixed)
+                # Transform the UTM geometry back to WGS84 so segment indices match
+                fixed_wgs84 = transform_utm_to_wgs84(fixed)
+                fixed_depths_meta.append({
+                    'id': depth_id,
+                    'depth': depth_val,
+                    'wkt': fixed,
+                    'wkt_wgs84': fixed_wgs84,  # Transformed back from UTM for consistent segment indices
+                })
 
-            structs_gdfs = [gpd.GeoDataFrame(geometry=[g]) for g in fixed_structs]
-            # Include depth values in the GeoDataFrame
-            depths_gdfs = [gpd.GeoDataFrame({'depth': [fixed_depths_meta[i]['depth']], 'geometry': [g]})
-                          for i, g in enumerate(fixed_depths)]
-            return (
-                lines, distributions, weights, line_names,
-                fixed_structs_meta, fixed_depths_meta,
-                structs_gdfs, depths_gdfs,
-                transformed_lines,
-            )
+        structs_gdfs = [gpd.GeoDataFrame(geometry=[g]) for g in fixed_structs]
+        # Include depth values in the GeoDataFrame
+        depths_gdfs = [gpd.GeoDataFrame({'depth': [fixed_depths_meta[i]['depth']], 'geometry': [g]})
+                       for i, g in enumerate(fixed_depths)]
+        return (
+            lines, distributions, weights, line_names,
+            fixed_structs_meta, fixed_depths_meta,
+            structs_gdfs, depths_gdfs,
+            transformed_lines,
+        )
 
     def _precompute_spatial(self,
-            transformed_lines: list[LineString],
-            distributions: list[list[Any]],
-            weights: list[list[float]],
-            structs_gdfs: list[gpd.GeoDataFrame],
-            depths_gdfs: list[gpd.GeoDataFrame],
-            reach_distance: float,
-            data: dict[str, Any] | None = None,
-        ) -> tuple[list, list, list, list]:
-            struct_min_dists = compute_min_distance_by_object(
-                transformed_lines, distributions, weights, structs_gdfs, distance=reach_distance
-            ) if len(structs_gdfs) > 0 else []
-            depth_min_dists = compute_min_distance_by_object(
-                transformed_lines, distributions, weights, depths_gdfs, distance=reach_distance
-            ) if len(depths_gdfs) > 0 else []
-            # Calculate probability holes using FAST Monte Carlo method
-            # Unified progress tracking across structures AND depths
-            # Count actual objects for progress estimation
-            def count_objects(gdf_list):
-                return sum(len(gdf) for gdf in gdf_list)
+                            transformed_lines: list[LineString],
+                            distributions: list[list[Any]],
+                            weights: list[list[float]],
+                            structs_gdfs: list[gpd.GeoDataFrame],
+                            depths_gdfs: list[gpd.GeoDataFrame],
+                            reach_distance: float,
+                            data: dict[str, Any] | None = None,
+                            ) -> tuple[list, list, list, list]:
+        struct_min_dists = compute_min_distance_by_object(
+            transformed_lines, distributions, weights, structs_gdfs, distance=reach_distance
+        ) if len(structs_gdfs) > 0 else []
+        depth_min_dists = compute_min_distance_by_object(
+            transformed_lines, distributions, weights, depths_gdfs, distance=reach_distance
+        ) if len(depths_gdfs) > 0 else []
+        # Calculate probability holes using FAST Monte Carlo method
+        # Unified progress tracking across structures AND depths
+        # Count actual objects for progress estimation
 
-            struct_obj_count = count_objects(structs_gdfs) if len(structs_gdfs) > 0 else 0
-            depth_obj_count = count_objects(depths_gdfs) if len(depths_gdfs) > 0 else 0
+        def count_objects(gdf_list):
+            return sum(len(gdf) for gdf in gdf_list)
 
-            # Estimate total work (8 directions x objects per leg)
-            # Structures use dblquad (~slow), depths use fast method (~quick)
-            # Weight: 1 structure ~ 100 depth objects in terms of computation time
-            weighted_struct = struct_obj_count * 100
-            weighted_depth = depth_obj_count * 1
-            total_weighted_work = max(1, weighted_struct + weighted_depth)
+        struct_obj_count = count_objects(structs_gdfs) if len(structs_gdfs) > 0 else 0
+        depth_obj_count = count_objects(depths_gdfs) if len(depths_gdfs) > 0 else 0
 
-            # Track progress across BOTH calculations within the 'spatial' phase
-            struct_done = False
+        # Estimate total work (8 directions x objects per leg)
+        # Structures use dblquad (~slow), depths use fast method (~quick)
+        # Weight: 1 structure ~ 100 depth objects in terms of computation time
+        weighted_struct = struct_obj_count * 100
+        weighted_depth = depth_obj_count * 1
+        total_weighted_work = max(1, weighted_struct + weighted_depth)
 
-            def spatial_progress_callback(completed: int, total: int, msg: str) -> bool:
-                """Report progress within the spatial phase (0-60% of overall)"""
-                # Calculate weighted progress within spatial phase
-                if not struct_done:
-                    # Currently calculating structures (first half of spatial)
-                    weighted_progress = (completed / max(total, 1)) * weighted_struct
-                    label = f"Drifting - structure probabilities ({completed}/{total})"
-                else:
-                    # Currently calculating depths (second half of spatial)
-                    weighted_progress = weighted_struct + (completed / max(total, 1)) * weighted_depth
-                    label = f"Drifting - depth probabilities ({completed}/{total})"
+        # Track progress across BOTH calculations within the 'spatial' phase
+        struct_done = False
 
-                # Convert to fraction of spatial phase (0.0 to 1.0)
-                phase_progress = weighted_progress / total_weighted_work
-                return self._report_progress('spatial', phase_progress, label)
+        def spatial_progress_callback(completed: int, total: int, msg: str) -> bool:
+            """Report progress within the spatial phase (0-60% of overall)"""
+            # Calculate weighted progress within spatial phase
+            if not struct_done:
+                # Currently calculating structures (first half of spatial)
+                weighted_progress = (completed / max(total, 1)) * weighted_struct
+                label = f"Drifting - structure probabilities ({completed}/{total})"
+            else:
+                # Currently calculating depths (second half of spatial)
+                weighted_progress = weighted_struct + (completed / max(total, 1)) * weighted_depth
+                label = f"Drifting - depth probabilities ({completed}/{total})"
 
-            # Choose probability hole computation method
-            use_analytical = data.get('use_analytical', True) if data else True
-            compute_holes_fn = (
-                compute_probability_holes_analytical if use_analytical
-                else compute_probability_holes
-            )
-            method_name = "analytical cross-section CDF" if use_analytical else "Monte Carlo"
-            logger.info(f"Probability holes: using {method_name} method")
+            # Convert to fraction of spatial phase (0.0 to 1.0)
+            phase_progress = weighted_progress / total_weighted_work
+            return self._report_progress('spatial', phase_progress, label)
 
-            # Calculate structures (allision)
-            struct_probability_holes = compute_holes_fn(
-                transformed_lines, distributions, weights, structs_gdfs,
-                distance=reach_distance,
-                progress_callback=spatial_progress_callback
-            ) if len(structs_gdfs) > 0 else []
+        # Choose probability hole computation method
+        use_analytical = data.get('use_analytical', True) if data else True
+        compute_holes_fn = (
+            compute_probability_holes_analytical if use_analytical
+            else compute_probability_holes
+        )
+        method_name = "analytical cross-section CDF" if use_analytical else "Monte Carlo"
+        logger.info(f"Probability holes: using {method_name} method")
 
-            struct_done = True  # Switch to depths
+        # Calculate structures (allision)
+        struct_probability_holes = compute_holes_fn(
+            transformed_lines, distributions, weights, structs_gdfs,
+            distance=reach_distance,
+            progress_callback=spatial_progress_callback
+        ) if len(structs_gdfs) > 0 else []
 
-            # Calculate depths (grounding)
-            depth_probability_holes = compute_holes_fn(
-                transformed_lines, distributions, weights, depths_gdfs,
-                distance=reach_distance,
-                progress_callback=spatial_progress_callback
-            ) if len(depths_gdfs) > 0 else []
-            return (
-                struct_min_dists, depth_min_dists,
-                struct_probability_holes,
-                depth_probability_holes,
-            )
+        struct_done = True  # Switch to depths
 
+        # Calculate depths (grounding)
+        depth_probability_holes = compute_holes_fn(
+            transformed_lines, distributions, weights, depths_gdfs,
+            distance=reach_distance,
+            progress_callback=spatial_progress_callback
+        ) if len(depths_gdfs) > 0 else []
+        return (
+            struct_min_dists, depth_min_dists,
+            struct_probability_holes,
+            depth_probability_holes,
+        )
 
     def _debug_add_trace(
         self,
@@ -1163,17 +1167,22 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         rec['hole_sum'] += float(hole_pct) * w
         rec['remaining_before_sum'] += float(remaining_before) * w
         if p_nr is not None:
-            rec['p_nr_sum'] += float(p_nr) * w; rec['p_nr_weight'] += w
+            rec['p_nr_sum'] += float(p_nr) * w
+            rec['p_nr_weight'] += w
         if anchor_effect is not None:
-            rec['anchor_effect_sum'] += float(anchor_effect) * w; rec['anchor_effect_weight'] += w
+            rec['anchor_effect_sum'] += float(anchor_effect) * w
+            rec['anchor_effect_weight'] += w
         if exposure_factor is not None:
-            rec['exposure_sum'] += float(exposure_factor) * w; rec['exposure_weight'] += w
+            rec['exposure_sum'] += float(exposure_factor) * w
+            rec['exposure_weight'] += w
         if rp is not None and rec['rp'] == 0.0:
             rec['rp'] = float(rp)
         if base is not None:
-            rec['base_sum'] += float(base) * w; rec['base_weight'] += w
+            rec['base_sum'] += float(base) * w
+            rec['base_weight'] += w
         if freq is not None:
-            rec['freq_sum'] += float(freq) * w; rec['freq_weight'] += w
+            rec['freq_sum'] += float(freq) * w
+            rec['freq_weight'] += w
         rec['count'] += 1
 
     def _init_drift_report(self, debug_trace: bool) -> dict[str, Any]:
@@ -1235,12 +1244,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     threshold_to_idx=threshold_to_idx, shadow_cache=shadow_cache,
                     bucket_memo=bucket_memo, debug_add=debug_add_fn, report=report,
                 )
-                ta += a_d; tg += g_d; tan += an_d
-                cell_a += a_d; cell_g += g_d
+                ta += a_d
+                tg += g_d
+                tan += an_d
+                cell_a += a_d
+                cell_g += g_d
                 cp += 1
                 if total_cascade_work > 0 and cp % max(1, total_cascade_work // 100) == 0:
                     if not self._report_progress('cascade', cp / total_cascade_work,
-                            f"Drifting - traffic cascade (leg {leg_idx + 1}/{n_legs})"):
+                                                 f"Drifting - traffic cascade (leg {leg_idx + 1}/{n_legs})"):
                         return ta, tg, tan, cp, True
             if ship_type >= 0 and ship_size >= 0:
                 ck = f"{ship_type}_{ship_size}"
@@ -1251,22 +1263,22 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         return ta, tg, tan, cp, False
 
     def _iterate_traffic_and_sum(self,
-            data: dict[str, Any],
-            line_names: list[str],
-            transformed_lines: list[LineString],
-            structures: list[dict[str, Any]],
-            depths: list[dict[str, Any]],
-            struct_min_dists: list,
-            depth_min_dists: list,
-            struct_probability_holes: list,
-            depth_probability_holes: list,
-            distributions: list[list[Any]] | None = None,
-            weights: list[list[float]] | None = None,
-            reach_distance: float = 0.0,
-            threshold_to_idx: dict[float, int] | None = None,
-            shadow_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
-            bucket_memo: dict[tuple[int, int, tuple], list[dict[str, Any]]] | None = None,
-        ) -> tuple[float, float, dict[str, Any]]:
+                                 data: dict[str, Any],
+                                 line_names: list[str],
+                                 transformed_lines: list[LineString],
+                                 structures: list[dict[str, Any]],
+                                 depths: list[dict[str, Any]],
+                                 struct_min_dists: list,
+                                 depth_min_dists: list,
+                                 struct_probability_holes: list,
+                                 depth_probability_holes: list,
+                                 distributions: list[list[Any]] | None = None,
+                                 weights: list[list[float]] | None = None,
+                                 reach_distance: float = 0.0,
+                                 threshold_to_idx: dict[float, int] | None = None,
+                                 shadow_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
+                                 bucket_memo: dict[tuple[int, int, tuple], list[dict[str, Any]]] | None = None,
+                                 ) -> tuple[float, float, dict[str, Any]]:
         drift = data['drift']
         debug_trace = bool(drift.get('debug_trace', False))
         drift_p = float(drift.get('drift_p', 1.0))
@@ -1287,7 +1299,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                        exposure_factor=None, rp=None, base=None, freq=None) -> None:
             if debug_trace:
                 self._debug_add_trace(rd, ldk, ok, ot, c, d, h, rb, p_nr,
-                    anchor_effect, exposure_factor, rp, base, freq)
+                                      anchor_effect, exposure_factor, rp, base, freq)
 
         traffic_by_leg = [lt for _, _, _, lt, _ in clean_traffic(data)]
         report = self._init_drift_report(debug_trace)
@@ -1313,7 +1325,9 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 blackout_rate_by_type, drift_p, rose_vals, rose_total, _debug_add,
                 total_cascade_work, cascade_progress, len(transformed_lines),
             )
-            total_allision += a; total_grounding += g; total_anchoring += an
+            total_allision += a
+            total_grounding += g
+            total_anchoring += an
             if cancelled:
                 report['totals']['allision'] = total_allision
                 report['totals']['grounding'] = total_grounding
@@ -1469,8 +1483,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             grounding_d += c if obs_type != 'allision' else 0.0
             obs_total += c
             self._update_report(report, obs_type, c, obs_idx, structures, depths,
-                seg_id, cell, d_idx, dist, base, rp, shadow_loss, p_nr, h_eff,
-                freq, ship_type, ship_size, None, line)
+                                seg_id, cell, d_idx, dist, base, rp, shadow_loss, p_nr, h_eff,
+                                freq, ship_type, ship_size, None, line)
         else:
             for eg in precomputed_edges:
                 edge_hole = h_eff * eg['len_frac']
@@ -1482,44 +1496,44 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 grounding_d += c if obs_type != 'allision' else 0.0
                 obs_total += c
                 self._update_report(report, obs_type, c, obs_idx, structures, depths,
-                    seg_id, cell, d_idx, eg['edge_dist'], base, rp, shadow_loss,
-                    p_nr, edge_hole, freq, ship_type, ship_size, None, line)
+                                    seg_id, cell, d_idx, eg['edge_dist'], base, rp, shadow_loss,
+                                    p_nr, edge_hole, freq, ship_type, ship_size, None, line)
                 self._add_direct_segment_contrib(
                     report, direct_key, key_name, eg['seg_idx'], leg_dir_key, c)
         debug_add(report, leg_dir_key, key_name, obs_type, obs_total, dist, h_eff, 1.0,
-            p_nr=None, anchor_effect=None, exposure_factor=base * rp,
-            rp=rp, base=base, freq=freq)
+                  p_nr=None, anchor_effect=None, exposure_factor=base * rp,
+                  rp=rp, base=base, freq=freq)
         return allision_d, grounding_d
 
     def _process_cell_direction(self,
-            *,
-            leg_idx: int,
-            d_idx: int,
-            line: LineString,
-            seg_id: str,
-            cell: dict[str, Any],
-            base: float,
-            rp: float,
-            freq: float,
-            draught: float,
-            ship_type: int,
-            ship_size: int,
-            drift: dict[str, Any],
-            drift_speed: float,
-            anchor_p: float,
-            anchor_d: float,
-            structures: list[dict[str, Any]],
-            depths: list[dict[str, Any]],
-            struct_min_dists: list,
-            depth_min_dists: list,
-            struct_probability_holes: list,
-            depth_probability_holes: list,
-            threshold_to_idx: dict[float, int] | None,
-            shadow_cache: dict[tuple[int, int], dict[str, Any]] | None,
-            bucket_memo: dict[tuple[int, int, tuple], list[dict[str, Any]]] | None,
-            debug_add: Callable[..., None],
-            report: dict[str, Any],
-        ) -> tuple[float, float, float]:
+                                *,
+                                leg_idx: int,
+                                d_idx: int,
+                                line: LineString,
+                                seg_id: str,
+                                cell: dict[str, Any],
+                                base: float,
+                                rp: float,
+                                freq: float,
+                                draught: float,
+                                ship_type: int,
+                                ship_size: int,
+                                drift: dict[str, Any],
+                                drift_speed: float,
+                                anchor_p: float,
+                                anchor_d: float,
+                                structures: list[dict[str, Any]],
+                                depths: list[dict[str, Any]],
+                                struct_min_dists: list,
+                                depth_min_dists: list,
+                                struct_probability_holes: list,
+                                depth_probability_holes: list,
+                                threshold_to_idx: dict[float, int] | None,
+                                shadow_cache: dict[tuple[int, int], dict[str, Any]] | None,
+                                bucket_memo: dict[tuple[int, int, tuple], list[dict[str, Any]]] | None,
+                                debug_add: Callable[..., None],
+                                report: dict[str, Any],
+                                ) -> tuple[float, float, float]:
         obstacles = self._collect_cell_obstacles(
             leg_idx, d_idx, draught, anchor_d, structures, depths,
             struct_min_dists, depth_min_dists,
@@ -1531,7 +1545,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
 
         ld_entry = shadow_cache.get((leg_idx, d_idx)) if shadow_cache else None
         edge_geom_map = ld_entry['edge_geom'] if ld_entry else {}
-        leg_dir_key = f"{seg_id}:{str(cell.get('direction', '')).strip()}:{d_idx*45}"
+        leg_dir_key = f"{seg_id}:{str(cell.get('direction', '')).strip()}:{d_idx * 45}"
         entries = self._lookup_bucket_entries(leg_idx, d_idx, obstacles, bucket_memo)
 
         total_allision = 0.0
@@ -1574,7 +1588,6 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 total_grounding += g_d
 
         return total_allision, total_grounding, total_anchoring
-
 
     def _auto_generate_drifting_report(self, data: dict[str, Any]) -> str | None:
         """Auto-generate the drifting Markdown report to disk.
@@ -1743,7 +1756,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 except Exception:
                     continue
                 original.append({'id': str(did), 'depth': float(depth_val) if depth_val else 0.0,
-                    'wkt': geom, 'wkt_wgs84': geom})
+                                 'wkt': geom, 'wkt_wgs84': geom})
             self._last_depths_original = original
         except Exception:
             self._last_depths_original = []
@@ -1787,7 +1800,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         effective_depths_meta = merged_depths_meta if use_merged else depths
         struct_min_dists, depth_min_dists, struct_probability_holes, depth_probability_holes = (
             self._precompute_spatial(transformed_lines, distributions, weights,
-                structs_gdfs, effective_depths_gdfs, reach_distance, data)
+                                     structs_gdfs, effective_depths_gdfs, reach_distance, data)
         )
         shadow_cache = self._precompute_shadow_layer(
             transformed_lines, distributions, weights, structures, effective_depths_meta,

@@ -49,9 +49,11 @@ class ShipCollisionModelMixin:
                 return (min_val + max_val) / 2.0
             except (ValueError, TypeError):
                 pass
-        # Default midpoints for typical LOA categories
+        # Default midpoints for typical LOA categories — clip to last entry
+        # rather than falling back to a fixed 150 m that would be wrong for
+        # larger-index bins beyond the list.
         default_midpoints = [25.0, 75.0, 150.0, 250.0, 350.0]
-        return default_midpoints[loa_idx] if loa_idx < len(default_midpoints) else 150.0
+        return default_midpoints[min(loa_idx, len(default_midpoints) - 1)]
 
     @staticmethod
     def estimate_beam(loa: float) -> float:
@@ -823,7 +825,8 @@ class ShipCollisionModelMixin:
                 b1 = self._extract_beam(beam1_arr, loa_i, type_j, self.estimate_beam(l1))
 
                 for loa_k in range(len(freq2) if hasattr(freq2, '__len__') else 0):
-                    for type_l in range(len(freq2[loa_k]) if loa_k < len(freq2) and hasattr(freq2[loa_k], '__len__') else 0):
+                    freq2_k_len = len(freq2[loa_k]) if loa_k < len(freq2) and hasattr(freq2[loa_k], '__len__') else 0
+                    for type_l in range(freq2_k_len):
                         q2 = float(freq2[loa_k][type_l]) if loa_k < len(freq2) and type_l < len(freq2[loa_k]) else 0.0
                         if q2 <= 0 or not np.isfinite(q2):
                             continue

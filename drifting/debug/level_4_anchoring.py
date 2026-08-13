@@ -57,22 +57,22 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import numpy as np
-import matplotlib.pyplot as plt
-from shapely.geometry import LineString, Polygon, Point, box, MultiPolygon
-from shapely.affinity import translate as _translate
-from shapely.ops import unary_union as _unary_union
-from scipy import stats
-import pyproj
+import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from shapely.geometry import LineString, Polygon, Point  # noqa: E402
+from shapely.affinity import translate as _translate  # noqa: E402
+from shapely.ops import unary_union as _unary_union  # noqa: E402
+from scipy import stats  # noqa: E402
+import pyproj  # noqa: E402
 
-from drifting.engine import (
+from drifting.engine import (  # noqa: E402
     LegState, DriftConfig,
     compass_to_math_deg,
     build_directional_corridor,
     directional_distance_to_point_from_offset_leg,
 )
-from compute.basic_equations import get_not_repaired
-from geometries.analytical_probability import (
+from compute.basic_equations import get_not_repaired  # noqa: E402
+from geometries.analytical_probability import (  # noqa: E402
     compute_probability_analytical,
     _extract_polygon_rings,
 )
@@ -86,8 +86,10 @@ proj_wgs84 = pyproj.CRS("EPSG:4326")
 proj_utm = pyproj.CRS("EPSG:32633")
 transformer = pyproj.Transformer.from_crs(proj_wgs84, proj_utm, always_xy=True)
 
+
 def to_utm(lon, lat):
     return transformer.transform(lon, lat)
+
 
 leg3_start = to_utm(14.24187, 55.16728)
 leg3_end = to_utm(14.59271, 55.39937)
@@ -132,7 +134,7 @@ repair_data = {'use_lognormal': 1, 'std': 1.0, 'loc': 0.0, 'scale': 1.0}
 
 cfg = DriftConfig(reach_distance_m=reach_distance, corridor_sigma_multiplier=3.0)
 leg_state = LegState(leg_id="LEG_3", line=leg3_line,
-                      mean_offset_m=0.0, lateral_sigma_m=lateral_sigma)
+                     mean_offset_m=0.0, lateral_sigma_m=lateral_sigma)
 
 math_deg = compass_to_math_deg(drift_direction)
 angle_rad = np.radians(math_deg)
@@ -175,6 +177,7 @@ perp_dir = np.array([-leg_dir[1], leg_dir[0]])
 lateral_dist = stats.norm(0, lateral_sigma)
 lateral_range = 5.0 * lateral_sigma
 
+
 def compute_hole(geom):
     if geom is None or geom.is_empty:
         return 0.0
@@ -187,6 +190,7 @@ def compute_hole(geom):
         lateral_range=lateral_range, polygon_rings=rings,
         dists=[lateral_dist], weights=np.array([1.0]), n_slices=400,
     )
+
 
 def build_quad_shadow(poly, extrude_length):
     far = _translate(poly, xoff=drift_ux * extrude_length,
@@ -205,11 +209,12 @@ def build_quad_shadow(poly, extrude_length):
 # 4. TARGET STATS
 # =============================================================================
 
+
 target_hole = compute_hole(target_polygon)
 target_vertices = list(target_polygon.exterior.coords)[:-1]
 target_dists = [directional_distance_to_point_from_offset_leg(
-                    leg_state, drift_direction, Point(v))
-                for v in target_vertices]
+    leg_state, drift_direction, Point(v))
+    for v in target_vertices]
 target_dists = [d for d in target_dists if d is not None]
 d_target = float(np.mean(target_dists))
 p_nr_target = get_not_repaired(repair_data, drift_speed_ms, d_target)
@@ -231,9 +236,11 @@ print()
 # 5. BUILD ANCHOR POLYGONS FOR 3 COVERAGE SCENARIOS
 # =============================================================================
 
+
 def cross_drift_interval(pts):
     projs = [np.dot(np.array(pt), cross_drift_vec) for pt in pts]
     return min(projs), max(projs)
+
 
 target_cd_lo, target_cd_hi = cross_drift_interval(target_vertices)
 target_cd_center = 0.5 * (target_cd_lo + target_cd_hi)
@@ -244,6 +251,7 @@ target_centroid = np.array([target_polygon.centroid.x, target_polygon.centroid.y
 anchor_center_along = target_centroid - 6000.0 * drift_vec_unit
 anchor_half_along = 500.0
 extrude_len = d_target + 5000.0
+
 
 def make_anchor(center_cross_offset_m, half_cross_m):
     center = anchor_center_along + center_cross_offset_m * cross_drift_vec
@@ -260,6 +268,8 @@ def make_anchor(center_cross_offset_m, half_cross_m):
 
 # Scenario A: no anchor at all (None)
 # Scenario B: ~30% coverage -- binary search on half_cross
+
+
 def coverage_for_half(half_m):
     offset = (target_cd_hi - half_m) - target_cd_center
     _, poly = make_anchor(offset, half_m)
@@ -267,6 +277,7 @@ def coverage_for_half(half_m):
     unshadow = target_polygon.difference(sh)
     h = compute_hole(unshadow)
     return 1.0 - h / target_hole if target_hole > 0 else 0.0
+
 
 lo, hi = 50.0, target_cd_width
 best = 0.5 * target_cd_width
@@ -290,6 +301,7 @@ _, anchor_C_poly = make_anchor(0.0, anchor_C_half_cross)
 # 6. COMPUTE SCENARIO RESULTS
 # =============================================================================
 
+
 def scenario_stats(name, anchor_poly):
     if anchor_poly is None:
         return {
@@ -301,7 +313,7 @@ def scenario_stats(name, anchor_poly):
             'h_anchor': 0.0,
             'h_a_on_target': 0.0,
             'coverage_hole': 0.0,
-            'h_target_eff': target_hole,
+            'h_target_ef': target_hole,
             'P_anchor': 0.0,
             'P_target': P_target_baseline,
             'd_anchor': 0.0,
@@ -320,8 +332,8 @@ def scenario_stats(name, anchor_poly):
     h_anchor = compute_hole(anchor_poly)
     anchor_verts = list(anchor_poly.exterior.coords)[:-1]
     anchor_dists = [directional_distance_to_point_from_offset_leg(
-                        leg_state, drift_direction, Point(v))
-                    for v in anchor_verts]
+        leg_state, drift_direction, Point(v))
+        for v in anchor_verts]
     anchor_dists = [d for d in anchor_dists if d is not None]
     d_anchor = float(np.mean(anchor_dists)) if anchor_dists else 0.0
     # P(anchor) = base * r_p * a_p * h_anchor
@@ -335,11 +347,12 @@ def scenario_stats(name, anchor_poly):
         'h_anchor': h_anchor,
         'h_a_on_target': h_a_on_target,
         'coverage_hole': coverage_hole,
-        'h_target_eff': h_target_eff,
+        'h_target_ef': h_target_eff,
         'P_anchor': P_anchor,
         'P_target': P_target,
         'd_anchor': d_anchor,
     }
+
 
 scenarios = [
     scenario_stats("A: no anchor            ", None),
@@ -352,7 +365,7 @@ print("-" * 80)
 print(f"  {'Scenario':<30} {'cov(hole)':>10} {'h_eff':>12} "
       f"{'h_anchor':>12} {'P(anchor)':>12} {'P(target)':>12}")
 for s in scenarios:
-    print(f"  {s['name']:<30} {s['coverage_hole']*100:>9.1f}% "
+    print(f"  {s['name']:<30} {s['coverage_hole'] * 100:>9.1f}% "
           f"{s['h_target_eff']:>12.4e} {s['h_anchor']:>12.4e} "
           f"{s['P_anchor']:>12.4e} {s['P_target']:>12.4e}")
 print()
@@ -371,16 +384,16 @@ for s in scenarios:
     print(f"    h_anchor                     = {s['h_anchor']:.6e}")
     if s['anchor_poly'] is not None:
         print(f"    h(target & anchor_shadow)    = {s['h_a_on_target']:.6e}")
-        print(f"    coverage (hole fraction)     = {s['coverage_hole']*100:.2f}%")
-        print(f"    h_target_eff = h_target - a_p * h(target & shadow)")
+        print(f"    coverage (hole fraction)     = {s['coverage_hole'] * 100:.2f}%")
+        print("    h_target_eff = h_target - a_p * h(target & shadow)")
         print(f"                 = {target_hole:.4e} - {anchor_p} * {s['h_a_on_target']:.4e}")
         print(f"                 = {s['h_target_eff']:.6e}")
     else:
         print(f"    (no anchor; h_target_eff = h_target = {target_hole:.4e})")
-    print(f"    P(anchor)  = base * r_p * a_p * h_anchor")
+    print("    P(anchor)  = base * r_p * a_p * h_anchor")
     print(f"               = {base:.4e} * {rose_prob} * {anchor_p} * {s['h_anchor']:.4e}")
     print(f"               = {s['P_anchor']:.6e}")
-    print(f"    P(target)  = base * r_p * h_target_eff * P_NR(d_target)")
+    print("    P(target)  = base * r_p * h_target_eff * P_NR(d_target)")
     print(f"               = {base:.4e} * {rose_prob} * {s['h_target_eff']:.4e} * {p_nr_target:.4e}")
     print(f"               = {s['P_target']:.6e}")
     print()
@@ -390,6 +403,7 @@ for s in scenarios:
 # =============================================================================
 
 fig, axes = plt.subplots(1, 3, figsize=(21, 9))
+
 
 def draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
     if geom is None or geom.is_empty:
@@ -406,6 +420,7 @@ def draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
             for interior in g.interiors:
                 ax_obj.fill(*interior.xy, fc='white', ec='darkred', lw=1)
             first = False
+
 
 for ax, s in zip(axes, scenarios):
     cfg_disp = DriftConfig(reach_distance_m=1.2 * d_target, corridor_sigma_multiplier=3.0)
@@ -466,10 +481,10 @@ for ax, s in zip(axes, scenarios):
                 xytext=(center.x, center.y),
                 arrowprops=dict(arrowstyle='->', color='blue', lw=2))
     ax.text(center.x + dx * 0.5 + 200, center.y + dy * 0.5 + 200,
-            f'Drift NW\n(315 deg)', color='blue', fontsize=9)
+            'Drift NW\n(315 deg)', color='blue', fontsize=9)
 
     txt = (
-        f"coverage(hole) = {s['coverage_hole']*100:.1f}%\n"
+        f"coverage(hole) = {s['coverage_hole'] * 100:.1f}%\n"
         f"h_anchor       = {s['h_anchor']:.4e}\n"
         f"h_target       = {target_hole:.4e}\n"
         f"h_target_eff   = {s['h_target_eff']:.4e}\n"

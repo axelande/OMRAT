@@ -25,7 +25,7 @@
 import os
 
 
-from qgis.PyQt import QtGui, QtWidgets, uic
+from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -48,7 +48,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.plugin = plugin
         self.is_active = True
         self._apply_visual_refresh()
-        
+
         # Route tab
         self.twRouteList: QtWidgets.QTableWidget
         self.pbAddRoute: QtWidgets.QPushButton
@@ -56,8 +56,8 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.pbRemoveRoute: QtWidgets.QPushButton
         self.pbStopRoute: QtWidgets.QPushButton
         self.pbUpdateAIS: QtWidgets.QPushButton
-        self.laDir1:QtWidgets.QLabel
-        self.laDir2:QtWidgets.QLabel
+        self.laDir1: QtWidgets.QLabel
+        self.laDir2: QtWidgets.QLabel
         self.pbStopRoute: QtWidgets.QPushButton
         self.leNormMean1_1: QtWidgets.QLineEdit
         self.leNormMean1_2: QtWidgets.QLineEdit
@@ -83,11 +83,11 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.leUniformMax2: QtWidgets.QLineEdit
         self.LEMeanTimeSeconds1: QtWidgets.QLineEdit
         self.LEMeanTimeSeconds2: QtWidgets.QLineEdit
-        self.sbUniformP1:QtWidgets.QSpinBox
-        self.sbUniformP2:QtWidgets.QSpinBox
+        self.sbUniformP1: QtWidgets.QSpinBox
+        self.sbUniformP2: QtWidgets.QSpinBox
         self.DistributionWidget: QtWidgets.QLayout
 
-        #Traffic
+        # Traffic
         self.cbTrafficSelectSeg: QtWidgets.QComboBox
         self.cbSelectType: QtWidgets.QComboBox
         self.cbTrafficDirectionSelect: QtWidgets.QComboBox
@@ -97,7 +97,6 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.gbScalingControls: QtWidgets.QGroupBox
         self.wScalingContent: QtWidgets.QWidget
         self.vlFollowGlobalCheckboxes: QtWidgets.QVBoxLayout
-
 
         # Depths
         self.pbAddSimpleDepth: QtWidgets.QPushButton
@@ -109,15 +108,15 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.LEGebcoExtension : QtWidgets.QLineEdit
         self.LEOpenTopoAPIKey: QtWidgets.QLineEdit
         self.LEMaxDepth: QtWidgets.QLineEdit
-        self.SBDepthInterval:QtWidgets.QSpinBox
+        self.SBDepthInterval: QtWidgets.QSpinBox
         self.TWDepthIntervals: QtWidgets.QTableWidget
-        
+
         # Objects
-        self.twObjectList: QtWidgets.QTableWidget   
+        self.twObjectList: QtWidgets.QTableWidget
         self.pbAddSimpleObject: QtWidgets.QPushButton
         self.pbLoadObject: QtWidgets.QPushButton
         self.pbRemoveObject: QtWidgets.QPushButton
-        
+
         # Run analysis
         self.LEModelName: QtWidgets.QLineEdit
         self.pbRunModel: QtWidgets.QPushButton

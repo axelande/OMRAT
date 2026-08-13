@@ -64,18 +64,25 @@ def _safe_eval(code_obj, x: float) -> float:
     return eval(code_obj, _SAFE_EVAL_GLOBALS, {"x": x})  # nosec B307
 
 
-def get_Fcoll(na:float, pc:float) -> float:
+def get_Fcoll(na: float, pc: float) -> float:
     """Get the accident frequncy """
     return na * pc
 
-def get_drifting_prob(Fb:float, line_length:float, ship_speed:float) -> float:
-    """Calculates the drifting probability """
-    hours = line_length / ship_speed
-    return 1 - exp( - Fb / (24 * 365) * hours)
 
-def get_drift_time(distance:float, drift_speed:float) -> float:
+def get_drifting_prob(Fb: float, line_length: float, ship_speed: float) -> float:
+    """Calculates the drifting probability """
+    if ship_speed <= 0:
+        return 1.0
+    hours = line_length / ship_speed
+    return 1 - exp(- Fb / (24 * 365) * hours)
+
+
+def get_drift_time(distance: float, drift_speed: float) -> float:
     """Estimates the drifting time """
+    if drift_speed <= 0:
+        return float('inf')
     return distance / drift_speed
+
 
 def repairtime_function(data, x) -> float:
     if data["active_window"] == 0:
@@ -85,10 +92,14 @@ def repairtime_function(data, x) -> float:
         repaired = _safe_eval(_safe_compile(data["func"]), x)
     return repaired
 
+
 def powered_na(distance, mean_time, ship_speed):
     ai = mean_time * ship_speed
+    if ai <= 0:
+        return 0.0
     return exp(-distance / ai)
-    
+
+
 # Cache of (scipy dist | compiled code) keyed by a stable signature of the
 # ``data`` repair-params dict.  The end-to-end profile showed ~8 s of
 # ``builtins.exec`` from re-parsing ``data['func']`` on every call and
@@ -105,7 +116,9 @@ _NORM_FUNC_RE = re.compile(
     r"\.norm\(loc\s*=\s*(?P<loc>-?\d+(?:\.\d+)?)\s*,\s*scale\s*=\s*(?P<scale>-?\d+(?:\.\d+)?)\s*\)\s*\.cdf\(x\)"
 )
 _WEIBULL_FUNC_RE = re.compile(
-    r"\.weibull_min\(c\s*=\s*(?P<c>-?\d+(?:\.\d+)?)\s*,\s*loc\s*=\s*(?P<loc>-?\d+(?:\.\d+)?)\s*,\s*scale\s*=\s*(?P<scale>-?\d+(?:\.\d+)?)\s*\)\s*\.cdf\(x\)"
+    r"\.weibull_min\(c\s*=\s*(?P<c>-?\d+(?:\.\d+)?)\s*,"
+    r"\s*loc\s*=\s*(?P<loc>-?\d+(?:\.\d+)?)\s*,"
+    r"\s*scale\s*=\s*(?P<scale>-?\d+(?:\.\d+)?)\s*\)\s*\.cdf\(x\)"
 )
 
 
@@ -140,6 +153,7 @@ def _make_weibull_repair_fn(c: float, loc: float, scale: float, drift_speed: flo
 
 def _make_fallback_repair_fn(func_str: str, drift_speed: float):
     code = _safe_compile(func_str)
+
     def fn(distance: float, _code=code, _spd=drift_speed) -> float:
         x = distance / _spd / 3600.0
         return 1.0 - float(_safe_eval(_code, x))
@@ -165,7 +179,7 @@ def _repair_fn(data: dict, drift_speed: float):
         return fn
     if data.get('use_lognormal') == 1:
         fn = _make_lognorm_repair_fn(float(data['std']), float(data['loc']),
-                                      float(data['scale']), drift_speed)
+                                     float(data['scale']), drift_speed)
     else:
         func_str = str(data.get('func', ''))
         m = _NORM_FUNC_RE.search(func_str)
@@ -175,7 +189,7 @@ def _repair_fn(data: dict, drift_speed: float):
             wm = _WEIBULL_FUNC_RE.search(func_str)
             if wm is not None:
                 fn = _make_weibull_repair_fn(float(wm['c']), float(wm['loc']),
-                                              float(wm['scale']), drift_speed)
+                                             float(wm['scale']), drift_speed)
             else:
                 fn = _make_fallback_repair_fn(func_str, drift_speed)
     _REPAIR_FN_CACHE[key] = fn
@@ -192,16 +206,16 @@ def get_not_repaired(data: dict[str, str | float | bool], drift_speed: float, di
 # apply per-type parameters (e.g. blackout rate) without having to duplicate
 # the mapping in multiple files.
 SHIP_TYPE_NAMES: dict[int, str] = {
-    0:  "Other ship",
-    1:  "Search & rescue",
-    2:  "Sailing vessel",
-    3:  "Pleasure craft",
-    4:  "High speed craft",
-    5:  "Fishing (small)",
-    6:  "Fishing (large)",
-    7:  "Tug / push",
-    8:  "Passenger ferry",
-    9:  "Ro-pax",
+    0: "Other ship",
+    1: "Search & rescue",
+    2: "Sailing vessel",
+    3: "Pleasure craft",
+    4: "High speed craft",
+    5: "Fishing (small)",
+    6: "Fishing (large)",
+    7: "Tug / push",
+    8: "Passenger ferry",
+    9: "Ro-pax",
     10: "Ro-ro",
     11: "Passenger cruise",
     12: "Container feeder",
@@ -235,16 +249,16 @@ def default_blackout_by_ship_type() -> dict[int, float]:
 # 0=Other, 1=Search & rescue, ..., 18=Cargo/bulk, 19=Tanker, 20=Passenger.
 # Types with no dedicated Cb default to 0.70 (mid-range merchant vessel).
 _CB_BY_SHIP_TYPE: dict[int, float] = {
-    0:  0.70,   # Other ship
-    1:  0.50,   # Search & rescue (fast craft)
-    2:  0.65,   # Sailing vessel
-    3:  0.55,   # Pleasure craft
-    4:  0.65,   # High speed craft
-    5:  0.60,   # Fishing (small)
-    6:  0.65,   # Fishing (large)
-    7:  0.65,   # Tug/push
-    8:  0.70,   # Passenger ferry
-    9:  0.65,   # Ro-pax
+    0: 0.70,   # Other ship
+    1: 0.50,   # Search & rescue (fast craft)
+    2: 0.65,   # Sailing vessel
+    3: 0.55,   # Pleasure craft
+    4: 0.65,   # High speed craft
+    5: 0.60,   # Fishing (small)
+    6: 0.65,   # Fishing (large)
+    7: 0.65,   # Tug/push
+    8: 0.70,   # Passenger ferry
+    9: 0.65,   # Ro-pax
     10: 0.65,   # Ro-ro
     11: 0.70,   # Passenger cruise
     12: 0.65,   # Container feeder
@@ -776,4 +790,3 @@ def get_powered_grounding_cat2(
     prob_not_recovered = exp(-distance_to_obstacle / recovery_dist)
 
     return Pc * Q * prob_at_position * prob_not_recovered
-

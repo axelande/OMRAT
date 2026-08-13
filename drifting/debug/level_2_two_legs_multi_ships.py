@@ -16,23 +16,20 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from shapely.geometry import LineString, Polygon, Point
-from scipy import stats
-import pyproj
+import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from shapely.geometry import LineString, Polygon  # noqa: E402
+from scipy import stats  # noqa: E402
+import pyproj  # noqa: E402
 
-from drifting.engine import (
-    LegState, ShipState, DriftConfig,
+from drifting.engine import (  # noqa: E402
+    LegState, DriftConfig,
     compass_to_math_deg,
-    directional_distance_to_point_from_offset_leg,
-    corridor_width_m,
     build_directional_corridor,
     edge_average_distance_m,
 )
-from compute.basic_equations import get_not_repaired
-from geometries.analytical_probability import (
+from compute.basic_equations import get_not_repaired  # noqa: E402
+from geometries.analytical_probability import (  # noqa: E402
     compute_probability_analytical,
     _extract_polygon_rings,
 )
@@ -47,8 +44,10 @@ proj_wgs84 = pyproj.CRS("EPSG:4326")
 proj_utm = pyproj.CRS("EPSG:32633")
 transformer = pyproj.Transformer.from_crs(proj_wgs84, proj_utm, always_xy=True)
 
+
 def to_utm(lon, lat):
     return transformer.transform(lon, lat)
+
 
 # Leg 3: WP_2_End_Point (55.16728, 14.24187) -> WP_3_End_Point (55.39937, 14.59271)
 # Bearing ~41 deg NE, length ~34 km
@@ -84,7 +83,7 @@ print()
 print("GEOMETRY:")
 print(f"  Leg 3: length={leg3_line.length:.0f}m, bearing ~41 deg NE")
 print(f"  Leg 6: length={leg6_line.length:.0f}m, bearing ~41 deg NE")
-print(f"  Polygon BD5A4C46: depth=12m")
+print("  Polygon BD5A4C46: depth=12m")
 print()
 
 # =============================================================================
@@ -94,18 +93,18 @@ print()
 # Multiple ship categories with different draughts
 # Only ships with draught > 12m can ground on this polygon
 ship_categories = [
-    {'name': 'Oil tanker 225-250m',      'draught': 14.27, 'speed_kts': 12.5, 'freq_leg3': 610, 'freq_leg6': 50},
-    {'name': 'General cargo 225-250m',   'draught': 11.82, 'speed_kts': 13.0, 'freq_leg3': 450, 'freq_leg6': 40},
-    {'name': 'Bulk carrier 250-275m',    'draught': 16.53, 'speed_kts': 13.5, 'freq_leg3': 180, 'freq_leg6': 15},
-    {'name': 'Container 275-300m',       'draught': 13.50, 'speed_kts': 18.0, 'freq_leg3': 95,  'freq_leg6': 8},
-    {'name': 'Passenger 100-125m',       'draught': 5.80,  'speed_kts': 16.0, 'freq_leg3': 320, 'freq_leg6': 280},
+    {'name': 'Oil tanker 225-250m', 'draught': 14.27, 'speed_kts': 12.5, 'freq_leg3': 610, 'freq_leg6': 50},
+    {'name': 'General cargo 225-250m', 'draught': 11.82, 'speed_kts': 13.0, 'freq_leg3': 450, 'freq_leg6': 40},
+    {'name': 'Bulk carrier 250-275m', 'draught': 16.53, 'speed_kts': 13.5, 'freq_leg3': 180, 'freq_leg6': 15},
+    {'name': 'Container 275-300m', 'draught': 13.50, 'speed_kts': 18.0, 'freq_leg3': 95, 'freq_leg6': 8},
+    {'name': 'Passenger 100-125m', 'draught': 5.80, 'speed_kts': 16.0, 'freq_leg3': 320, 'freq_leg6': 280},
 ]
 
 polygon_depth = 12.0  # meters
 
 print("SHIP CATEGORIES:")
 print(f"  {'Name':<30} {'Draught':>8} {'Grounds?':>8} {'Freq L3':>8} {'Freq L6':>8}")
-print(f"  {'-'*30} {'-------':>8} {'-------':>8} {'-------':>8} {'-------':>8}")
+print(f"  {'-' * 30} {'-------':>8} {'-------':>8} {'-------':>8} {'-------':>8}")
 for s in ship_categories:
     grounds = 'YES' if s['draught'] > polygon_depth else 'no'
     print(f"  {s['name']:<30} {s['draught']:>7.2f}m {grounds:>8} {s['freq_leg3']:>8} {s['freq_leg6']:>8}")
@@ -297,7 +296,7 @@ for leg_info in legs:
     print(f"  {leg_info['name']} (length={line.length:.0f}m, hole={hole_pct:.4e}):")
     print(f"  {'Ship category':<30} {'Draught':>7} {'Freq':>5} {'Base':>10} "
           f"{'P_ground':>12} {'Note':>10}")
-    print(f"  {'-'*30} {'-'*7} {'-'*5} {'-'*10} {'-'*12} {'-'*10}")
+    print(f"  {'-' * 30} {'-' * 7} {'-' * 5} {'-' * 10} {'-' * 12} {'-' * 10}")
 
     for ship in ship_categories:
         freq = ship['freq_leg3'] if 'LEG_3' in leg_info['name'] else ship['freq_leg6']
@@ -333,7 +332,7 @@ for leg_info in legs:
     print()
 
 print("=" * 80)
-print(f"TOTAL GROUNDING (all legs, all ships, direction NW):")
+print("TOTAL GROUNDING (all legs, all ships, direction NW):")
 print(f"  P_total = {total_grounding:.6e} events/year")
 print()
 
@@ -350,6 +349,8 @@ for r in sorted(results, key=lambda x: x['p_ground'], reverse=True):
 fig, ax = plt.subplots(1, 1, figsize=(14, 10))
 
 # Helper to draw polygon/multipolygon
+
+
 def _draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
     if geom.is_empty:
         return
@@ -366,9 +367,10 @@ def _draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
                 ax_obj.fill(*interior.xy, fc='white', ec='darkred', lw=1)
             first = False
 
+
 # Plot corridors with shadow zones (shortened for readability)
-from shapely.affinity import translate as _translate
-from shapely.ops import unary_union as _unary_union
+from shapely.affinity import translate as _translate  # noqa: E402
+from shapely.ops import unary_union as _unary_union  # noqa: E402
 
 shadow_data = {}
 for leg_info in legs:
@@ -381,10 +383,10 @@ for leg_info in legs:
     corridor_display = build_directional_corridor(leg_info['leg_state'], dd, cfg_disp)
 
     # Build quad-sweep shadow in correct drift direction
-    _diag = np.sqrt((corridor_display.bounds[2]-corridor_display.bounds[0])**2 +
-                    (corridor_display.bounds[3]-corridor_display.bounds[1])**2)
+    _diag = np.sqrt((corridor_display.bounds[2] - corridor_display.bounds[0])**2 +
+                    (corridor_display.bounds[3] - corridor_display.bounds[1])**2)
     _ext = _diag * 2
-    _far = _translate(depth_polygon, xoff=dux*_ext, yoff=duy*_ext)
+    _far = _translate(depth_polygon, xoff=dux * _ext, yoff=duy * _ext)
     _oc = list(depth_polygon.exterior.coords)[:-1]
     _fc = list(_far.exterior.coords)[:-1]
     _quads = []
@@ -444,7 +446,7 @@ for i, leg_info in enumerate(legs):
 poly_x = [c[0] for c in poly_utm_coords]
 poly_y = [c[1] for c in poly_utm_coords]
 ax.fill(poly_x, poly_y, alpha=0.4, fc='brown', ec='darkred', lw=2,
-        label=f'Depth polygon (12m)')
+        label='Depth polygon (12m)')
 
 # Draw drift direction arrows (one per leg)
 drift_colors = {'LEG_3': 'blue', 'LEG_6': 'darkgreen'}
@@ -466,7 +468,7 @@ math_rad_leg3 = np.radians(compass_to_math_deg(drift_directions['LEG_3']))
 leg3_valid = legs[0]['valid_edge_data']
 if leg3_valid:
     e = leg3_valid[0]
-    mid = ((e['p1'][0]+e['p2'][0])/2, (e['p1'][1]+e['p2'][1])/2)
+    mid = ((e['p1'][0] + e['p2'][0]) / 2, (e['p1'][1] + e['p2'][1]) / 2)
     back_x = mid[0] - e['dist'] * np.cos(math_rad_leg3)
     back_y = mid[1] - e['dist'] * np.sin(math_rad_leg3)
     ax.plot([back_x, mid[0]], [back_y, mid[1]], 'r--', lw=1.2, alpha=0.6)
@@ -481,7 +483,7 @@ math_rad_leg6 = np.radians(compass_to_math_deg(drift_directions['LEG_6']))
 leg6_valid = legs[1]['valid_edge_data']
 if leg6_valid:
     e = leg6_valid[0]
-    mid = ((e['p1'][0]+e['p2'][0])/2, (e['p1'][1]+e['p2'][1])/2)
+    mid = ((e['p1'][0] + e['p2'][0]) / 2, (e['p1'][1] + e['p2'][1]) / 2)
     back_x = mid[0] - e['dist'] * np.cos(math_rad_leg6)
     back_y = mid[1] - e['dist'] * np.sin(math_rad_leg6)
     ax.plot([back_x, mid[0]], [back_y, mid[1]], '--', color='darkgreen', lw=1.2, alpha=0.6)
@@ -503,14 +505,14 @@ for leg_info in legs:
 # Summary text box
 textstr = (
     f"Drift speed: {drift_speed_kts}kts\n"
-    f"LEG_3: drift NW (315)\n"
-    f"LEG_6: drift N (0)\n"
+    "LEG_3: drift NW (315)\n"
+    "LEG_6: drift N (0)\n"
     f"Blackout: {blackout_rate}/yr\n"
     f"Rose: {rose_prob} (uniform)\n"
-    f"\nShip categories grounding: 3/5\n"
+    "\nShip categories grounding: 3/5\n"
     f"(draught > {polygon_depth}m)\n"
     f"\nTotal P(ground) = {total_grounding:.4e}/yr\n"
-    f"\nTop contributor:\n"
+    "\nTop contributor:\n"
     f"  {results[0]['ship']}\n"
     f"  from {results[0]['leg']}: {results[0]['p_ground']:.4e}"
 )
@@ -527,13 +529,13 @@ ax.grid(True, alpha=0.3)
 
 # Zoomed inset on the grounding polygon
 
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
-from shapely.geometry import box as shapely_box
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset  # noqa: E402
+from shapely.geometry import box as shapely_box  # noqa: E402
 # Enlarge and move the inset further down
 ax_zoom = inset_axes(ax, width="38%", height="38%", loc='lower right',
                      borderpad=3)
 pad = 800
-zoom_box = shapely_box(min(poly_x)-pad, min(poly_y)-pad, max(poly_x)+pad, max(poly_y)+pad)
+zoom_box = shapely_box(min(poly_x) - pad, min(poly_y) - pad, max(poly_x) + pad, max(poly_y) + pad)
 
 # --- LEG_3 (main contributor) ---
 sd3 = shadow_data['LEG_3']
@@ -550,7 +552,6 @@ if not shadow_clip6.is_empty:
     _draw_geom(ax_zoom, shadow_clip6, 0.18, 'darkgreen', 'darkgreen', 2.0)
 
 # If both LEG_3 and LEG_6 shadows overlap, overlay a hatch or darker color
-from shapely.ops import unary_union
 if not shadow_clip3.is_empty and not shadow_clip6.is_empty:
     overlap = shadow_clip3.intersection(shadow_clip6)
     if not overlap.is_empty:
@@ -585,8 +586,8 @@ for e in legs[1]['valid_edges']:
 for e in legs[1]['shadowed_edges']:
     ax_zoom.plot([e['p1'][0], e['p2'][0]], [e['p1'][1], e['p2'][1]],
                  '-', color='gray', linewidth=1.2, zorder=6, alpha=0.5)
-ax_zoom.set_xlim(min(poly_x)-pad, max(poly_x)+pad)
-ax_zoom.set_ylim(min(poly_y)-pad, max(poly_y)+pad)
+ax_zoom.set_xlim(min(poly_x) - pad, max(poly_x) + pad)
+ax_zoom.set_ylim(min(poly_y) - pad, max(poly_y) + pad)
 ax_zoom.set_aspect('equal')
 ax_zoom.grid(True, alpha=0.3)
 ax_zoom.set_title('Polygon + shadow', fontsize=9, fontweight='bold')

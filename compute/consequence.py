@@ -40,11 +40,13 @@ class ConsequenceValidation:
 def _validate_spill_probability(spill_prob: list, errors: list[str]) -> None:
     for i, row in enumerate(spill_prob):
         if not isinstance(row, (list, tuple)):
-            errors.append(f"spill_probability row {i}: not a list"); continue
+            errors.append(f"spill_probability row {i}: not a list")
+            continue
         try:
             row_sum = float(sum(float(v) for v in row))
         except (TypeError, ValueError):
-            errors.append(f"spill_probability row {i}: non-numeric value"); continue
+            errors.append(f"spill_probability row {i}: non-numeric value")
+            continue
         if abs(row_sum - 100.0) > _ROW_SUM_TOLERANCE_PCT:
             errors.append(f"spill_probability row {i}: sums to {row_sum:.2f}, "
                           f"expected 100.0 (+/- {_ROW_SUM_TOLERANCE_PCT})")
@@ -53,12 +55,14 @@ def _validate_spill_probability(spill_prob: list, errors: list[str]) -> None:
 def _validate_spill_fraction(spill_frac: list, errors: list[str]) -> None:
     for i, row in enumerate(spill_frac):
         if not isinstance(row, (list, tuple)):
-            errors.append(f"spill_fraction row {i}: not a list"); continue
+            errors.append(f"spill_fraction row {i}: not a list")
+            continue
         for j, v in enumerate(row):
             try:
                 f = float(v)
             except (TypeError, ValueError):
-                errors.append(f"spill_fraction row {i} col {j}: non-numeric value"); continue
+                errors.append(f"spill_fraction row {i} col {j}: non-numeric value")
+                continue
             if not 0.0 <= f <= 100.0:
                 errors.append(f"spill_fraction row {i} col {j}: {f:.2f} outside [0, 100]")
 
@@ -69,11 +73,13 @@ def _validate_catastrophe_levels(levels: list, errors: list[str], warnings: list
     seen: set[float] = set()
     for i, lvl in enumerate(levels):
         if not isinstance(lvl, dict):
-            errors.append(f"catastrophe_levels[{i}]: not a dict"); continue
+            errors.append(f"catastrophe_levels[{i}]: not a dict")
+            continue
         try:
             q = float(lvl.get('quantity', 0.0))
         except (TypeError, ValueError):
-            errors.append(f"catastrophe_levels[{i}]: non-numeric quantity"); continue
+            errors.append(f"catastrophe_levels[{i}]: non-numeric quantity")
+            continue
         if q <= 0:
             errors.append(f"catastrophe_levels[{i}]: quantity {q} must be positive")
         if q in seen:
@@ -85,12 +91,14 @@ def _validate_catastrophe_levels(levels: list, errors: list[str], warnings: list
 def _validate_oil_onboard(oil: list, errors: list[str]) -> None:
     for i, row in enumerate(oil):
         if not isinstance(row, (list, tuple)):
-            errors.append(f"oil_onboard row {i}: not a list"); continue
+            errors.append(f"oil_onboard row {i}: not a list")
+            continue
         for j, v in enumerate(row):
             try:
                 f = float(v)
             except (TypeError, ValueError):
-                errors.append(f"oil_onboard row {i} col {j}: non-numeric value"); continue
+                errors.append(f"oil_onboard row {i} col {j}: non-numeric value")
+                continue
             if f < 0:
                 errors.append(f"oil_onboard row {i} col {j}: {f} is negative")
 
@@ -172,7 +180,7 @@ def _lookup_oil(
         row = oil_onboard[ship_type_idx]
         if isinstance(row, (list, tuple)) and 0 <= length_idx < len(row):
             try:
-                return float(row[length_idx])
+                return max(0.0, float(row[length_idx]))
             except (TypeError, ValueError):
                 return 0.0
     return 0.0
@@ -235,7 +243,7 @@ def _process_accident_cells(
         oil = _lookup_oil(oil_onboard, ship_type_idx, length_idx)
         by_accident[accident_label]['frequency'] += freq
         sf, mv = _accum_spill_levels(freq, oil, prob_row, frac_row,
-            sorted_levels, results, accident_label, by_accident)
+                                     sorted_levels, results, accident_label, by_accident)
         total_sf += sf
         total_mv += mv
     return total_sf, total_mv

@@ -180,9 +180,9 @@ class AisUpdateTask(QgsTask):
         if sd is None:
             return
         sd['mean1_1'] = float(line1.mean()) if len(line1) else 0.0
-        sd['std1_1']  = float(line1.std())  if len(line1) else 0.0
+        sd['std1_1'] = float(line1.std()) if len(line1) else 0.0
         sd['mean2_1'] = float(line2.mean()) if len(line2) else 0.0
-        sd['std2_1']  = float(line2.std())  if len(line2) else 0.0
+        sd['std2_1'] = float(line2.std()) if len(line2) else 0.0
         sd['weight1_1'] = 100
         sd['weight2_1'] = 100
         sd['dist1'] = line1
@@ -190,11 +190,11 @@ class AisUpdateTask(QgsTask):
         for j in range(1, 3):
             for i in range(2, 4):
                 sd[f'mean{j}_{i}'] = 0
-                sd[f'std{j}_{i}']  = 0
+                sd[f'std{j}_{i}'] = 0
                 sd[f'weight{j}_{i}'] = 0
             sd[f'u_min{j}'] = 0
             sd[f'u_max{j}'] = 0
-            sd[f'u_p{j}']   = 0
+            sd[f'u_p{j}'] = 0
         sd['ai1'] = 180
         sd['ai2'] = 180
 

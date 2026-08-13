@@ -2,6 +2,8 @@ numpy
 pandas
 pytest
 pytest-cov
+# Style linter; ``tools/run_flake8.py`` is the canonical entry point.
+flake8>=7
 # Security linter; ``tools/run_bandit.py`` is the canonical entry point
 # and is run in CI before any plugins.qgis.org upload.
 bandit>=1.7

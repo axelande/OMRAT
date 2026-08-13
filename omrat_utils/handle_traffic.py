@@ -5,11 +5,11 @@ if TYPE_CHECKING:
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
-import numpy as np
-from qgis.PyQt.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox
+import numpy as np  # noqa: E402
+from qgis.PyQt.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox  # noqa: E402
 
-from geometries import isint
-from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox
+from geometries import isint  # noqa: E402
+from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox  # noqa: E402
 
 
 WidgetType = Union[QLineEdit, QSpinBox, QDoubleSpinBox]
@@ -28,7 +28,7 @@ def _default_traffic_scaling() -> dict[str, Any]:
 
 
 class Traffic:
-    def __init__(self, omrat: "OMRAT", dw:"OMRATMainWidget"):
+    def __init__(self, omrat: "OMRAT", dw: "OMRATMainWidget"):
         self.dw = dw
         self.omrat = omrat
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = self.omrat.traffic_data
@@ -63,7 +63,7 @@ class Traffic:
         self._connect_scaling_controls()
         self.set_table_headings()
         self.run_update = True
-        
+
     def fill_cbTrafficSelectSeg(self):
         """Sets the segment names in cbTrafficSelectSeg"""
         self.dw.cbTrafficSelectSeg.clear()
@@ -118,7 +118,7 @@ class Traffic:
         # bool list in sync with the current ship-type count.
         self.populate_scaling_checkboxes()
 
-    def create_empty_dict(self, s_key:str, dirs:list[str]):
+    def create_empty_dict(self, s_key: str, dirs: list[str]):
         """Creates an empty dict for the segment with all types"""
         self.traffic_data[s_key] = {}
         rows = self.dw.twTrafficData.rowCount()
@@ -137,8 +137,8 @@ class Traffic:
                         # accidentally write through to other cells.
                         line.append(default if not isinstance(default, list) else [])
                     self.traffic_data[s_key][di][key].append(line)
-            
-    def update_traffic_tbl(self, caller:str):
+
+    def update_traffic_tbl(self, caller: str):
         """Updates Traffic data table with the data from traffic_data,
         using the correct type and segment"""
         if self.run_update:
@@ -150,7 +150,7 @@ class Traffic:
         cols = self.dw.twTrafficData.columnCount()
         self.last_var: str = self.dw.cbSelectType.currentText()
         self.c_di = self.dw.cbTrafficDirectionSelect.currentText()
-        if any([self.c_seg== "", self.c_di== "", self.last_var== ""]):
+        if any([self.c_seg == "", self.c_di == "", self.last_var == ""]):
             return
         # Make sure the Scaling matrix exists for the (seg, dir) we are
         # about to display.  Legacy projects and freshly-imported IWRAP
@@ -162,7 +162,7 @@ class Traffic:
         self._disconnect_scaling_cell_signals()
         for row in range(rows):
             for col in range(cols):
-                val:float|int|str = self.traffic_data[self.c_seg][self.c_di][self.last_var][row][col]
+                val: float | int | str = self.traffic_data[self.c_seg][self.c_di][self.last_var][row][col]
 
                 if is_scaling_view:
                     # Scaling cells are always percent values rendered as
@@ -204,7 +204,7 @@ class Traffic:
                     val = float(val)
                     item.setValue(val)
                 self.dw.twTrafficData.setCellWidget(row, col, item)
-        
+
     def update_direction_select(self):
         self.run_update = False
         self.dw.cbTrafficDirectionSelect.clear()
@@ -214,7 +214,7 @@ class Traffic:
             self.dw.cbTrafficDirectionSelect.addItem(key)
         self.c_di = self.dw.cbTrafficDirectionSelect.currentText()
         self.run_update = True
-    
+
     def save(self):
         """Saves the previous "table" in traffic_data"""
         if any([self.c_seg == "", self.c_di == "", self.last_var == ""]):
@@ -226,7 +226,7 @@ class Traffic:
             for col in range(cols):
                 val = self.dw.twTrafficData.cellWidget(row, col)
                 self.traffic_data[self.c_seg][self.c_di][typ][row][col] = val.value()
-                    
+
     def commit_changes(self):
         """Copy the output from the traffic data within this module to omrats traffic_data"""
         self.save()

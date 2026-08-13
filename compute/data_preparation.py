@@ -115,10 +115,16 @@ def clean_traffic(data: dict[str, Any]) -> list[tuple[LineString, list[Any], lis
         for k, (di, var) in enumerate(dirs.items()):
             distributions, weights = get_distribution(data["segment_data"][segment], k)
             if k == 0:
-                geom_base: BaseGeometry = sw.loads(f'LineString({data["segment_data"][segment]["Start_Point"]}, {data["segment_data"][segment]["End_Point"]})')
+                geom_base: BaseGeometry = sw.loads(
+                    f'LineString({data["segment_data"][segment]["Start_Point"]},'
+                    f' {data["segment_data"][segment]["End_Point"]})'
+                )
             else:
-                geom_base: BaseGeometry = sw.loads(f'LineString({data["segment_data"][segment]["End_Point"]}, {data["segment_data"][segment]["Start_Point"]})')
-            assert(isinstance(geom_base, LineString))
+                geom_base: BaseGeometry = sw.loads(
+                    f'LineString({data["segment_data"][segment]["End_Point"]},'
+                    f' {data["segment_data"][segment]["Start_Point"]})'
+                )
+            assert (isinstance(geom_base, LineString))
             geom: LineString = geom_base
             leg_traffic: list[dict[str, float]] = []
             name = f"Leg {segment}-{data['segment_data'][segment]['Dirs'][k]}"
@@ -130,13 +136,13 @@ def clean_traffic(data: dict[str, Any]) -> list[tuple[LineString, list[Any], lis
                         value = int(value)
                     if value > 0:
                         info: dict[str, float] = {'freq': value,
-                                'speed': float(var['Speed (knots)'][i][j]),
-                                'draught': float(var['Draught (meters)'][i][j]),
-                                'height': float(var['Ship heights (meters)'][i][j]),
-                                'ship_type': i,
-                                'ship_size': j,
-                                'direction': di,
-                                }
+                                                  'speed': float(var['Speed (knots)'][i][j]),
+                                                  'draught': float(var['Draught (meters)'][i][j]),
+                                                  'height': float(var['Ship heights (meters)'][i][j]),
+                                                  'ship_type': i,
+                                                  'ship_size': j,
+                                                  'direction': di,
+                                                  }
                         leg_traffic.append(info)
             traffics.append((geom, distributions, weights, leg_traffic, name))
     return traffics
@@ -220,6 +226,7 @@ def _make_coord_transform(utm_epsg: int):
         utm_crs = QgsCoordinateReferenceSystem(f"EPSG:{utm_epsg}")
         transform_context = QgsProject.instance().transformContext()
         coord_transform = QgsCoordinateTransform(wgs84_crs, utm_crs, transform_context)
+
         def transform_coords(x, y):
             from qgis.core import QgsPointXY
             point = coord_transform.transform(QgsPointXY(x, y))
@@ -227,6 +234,7 @@ def _make_coord_transform(utm_epsg: int):
     else:
         from pyproj import Transformer as _Transformer
         _proj = _Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
+
         def transform_coords(x, y):
             return _proj.transform(x, y)
     return transform_coords
@@ -239,8 +247,8 @@ def transform_to_utm(lines, objects):
     cy = sum(g.centroid.y for g in all_geometries) / len(all_geometries)
     utm_epsg = _get_utm_epsg(cx, cy)
     tc = _make_coord_transform(utm_epsg)
-    xform = lambda geom: transform(tc, geom)
-    return [xform(l) for l in lines], [xform(o) for o in objects], utm_epsg
+    def xform(geom): return transform(tc, geom)
+    return [xform(ln) for ln in lines], [xform(o) for o in objects], utm_epsg
 
 
 def prepare_traffic_lists(data: dict[str, Any]) -> tuple[

@@ -28,21 +28,21 @@ class DriftingReportBuilderMixin:
     """
 
     def _add_direct_segment_contrib(
-            self,
-            report: dict[str, Any],
-            report_key: str,
-            obstacle_key: str,
-            seg_idx: int | None,
-            leg_dir_key: str,
-            contrib: float,
-        ) -> None:
-            """Write segment contribution directly, bypassing equal split helper."""
-            if seg_idx is None:
-                return
-            obs_seg_map = report.setdefault(report_key, {}).setdefault(obstacle_key, {})
-            seg_key = f"seg_{seg_idx}"
-            seg_data = obs_seg_map.setdefault(seg_key, {})
-            seg_data[leg_dir_key] = seg_data.get(leg_dir_key, 0.0) + contrib
+        self,
+        report: dict[str, Any],
+        report_key: str,
+        obstacle_key: str,
+        seg_idx: int | None,
+        leg_dir_key: str,
+        contrib: float,
+    ) -> None:
+        """Write segment contribution directly, bypassing equal split helper."""
+        if seg_idx is None:
+            return
+        obs_seg_map = report.setdefault(report_key, {}).setdefault(obstacle_key, {})
+        seg_key = f"seg_{seg_idx}"
+        seg_data = obs_seg_map.setdefault(seg_key, {})
+        seg_data[leg_dir_key] = seg_data.get(leg_dir_key, 0.0) + contrib
 
     def _accumulate_object_prob(
         self,
@@ -169,27 +169,27 @@ class DriftingReportBuilderMixin:
             pass
 
     def _update_report(self,
-            report: dict[str, Any],
-            event: str,
-            contrib: float,
-            idx: int,
-            structures: list[dict[str, Any]],
-            depths: list[dict[str, Any]],
-            seg_id: str,
-            cell: dict[str, float],
-            d_idx: int,
-            dist: float,
-            base: float,
-            rp: float,
-            anchor_factor: float,
-            p_nr: float,
-            ov_frac: float,
-            freq: float,
-            ship_type: int,
-            ship_size: int,
-            drift_corridor: Polygon | None = None,
-            leg: LineString | None = None,
-        ) -> None:
+                       report: dict[str, Any],
+                       event: str,
+                       contrib: float,
+                       idx: int,
+                       structures: list[dict[str, Any]],
+                       depths: list[dict[str, Any]],
+                       seg_id: str,
+                       cell: dict[str, float],
+                       d_idx: int,
+                       dist: float,
+                       base: float,
+                       rp: float,
+                       anchor_factor: float,
+                       p_nr: float,
+                       ov_frac: float,
+                       freq: float,
+                       ship_type: int,
+                       ship_size: int,
+                       drift_corridor: Polygon | None = None,
+                       leg: LineString | None = None,
+                       ) -> None:
         """Update report dictionaries with contribution."""
         leg_dir_label = str(cell.get('direction', '')).strip()
         leg_dir_key = f"{seg_id}:{leg_dir_label}:{d_idx * 45}"
@@ -198,8 +198,12 @@ class DriftingReportBuilderMixin:
             report, event, contrib, dist, base, rp, leg_dir_key,
             anchor_factor, p_nr, ov_frac, freq, ship_type, ship_size,
         )
-        self._accumulate_structure_legdir(report, event, idx, structures, leg_dir_key, contrib, d_idx, drift_corridor, leg)
-        self._accumulate_depth_legdir(report, event, idx, depths, leg_dir_key, contrib, d_idx, drift_corridor, leg)
+        self._accumulate_structure_legdir(
+            report, event, idx, structures, leg_dir_key, contrib, d_idx, drift_corridor, leg
+        )
+        self._accumulate_depth_legdir(
+            report, event, idx, depths, leg_dir_key, contrib, d_idx, drift_corridor, leg
+        )
 
     def _record_seg_debug_meta(
         self,

@@ -26,8 +26,7 @@ from functools import partial
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QUrl
 from qgis.PyQt.QtGui import QIcon, QAction, QDesktopServices
 from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
-from qgis._core import QgsVectorDataProvider
-from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsProject)
+from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsProject, QgsMapCanvas)
 from qgis.core import QgsMessageLog, Qgis, QgsApplication
 
 from qgis.gui import QgsMapToolPan, QgisInterface
@@ -40,31 +39,31 @@ import time
 
 sys.path.append('.')
 # Initialize Qt resources from file resources.py
-from resources import *
+from resources import *  # noqa: F401,F403,E402
 
 # Import the code for the DockWidget
-from compute.run_calculations import Calculation
-from compute.calculation_task import CalculationTask
-from geometries.handle_qgis_iface import HandleQGISIface
-from omrat_utils.causation_factors import CausationFactors
-from omrat_utils.handle_ais import AIS
-from omrat_utils.handle_settings import DriftSettings
-from omrat_utils.handle_traffic import Traffic
-from omrat_utils.handle_distributions import Distributions
-from omrat_utils.storage import Storage
-from omrat_utils.handle_object import OObject
-from omrat_utils.handle_ship_cat import ShipCategories
-from omrat_utils.handle_consequence import Consequence
-from omrat_utils.handle_junctions import Junctions
-from omrat_utils.gather_data import GatherData
-from omrat_widget import OMRATMainWidget
+from compute.run_calculations import Calculation  # noqa: E402
+from compute.calculation_task import CalculationTask  # noqa: E402
+from geometries.handle_qgis_iface import HandleQGISIface  # noqa: E402
+from omrat_utils.causation_factors import CausationFactors  # noqa: E402
+from omrat_utils.handle_ais import AIS  # noqa: E402
+from omrat_utils.handle_settings import DriftSettings  # noqa: E402
+from omrat_utils.handle_traffic import Traffic  # noqa: E402
+from omrat_utils.handle_distributions import Distributions  # noqa: E402
+from omrat_utils.storage import Storage  # noqa: E402
+from omrat_utils.handle_object import OObject  # noqa: E402
+from omrat_utils.handle_ship_cat import ShipCategories  # noqa: E402
+from omrat_utils.handle_consequence import Consequence  # noqa: E402
+from omrat_utils.handle_junctions import Junctions  # noqa: E402
+from omrat_utils.gather_data import GatherData  # noqa: E402
+from omrat_widget import OMRATMainWidget  # noqa: E402
 
-from omrat_utils.compare_mixin import CompareMixin
-from omrat_utils.accident_results_mixin import AccidentResultsMixin
-from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin
-from omrat_utils.iwrap_io_mixin import IwrapIOMixin
-from omrat_utils.run_history_mixin import RunHistoryMixin
-from omrat_utils.notifier import MessageBarNotifier
+from omrat_utils.compare_mixin import CompareMixin  # noqa: E402
+from omrat_utils.accident_results_mixin import AccidentResultsMixin  # noqa: E402
+from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin  # noqa: E402
+from omrat_utils.iwrap_io_mixin import IwrapIOMixin  # noqa: E402
+from omrat_utils.run_history_mixin import RunHistoryMixin  # noqa: E402
+from omrat_utils.notifier import MessageBarNotifier  # noqa: E402
 
 
 class OMRAT(
@@ -78,7 +77,8 @@ class OMRAT(
     cohesive group of slots / helpers; see the ``omrat_utils`` package
     docstrings for what lives where.
     """
-    def __init__(self, iface:QgisInterface, testing:bool=False):
+
+    def __init__(self, iface: QgisInterface, testing: bool = False):
         """Constructor.
 
         :param iface: An interface instance that will be passed to this class
@@ -159,7 +159,7 @@ class OMRAT(
             self.translator.load(locale_path)
             QCoreApplication.installTranslator(self.translator)
 
-    def tr(self, message:str):
+    def tr(self, message: str):
         """Get the translation for a string using Qt translation API.
 
         We implement this ourselves since we do not inherit QObject.
@@ -173,16 +173,16 @@ class OMRAT(
         return QCoreApplication.translate('OMRAT', message)
 
     def add_action(
-        self,
-        icon_path:str,
-        text:str,
-        callback: Callable[[], None],
-        enabled_flag:bool=True,
-        add_to_menu:bool=True,
-        add_to_toolbar:bool=True,
-        status_tip:str|None=None,
-        whats_this:str|None=None,
-        parent:QWidget|None=None) -> QAction:
+            self,
+            icon_path: str,
+            text: str,
+            callback: Callable[[], None],
+            enabled_flag: bool = True,
+            add_to_menu: bool = True,
+            add_to_toolbar: bool = True,
+            status_tip: str | None = None,
+            whats_this: str | None = None,
+            parent: QWidget | None = None) -> QAction:
         """Add a toolbar icon to the toolbar.
 
         :param icon_path: Path to the icon for this action. Can be a resource
@@ -257,7 +257,7 @@ class OMRAT(
         # Connect to project cleared signal to clean up drift corridors
         QgsProject.instance().cleared.connect(self._on_project_cleared)
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     def _on_project_cleared(self):
         """Called when the QGIS project is cleared/reloaded.
@@ -577,20 +577,20 @@ class OMRAT(
         gc.collect()
         self._unload_modules()
         QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.Info)
-        
-    def point4326_from_wkt(self, coord_str:str, crs:str) -> QgsPoint:
+
+    def point4326_from_wkt(self, coord_str: str, crs: str) -> QgsPoint:
         if '(' in coord_str:
             coord_str = coord_str.split('(')[1].split(')')[0]
         coords_str: list[str] = coord_str.split(' ')
         coords: list[float] = [float(coord) for coord in coords_str]
         q_point = QgsPoint(coords[0], coords[1])
         return q_point
-        
+
     def _init_segment_layer(self, seg_data: dict, crs: str):
         route_id = seg_data['Route_Id']
         seg_id = seg_data['Segment_Id']
         name = f"Segment {route_id} - {seg_id}"
-        vl = QgsVectorLayer(f"LineString?crs=EPSG:4326", name, "memory")
+        vl = QgsVectorLayer("LineString?crs=EPSG:4326", name, "memory")
         QgsProject.instance().addMapLayer(vl)
         self.segment_id += 1
         if not vl.isEditable():
@@ -643,7 +643,7 @@ class OMRAT(
         vl.triggerRepaint()
         return True
 
-    def load_lines(self, data:dict[str, dict[str, Any]]) -> None:
+    def load_lines(self, data: dict[str, dict[str, Any]]) -> None:
         self.segment_id = 0
         crs = self.iface.mapCanvas().mapSettings().destinationCrs().authid()
         for key, seg_data in data["segment_data"].items():
@@ -677,7 +677,7 @@ class OMRAT(
     def reset_route_table(self) -> None:
         self.main_widget.twRouteList.setColumnCount(7)
         self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment_Id', 'Route_Id', 'Leg_name',
-                                                            'Start_Point', 'End_Point', 'Width', 'Update AIS'])
+                                                                'Start_Point', 'End_Point', 'Width', 'Update AIS'])
         self.main_widget.twRouteList.setColumnWidth(0, 75)
         self.main_widget.twRouteList.setColumnWidth(1, 75)
         self.main_widget.twRouteList.setColumnWidth(2, 75)
@@ -686,12 +686,12 @@ class OMRAT(
         self.main_widget.twRouteList.setColumnWidth(5, 75)
         self.main_widget.twRouteList.setColumnWidth(6, 75)
         self.main_widget.twRouteList.setRowCount(0)
-    
+
     def run_traffic_module(self) -> None:
         self.traffic.traffic_data = self.traffic_data
         self.traffic.fill_cbTrafficSelectSeg()
         self.traffic.update_direction_select()
-        
+
     def save_work(self):
         store = Storage(self)
         store.store_all()
@@ -707,7 +707,7 @@ class OMRAT(
         if choice == 'clear':
             self.clear_model()
         store.load_from_path(file_path)
-               
+
     def run_calculation(self):
         """Run calculation in a background QgsTask for better UI responsiveness."""
         gd = GatherData(self)
@@ -932,7 +932,7 @@ class OMRAT(
         actionPan: QAction | None = self.iface.actionPan()
         if actionPan is not None:
             actionPan.trigger()
-        
+
     def ais_settings(self) -> None:
         self.ais.run()
 
@@ -962,7 +962,6 @@ class OMRAT(
     def _open_external_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))
 
-
     def update_ais(self) -> None:
         # Step 1 (main thread, needs UI dialogs): validate route geometry —
         # snap close waypoints, split crossing legs.
@@ -988,11 +987,11 @@ class OMRAT(
         # rebuild junction transition matrices.  The task disables
         # pbUpdateAIS for its duration and re-enables it in finished().
         self.ais.update_legs()
-    
+
     # Drift-analysis slots are provided by ``DriftAnalysisMixin``
     # (see ``omrat_utils.drift_analysis_mixin``); they used to live here.
 
-    #--------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     def run(self):
         """Run method that loads and starts the plugin"""
@@ -1044,7 +1043,10 @@ class OMRAT(
         hm.addAction("Database setup && AIS ingestion", partial(self._open_docs_url, "database_setup.html"))
         hm.addAction("Theory", partial(self._open_docs_url, "theory.html"))
         hm.addSeparator()
-        hm.addAction("Report a bug (GitHub issues)", partial(self._open_external_url, "https://github.com/axelande/OMRAT/issues"))
+        hm.addAction(
+            "Report a bug (GitHub issues)",
+            partial(self._open_external_url, "https://github.com/axelande/OMRAT/issues"),
+        )
         return fileMenu
 
     def _connect_geometry_buttons(self) -> None:

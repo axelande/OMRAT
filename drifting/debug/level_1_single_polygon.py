@@ -27,26 +27,21 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.patches import FancyArrowPatch
-from shapely.geometry import LineString, Polygon, Point, box
-from shapely.ops import transform
-from scipy import stats
-import pyproj
+import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+from shapely.geometry import LineString, Polygon, Point, box  # noqa: E402
+from scipy import stats  # noqa: E402
+import pyproj  # noqa: E402
 
-from drifting.engine import (
+from drifting.engine import (  # noqa: E402
     LegState, ShipState, DriftConfig,
     compass_to_math_deg,
     directional_distance_to_point_from_offset_leg,
-    directional_distance_m,
-    corridor_width_m,
     build_directional_corridor,
     edge_average_distance_m,
 )
-from compute.basic_equations import get_not_repaired, get_drift_time
-from geometries.analytical_probability import (
+from compute.basic_equations import get_not_repaired  # noqa: E402
+from geometries.analytical_probability import (  # noqa: E402
     compute_probability_analytical,
     _extract_polygon_rings,
 )
@@ -80,11 +75,14 @@ proj_utm = pyproj.CRS("EPSG:32633")
 transformer = pyproj.Transformer.from_crs(proj_wgs84, proj_utm, always_xy=True)
 transformer_inv = pyproj.Transformer.from_crs(proj_utm, proj_wgs84, always_xy=True)
 
+
 def to_utm(lon, lat):
     return transformer.transform(lon, lat)
 
+
 def to_wgs84(x, y):
     return transformer_inv.transform(x, y)
+
 
 # Transform leg to UTM
 leg_start_utm = to_utm(*leg3_start_lonlat)
@@ -103,8 +101,8 @@ print("GEOMETRY (UTM Zone 33N, EPSG:32633):")
 print(f"  Leg start:  ({leg_start_utm[0]:.1f}, {leg_start_utm[1]:.1f}) m")
 print(f"  Leg end:    ({leg_end_utm[0]:.1f}, {leg_end_utm[1]:.1f}) m")
 print(f"  Leg length: {leg_line.length:.1f} m")
-print(f"  Leg bearing: ~41 deg (NE)")
-print(f"  Polygon depth: 12 m")
+print("  Leg bearing: ~41 deg (NE)")
+print("  Polygon depth: 12 m")
 print(f"  Polygon centroid (UTM): ({depth_polygon.centroid.x:.1f}, {depth_polygon.centroid.y:.1f})")
 print()
 
@@ -143,7 +141,7 @@ drift_direction = 315
 lateral_sigma = 500.0  # meters (typical for a wide lane)
 
 print("SHIP & DRIFT PARAMETERS:")
-print(f"  Ship type: Oil products tanker 225-250m")
+print("  Ship type: Oil products tanker 225-250m")
 print(f"  Draught: {ship_draught} m (> polygon depth 12m -> grounding hazard)")
 print(f"  Speed: {ship_speed_kts} kts")
 print(f"  Frequency: {ship_freq} ships/year")
@@ -186,11 +184,11 @@ print("-" * 80)
 # Step 1: Exposure (base rate)
 hours_present = (leg_line.length / (ship_speed_kts * 1852)) * ship_freq
 base = hours_present * blackout_per_hour
-print(f"  Step 1 - Exposure:")
-print(f"    hours_present = L / (V * 1852) * freq")
+print("  Step 1 - Exposure:")
+print("    hours_present = L / (V * 1852) * freq")
 print(f"                  = {leg_line.length:.1f} / ({ship_speed_kts} * 1852) * {ship_freq}")
 print(f"                  = {hours_present:.4f} hours/year")
-print(f"    base = hours_present * blackout_per_hour")
+print("    base = hours_present * blackout_per_hour")
 print(f"         = {hours_present:.4f} * {blackout_per_hour:.6e}")
 print(f"         = {base:.6e}")
 print()
@@ -229,19 +227,19 @@ hole_pct = compute_probability_analytical(
     n_slices=200,
 )
 
-print(f"  Step 2 - Probability hole (analytical):")
+print("  Step 2 - Probability hole (analytical):")
 print(f"    drift_direction = {drift_direction} deg compass = {math_deg:.1f} deg math")
 print(f"    drift_vec = ({drift_vec[0]:.4f}, {drift_vec[1]:.4f})")
 print(f"    lateral_range = 5 * sigma = {lateral_range:.0f} m")
-print(f"    n_slices = 200")
+print("    n_slices = 200")
 print(f"    hole_pct = {hole_pct:.6e}")
-print(f"    (fraction of distribution that intersects polygon in this direction)")
+print("    (fraction of distribution that intersects polygon in this direction)")
 print()
 
 # Step 3: Edge-level distribution of hole
 # Get polygon edges and their individual distances
 edges = list(zip(poly_utm_coords[:-1], poly_utm_coords[1:]))
-print(f"  Step 3 - Edge distances and hole distribution:")
+print("  Step 3 - Edge distances and hole distribution:")
 print(f"    Polygon has {len(edges)} edges")
 
 # Build corridor for edge filtering
@@ -304,7 +302,7 @@ for e in valid_edges:
 print()
 
 # Step 4: Probability of not being repaired (per edge)
-print(f"  Step 4 - P(not repaired) per edge:")
+print("  Step 4 - P(not repaired) per edge:")
 for e in valid_edges:
     drift_time_s = e['dist'] / drift_speed_ms
     drift_time_h = drift_time_s / 3600
@@ -315,8 +313,8 @@ for e in valid_edges:
 print()
 
 # Step 5: Final grounding probability per edge
-print(f"  Step 5 - Grounding probability per edge:")
-print(f"    Formula: P_ground = base * rose * hole_edge * P(not_repaired)")
+print("  Step 5 - Grounding probability per edge:")
+print("    Formula: P_ground = base * rose * hole_edge * P(not_repaired)")
 print()
 total_grounding = 0.0
 for e in valid_edges:
@@ -327,7 +325,7 @@ for e in valid_edges:
           f"{e['edge_hole']:.4e} * {e['p_nr']:.4e} = {p_ground:.4e}")
 
 print()
-print(f"  TOTAL grounding probability (NW direction, this ship category):")
+print("  TOTAL grounding probability (NW direction, this ship category):")
 print(f"    P_total = {total_grounding:.6e} events/year")
 print()
 
@@ -341,10 +339,10 @@ print("=" * 80)
 print()
 
 # Mode (a): Default -- from leg LINE (mean_offset_m = 0)
-print(f"  Mode (a): start_from = 'leg_center' (DEFAULT)")
-print(f"    Reference: the leg LINE itself (mean_offset_m = 0)")
-print(f"    Distance measured from each edge vertex back to the leg line")
-print(f"    along the drift direction (reverse ray).")
+print("  Mode (a): start_from = 'leg_center' (DEFAULT)")
+print("    Reference: the leg LINE itself (mean_offset_m = 0)")
+print("    Distance measured from each edge vertex back to the leg line")
+print("    along the drift direction (reverse ray).")
 for e in valid_edges:
     p1_dist = directional_distance_to_point_from_offset_leg(
         leg_state, drift_direction, Point(e['p1']), use_leg_offset=False)
@@ -362,10 +360,10 @@ example_offset = 500.0
 leg_state_offset = LegState(
     leg_id='LEG_3', line=leg_line,
     mean_offset_m=example_offset, lateral_sigma_m=lateral_sigma)
-print(f"  Mode (b): start_from = 'distribution_center'")
+print("  Mode (b): start_from = 'distribution_center'")
 print(f"    Reference: the mean-offset line (offset = +{example_offset}m from leg)")
-print(f"    Distance measured from each edge vertex back to the offset line")
-print(f"    along the drift direction (reverse ray).")
+print("    Distance measured from each edge vertex back to the offset line")
+print("    along the drift direction (reverse ray).")
 for e in valid_edges:
     p1_dist = directional_distance_to_point_from_offset_leg(
         leg_state_offset, drift_direction, Point(e['p1']), use_leg_offset=True)
@@ -393,18 +391,17 @@ fig, ax = plt.subplots(1, 1, figsize=(14, 10))
 max_target_dist = max(e['dist'] for e in valid_edges)
 cfg_display = DriftConfig(reach_distance_m=1.2 * max_target_dist, corridor_sigma_multiplier=3.0)
 corridor_display = build_directional_corridor(leg_state, drift_direction, cfg_display)
-from shapely.geometry import MultiPolygon
 math_rad = np.radians(compass_to_math_deg(drift_direction))
 
 # Build shadow zone: quad-based sweep in drift direction (NW)
 # Note: we use drift_ux/drift_uy directly (correct NW vector) instead of
 # create_obstacle_shadow which uses a different compass convention.
-from shapely.affinity import translate as _translate
-from shapely.ops import unary_union as _unary_union
-_corr_diag = np.sqrt((corridor_display.bounds[2]-corridor_display.bounds[0])**2 +
-                     (corridor_display.bounds[3]-corridor_display.bounds[1])**2)
+from shapely.affinity import translate as _translate  # noqa: E402
+from shapely.ops import unary_union as _unary_union  # noqa: E402
+_corr_diag = np.sqrt((corridor_display.bounds[2] - corridor_display.bounds[0])**2 +
+                     (corridor_display.bounds[3] - corridor_display.bounds[1])**2)
 _extrude = _corr_diag * 2
-_far_poly = _translate(depth_polygon, xoff=drift_ux*_extrude, yoff=drift_uy*_extrude)
+_far_poly = _translate(depth_polygon, xoff=drift_ux * _extrude, yoff=drift_uy * _extrude)
 _orig_coords = list(depth_polygon.exterior.coords)[:-1]
 _far_coords = list(_far_poly.exterior.coords)[:-1]
 _quads = []
@@ -419,6 +416,8 @@ shadow_poly = _unary_union([depth_polygon, _far_poly] + _quads)
 corridor_with_hole = corridor_display.difference(shadow_poly)
 
 # Draw the visible corridor
+
+
 def _draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
     if geom.is_empty:
         return
@@ -434,6 +433,7 @@ def _draw_geom(ax_obj, geom, alpha, fc, ec, lw, label=None):
             for interior in g.interiors:
                 ax_obj.fill(*interior.xy, fc='white', ec='darkred', lw=1)
             first = False
+
 
 _draw_geom(ax, corridor_with_hole, 0.08, 'blue', 'blue', 0.5, 'Drift corridor')
 
@@ -473,8 +473,8 @@ math_rad = np.radians(compass_to_math_deg(drift_direction))
 dx, dy = arrow_len * np.cos(math_rad), arrow_len * np.sin(math_rad)
 ax.annotate('', xy=(center.x + dx, center.y + dy), xytext=(center.x, center.y),
             arrowprops=dict(arrowstyle='->', color='blue', lw=2))
-ax.text(center.x + dx*0.5 + 200, center.y + dy*0.5 + 200,
-        f'Drift NW\n(315 deg)', color='blue', fontsize=9, ha='left')
+ax.text(center.x + dx * 0.5 + 200, center.y + dy * 0.5 + 200,
+        'Drift NW\n(315 deg)', color='blue', fontsize=9, ha='left')
 
 # Draw distance lines from actual vertices for valid edges
 dist_colors = ['red', 'green', 'purple', 'orange', 'teal',
@@ -568,13 +568,13 @@ ax.set_aspect('equal')
 ax.grid(True, alpha=0.3)
 
 # --- Zoomed inset: polygon detail with shadow + front-facing edges ---
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset  # noqa: E402
 ax_zoom = inset_axes(ax, width="40%", height="40%", loc='lower right', borderpad=1.5)
 
 pad = 600
 px = [c[0] for c in poly_utm_coords]
 py = [c[1] for c in poly_utm_coords]
-zoom_box = box(min(px)-pad, min(py)-pad, max(px)+pad, max(py)+pad)
+zoom_box = box(min(px) - pad, min(py) - pad, max(px) + pad, max(py) + pad)
 
 # Corridor (without shadow) in inset
 corridor_clip = corridor_with_hole.intersection(zoom_box)
@@ -617,12 +617,12 @@ for i, e in enumerate(valid_edges):
 
 # Drift arrow in inset
 center_z = depth_polygon.centroid
-ax_zoom.annotate('', xy=(center_z.x - 300*np.cos(math_rad), center_z.y - 300*np.sin(math_rad)),
-                 xytext=(center_z.x + 300*np.cos(math_rad), center_z.y + 300*np.sin(math_rad)),
+ax_zoom.annotate('', xy=(center_z.x - 300 * np.cos(math_rad), center_z.y - 300 * np.sin(math_rad)),
+                 xytext=(center_z.x + 300 * np.cos(math_rad), center_z.y + 300 * np.sin(math_rad)),
                  arrowprops=dict(arrowstyle='<-', color='blue', lw=1.5))
 
-ax_zoom.set_xlim(min(px)-pad, max(px)+pad)
-ax_zoom.set_ylim(min(py)-pad, max(py)+pad)
+ax_zoom.set_xlim(min(px) - pad, max(px) + pad)
+ax_zoom.set_ylim(min(py) - pad, max(py) + pad)
 ax_zoom.set_aspect('equal')
 ax_zoom.grid(True, alpha=0.3)
 ax_zoom.set_title('Front-facing edges + shadow', fontsize=8, fontweight='bold')
@@ -642,7 +642,7 @@ plt.close()
 #    Zoom on LEG side to show where reverse rays land + bimodal traffic
 # =============================================================================
 
-from drifting.engine import _offset_line_perpendicular
+from drifting.engine import _offset_line_perpendicular  # noqa: E402
 
 # Two mean offsets: +500m and -500m from the leg, one per traffic direction
 mean_offset_A = 500.0   # direction A ships travel
@@ -665,8 +665,8 @@ _draw_geom(ax2, shadow_visible, 0.06, 'gray', 'none', 0)
 # --- Bimodal traffic lines: two groups centered on offset_A and offset_B ---
 n_per_group = 25
 sigma_each = lateral_sigma * 0.6  # narrower per-direction spread for clearer peaks
-offsets_A = np.linspace(mean_offset_A - 2.5*sigma_each, mean_offset_A + 2.5*sigma_each, n_per_group)
-offsets_B = np.linspace(mean_offset_B - 2.5*sigma_each, mean_offset_B + 2.5*sigma_each, n_per_group)
+offsets_A = np.linspace(mean_offset_A - 2.5 * sigma_each, mean_offset_A + 2.5 * sigma_each, n_per_group)
+offsets_B = np.linspace(mean_offset_B - 2.5 * sigma_each, mean_offset_B + 2.5 * sigma_each, n_per_group)
 weights_A = stats.norm(mean_offset_A, sigma_each).pdf(offsets_A)
 weights_B = stats.norm(mean_offset_B, sigma_each).pdf(offsets_B)
 w_max = max(weights_A.max(), weights_B.max())
@@ -699,8 +699,8 @@ ax2.fill(poly_x, poly_y, alpha=0.4, fc='brown', ec='darkred', lw=2, label='Depth
 # Drift arrow
 ax2.annotate('', xy=(center.x + dx, center.y + dy), xytext=(center.x, center.y),
              arrowprops=dict(arrowstyle='->', color='blue', lw=2))
-ax2.text(center.x + dx*0.5 + 200, center.y + dy*0.5 + 200,
-         f'Drift NW\n(315 deg)', color='blue', fontsize=9, ha='left')
+ax2.text(center.x + dx * 0.5 + 200, center.y + dy * 0.5 + 200,
+         'Drift NW\n(315 deg)', color='blue', fontsize=9, ha='left')
 
 # Compute per-vertex distances to all three references for front-facing edges
 # Measurement lines run from the vertex to offset B (the farthest reference line)
@@ -798,7 +798,7 @@ ax2.set_aspect('equal')
 ax2.grid(True, alpha=0.3)
 
 # --- Zoomed inset on the LEG SIDE ---
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes as inset_axes2, mark_inset as mark_inset2
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes as inset_axes2, mark_inset as mark_inset2  # noqa: E402
 ax_z2 = inset_axes2(ax2, width="40%", height="40%", loc='lower right', borderpad=1.5)
 
 # Determine zoom bounds from where rays hit the leg area
@@ -821,13 +821,13 @@ if southernmost_idx is not None and d_leg is not None:
         if shifted.geom_type == 'LineString' and not shifted.is_empty:
             clip = shifted.intersection(zoom_box2)
             if clip.geom_type == 'LineString' and not clip.is_empty:
-                ax_z2.plot(*clip.xy, color='gray', lw=1.5, alpha=float(w)*0.5, zorder=3)
+                ax_z2.plot(*clip.xy, color='gray', lw=1.5, alpha=float(w) * 0.5, zorder=3)
     for off_val, w in zip(offsets_B, weights_B):
         shifted = leg_line.parallel_offset(off_val, 'left')
         if shifted.geom_type == 'LineString' and not shifted.is_empty:
             clip = shifted.intersection(zoom_box2)
             if clip.geom_type == 'LineString' and not clip.is_empty:
-                ax_z2.plot(*clip.xy, color='gray', lw=1.5, alpha=float(w)*0.5, zorder=3)
+                ax_z2.plot(*clip.xy, color='gray', lw=1.5, alpha=float(w) * 0.5, zorder=3)
 
     # Leg and offset lines in inset
     for line_geom, clr, ls, lw in [
@@ -918,13 +918,13 @@ plt.close()
 print()
 print("SUMMARY")
 print("=" * 80)
-print(f"  Grounding probability for vertex 7432B79C edge from LEG_3:")
-print(f"  One ship category (Tanker 225-250m), one direction (NW):")
+print("  Grounding probability for vertex 7432B79C edge from LEG_3:")
+print("  One ship category (Tanker 225-250m), one direction (NW):")
 print(f"  P = {total_grounding:.6e} events/year")
 print()
 print("  Components breakdown:")
 print(f"    base (exposure)   = {base:.6e}")
 print(f"    rose_prob (NW)    = {rose_prob}")
 print(f"    hole_pct (total)  = {hole_pct:.6e}")
-print(f"    The hole is distributed across valid edges proportional to their length")
-print(f"    P(not repaired) depends on distance from leg to each edge")
+print("    The hole is distributed across valid edges proportional to their length")
+print("    P(not repaired) depends on distance from leg to each edge")

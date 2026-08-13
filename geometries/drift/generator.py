@@ -282,8 +282,8 @@ class DriftCorridorGenerator:
         if len(depth_values) >= 2:
             sorted_depths = sorted(set(depth_values))
             if len(sorted_depths) >= 2:
-                diffs = [sorted_depths[i+1] - sorted_depths[i]
-                         for i in range(len(sorted_depths)-1)]
+                diffs = [sorted_depths[i + 1] - sorted_depths[i]
+                         for i in range(len(sorted_depths) - 1)]
                 if diffs:
                     from collections import Counter
                     diff_counts = Counter(round(d, 1) for d in diffs)

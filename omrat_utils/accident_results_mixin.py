@@ -150,9 +150,6 @@ class AccidentResultsMixin:
         etc., so we keep the same widget names available.  Edits are
         forwarded to the new table cell via ``_on_lep_text_changed``.
         """
-        from qgis.PyQt import QtCore, QtWidgets
-
-        Qt = QtCore.Qt
         tw = getattr(self.main_widget, 'TWAccidentResults', None)
         if tw is None:
             return
@@ -211,8 +208,6 @@ class AccidentResultsMixin:
         back to its 3-column base layout (Accident type / Probability /
         View) before a fresh fill -- this method does that.
         """
-        from qgis.PyQt import QtWidgets
-
         tw = getattr(self.main_widget, 'TWAccidentResults', None)
         if tw is None:
             return

@@ -199,7 +199,7 @@ def _segment_intersects_corridor(
     if intersection.geom_type == 'Point':
         t = 0.01
         interior_p1 = (p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]))
-        interior_p2 = (p1[0] + (1-t) * (p2[0] - p1[0]), p1[1] + (1-t) * (p2[1] - p1[1]))
+        interior_p2 = (p1[0] + (1 - t) * (p2[0] - p1[0]), p1[1] + (1 - t) * (p2[1] - p1[1]))
         mid = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
 
         if not (corridor.contains(Point(interior_p1)) or

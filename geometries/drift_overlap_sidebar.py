@@ -20,13 +20,13 @@ from typing import Any
 # ``(90 - N*45) % 360``.
 DIRECTION_LABELS: tuple[str, ...] = (
     "East",       # math 0
-    "North-East", # math 45
+    "North-East",  # math 45
     "North",      # math 90
-    "North-West", # math 135
+    "North-West",  # math 135
     "West",       # math 180
-    "South-West", # math 225
+    "South-West",  # math 225
     "South",      # math 270
-    "South-East", # math 315
+    "South-East",  # math 315
 )
 
 

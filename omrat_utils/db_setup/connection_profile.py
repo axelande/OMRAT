@@ -16,7 +16,7 @@ fallback for the profile named ``"default"`` so existing installs keep working.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from typing import Any
 
 # QSettings is part of QGIS' PyQt bundle.  Importing it lazily keeps the module
