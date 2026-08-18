@@ -45,15 +45,22 @@ def create_polygon_from_line(
     weighted-distribution mixture, translated by the weighted mean.
     """
     weights = np.array(weights) / np.sum(weights)
-    weighted_mu = sum(
+    weighted_mu = float(sum(
         weight * dist.mean() for dist, weight in zip(distributions, weights)
-    )
-    weighted_std = np.sqrt(sum(
+    ))
+    weighted_std = float(np.sqrt(sum(
         weight * (dist.std() ** 2)
         for dist, weight in zip(distributions, weights)
-    ))
+    )))
+    # Guard against nan/inf from degenerate distributions (no AIS data).
+    # A non-finite mu would produce nan coordinates via translate(), which
+    # crashes GEOS with an access violation inside buffer().
+    if not np.isfinite(weighted_mu):
+        weighted_mu = 0.0
+    if not np.isfinite(weighted_std) or weighted_std <= 0:
+        weighted_std = 0.0
     moved_line = translate(line, xoff=0, yoff=weighted_mu)
-    coverage_range = 4.89 * weighted_std
+    coverage_range = max(1.0, 4.89 * weighted_std)
     return moved_line.buffer(coverage_range)
 
 

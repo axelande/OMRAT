@@ -2,20 +2,40 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from qgis.PyQt.QtCore import QVariant
+import re as _re
+from qgis.PyQt.QtCore import QVariant, Qt
 from qgis.PyQt.QtWidgets import QFileDialog, QTableWidgetItem, QTableWidget
 from qgis._core import QgsVectorDataProvider
-from qgis.core import (QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsFeatureRequest, QgsField,
+from qgis.core import (QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsField,
                        QgsFillSymbol, QgsGraduatedSymbolRenderer, QgsRendererRange,
                        QgsCoordinateReferenceSystem, QgsCoordinateTransform)
 from qgis.PyQt.QtGui import QColor
 import requests
-import processing
 import tempfile
 
 
 if TYPE_CHECKING:
     from omrat import OMRAT
+
+
+def _wkt_summary(wkt: str) -> str:
+    """Return a short label for a WKT geometry (e.g. 'Polygon (42 pts)')."""
+    geom_type = wkt.split('(')[0].strip() if '(' in wkt else wkt[:30]
+    n = len(_re.findall(r'[-\d.]+\s+[-\d.]+', wkt))
+    if n > 5:
+        return f"{geom_type}({n} pts)"
+    return wkt if len(wkt) <= 60 else wkt[:57] + '...'
+
+
+_USER_ROLE = getattr(Qt, 'UserRole', None) or Qt.ItemDataRole.UserRole
+
+
+def _wkt_table_item(wkt: str) -> QTableWidgetItem:
+    """QTableWidgetItem that shows a compact summary but stores the full WKT in UserRole."""
+    item = QTableWidgetItem(_wkt_summary(wkt))
+    item.setData(_USER_ROLE, wkt)
+    item.setToolTip(wkt[:400] + ('...' if len(wkt) > 400 else ''))
+    return item
 
 
 def get_leg_coordinates(tbl: QTableWidget) -> list[tuple[float, float]]:
@@ -42,17 +62,6 @@ def get_bbox(coords: list[tuple[float, float]]) -> tuple[float, float, float, fl
     lats = [lat for _, lat in coords]
     lons = [lon for lon, _ in coords]
     return min(lats), max(lats), min(lons), max(lons)
-
-
-def expand_bbox(
-    min_lat: float, max_lat: float, min_lon: float, max_lon: float, extension_percent: float
-) -> tuple[float, float, float, float]:
-    """Expand the bounding box by a percentage."""
-    lat_range = max_lat - min_lat
-    lon_range = max_lon - min_lon
-    lat_ext = lat_range * extension_percent / 100.0
-    lon_ext = lon_range * extension_percent / 100.0
-    return min_lat - lat_ext, max_lat + lat_ext, min_lon - lon_ext, max_lon + lon_ext
 
 
 def get_depth_color(depth: float, max_depth: float = 50.0) -> QColor:
@@ -156,7 +165,7 @@ class OObject:
         wkt = geom.asWkt(precision=5)
         row = self.depth_feature_row.get(fid)
         if row is not None and 0 <= row < self.p.main_widget.twDepthList.rowCount():
-            self.p.main_widget.twDepthList.setItem(row, 2, QTableWidgetItem(wkt))
+            self.p.main_widget.twDepthList.setItem(row, 2, _wkt_table_item(wkt))
 
     def _add_depth_feature(self, depth_id: int, depth_value: float, wkt: str,
                            row: int, defer_style: bool = False) -> None:
@@ -328,7 +337,7 @@ class OObject:
         wkt = geom.asWkt(precision=5)
         row = self.object_layer_row.get(layer_id)
         if row is not None and 0 <= row < self.p.main_widget.twObjectList.rowCount():
-            self.p.main_widget.twObjectList.setItem(row, 2, QTableWidgetItem(wkt))
+            self.p.main_widget.twObjectList.setItem(row, 2, _wkt_table_item(wkt))
 
     def update_depth_intervals(self) -> None:
         """Update TWDepthIntervals with intervals from 0 to LEMaxDepth using SBDepthInterval."""
@@ -353,28 +362,32 @@ class OObject:
             self.p.main_widget.TWDepthIntervals.setItem(row, 0, QTableWidgetItem(str(max_depth)))
 
     def obtain_gebco_data(self):
-        tbl = self.p.main_widget.twRouteList
-        coords = get_leg_coordinates(tbl)
-        if not coords:
-            self.p.show_error_popup("You need to create legs first.", "obtain_gebco_data")
-            return
-
-        min_lat, max_lat, min_lon, max_lon = get_bbox(coords)
-        extension_str = self.p.main_widget.LEGebcoExtension.text()
+        w = self.p.main_widget
         try:
-            extension = float(extension_str)
+            min_lat = float(w.LEBboxLLLat.text())
+            min_lon = float(w.LEBboxLLLon.text())
+            max_lat = float(w.LEBboxURLat.text())
+            max_lon = float(w.LEBboxURLon.text())
         except ValueError:
-            self.p.show_error_popup("Extension must be a number.", "obtain_gebco_data")
+            self.p.show_error_popup(
+                "Enter valid lower-left and upper-right coordinates before fetching.",
+                "obtain_gebco_data"
+            )
             return
 
-        min_lat, max_lat, min_lon, max_lon = expand_bbox(min_lat, max_lat, min_lon, max_lon, extension)
-        api_key = self.p.main_widget.LEOpenTopoAPIKey.text()
+        if min_lat >= max_lat or min_lon >= max_lon:
+            self.p.show_error_popup(
+                "Lower-left must be south-west of upper-right (lat_ll < lat_ur, lon_ll < lon_ur).",
+                "obtain_gebco_data"
+            )
+            return
+
+        api_key = w.LEOpenTopoAPIKey.text()
         url = build_gebco_url(min_lat, max_lat, min_lon, max_lon, api_key)
 
-        # Download geotiff to local temp folder
         temp_dir = tempfile.gettempdir()
         geotiff_path = download_geotiff(url, save_path=os.path.join(temp_dir, 'gebco_download.tif'))
-        tw = self.p.main_widget.TWDepthIntervals
+        tw = w.TWDepthIntervals
         intervals = [float(tw.item(i, 0).text()) for i in range(tw.rowCount())]
         self.vectorize_and_add_geotiff(geotiff_path, intervals)
 
@@ -383,54 +396,116 @@ class OObject:
         geotiff_path: str,
         intervals: list[float],
     ) -> None:
+        """Vectorize a GEBCO GeoTIFF by depth interval and add to QGIS.
+
+        Performance strategy:
+        - Reclassify the raster into N interval bins with numpy (in-memory,
+          fast) before polygonizing.  Raw GEBCO has thousands of distinct
+          integer depth values; after reclassification there are only N
+          distinct values (one per interval), so polygonize produces orders
+          of magnitude fewer polygons.
+        - Polygonize with GDAL directly (no QGIS processing framework
+          overhead) into an OGR in-memory layer.
+        - Merge features per interval with QgsGeometry.unaryUnion (C++ GEOS)
+          instead of a sequential Python combine loop.
         """
-        Vectorize the GeoTIFF raster using depth intervals and add the resulting polygons to QGIS.
-        """
-        # Create a unique layer name for the memory layer
+        from osgeo import gdal, ogr, osr
+        import numpy as np
 
-        temp_path = os.path.join(tempfile.gettempdir(), "tmp.gpkg")
+        # ── 1. Read raster and reclassify into interval bins ──────────────
+        ds = gdal.Open(geotiff_path)
+        if ds is None:
+            self.p.show_error_popup("Could not open GeoTIFF.", "vectorize_and_add_geotiff")
+            return
+        band = ds.GetRasterBand(1)
+        data = band.ReadAsArray().astype(float)
+        nodata = band.GetNoDataValue()
+        geotransform = ds.GetGeoTransform()
+        projection = ds.GetProjection()
+        ny, nx = data.shape
+        ds = None
 
-        processing.run(
-            "gdal:polygonize",
-            {
-                "INPUT": geotiff_path,
-                "BAND": 1,
-                "FIELD": "VALUE",
-                "EIGHT_CONNECTEDNESS": False,
-                "OUTPUT": temp_path
-            }
-        )
+        # GEBCO stores depth below sea level as negative values.
+        # Interval [low, high] metres → raster range (-high, -low].
+        # Bin index starts at 1 so 0 can serve as "outside all intervals".
+        classified = np.zeros((ny, nx), dtype=np.int32)
+        for idx in range(len(intervals) - 1):
+            low, high = intervals[idx], intervals[idx + 1]
+            mask = (data > -high) & (data <= -low)
+            if nodata is not None:
+                mask &= (data != nodata)
+            classified[mask] = idx + 1
 
-        vector_layer = QgsVectorLayer(temp_path, "temp_depths", "ogr")
-
-        if not vector_layer.isValid():
-            self.p.show_error_popup("Polygonized layer could not be loaded.", "vectorize_and_add_geotiff")
+        if not classified.any():
             return
 
-        # Filter polygons by intervals and add as features to the consolidated depth layer
-        for idx, interval in enumerate(intervals[:-1]):
-            expr = f'"VALUE" <= {-interval} and "VALUE" > {-intervals[idx + 1]}'
-            request = QgsFeatureRequest().setFilterExpression(expr)
-            features = [feat for feat in vector_layer.getFeatures(request)]
-            if not features:
+        # ── 2. Write classified raster to GDAL virtual filesystem ─────────
+        # /vsimem/ keeps everything in RAM so there is no disk round-trip.
+        vsimem_raster = '/vsimem/gebco_classified.tif'
+        drv = gdal.GetDriverByName("GTiff")
+        out_ds = drv.Create(vsimem_raster, nx, ny, 1, gdal.GDT_Int32)
+        out_ds.SetGeoTransform(geotransform)
+        out_ds.SetProjection(projection)
+        out_band = out_ds.GetRasterBand(1)
+        out_band.WriteArray(classified)
+        out_band.SetNoDataValue(0)
+        out_ds.FlushCache()
+        out_ds = None
+
+        # Build a mask band (non-zero = valid pixel to polygonize).
+        vsimem_mask = '/vsimem/gebco_mask.tif'
+        msk_ds = drv.Create(vsimem_mask, nx, ny, 1, gdal.GDT_Byte)
+        msk_ds.SetGeoTransform(geotransform)
+        msk_ds.SetProjection(projection)
+        msk_ds.GetRasterBand(1).WriteArray((classified != 0).astype(np.uint8) * 255)
+        msk_ds.FlushCache()
+        msk_ds = None
+
+        # ── 3. Polygonize directly into an OGR memory layer ───────────────
+        src_ds = gdal.Open(vsimem_raster)
+        src_band = src_ds.GetRasterBand(1)
+        msk_src = gdal.Open(vsimem_mask)
+        mask_band = msk_src.GetRasterBand(1)
+
+        mem_drv = ogr.GetDriverByName("Memory")
+        mem_ds = mem_drv.CreateDataSource("polys")
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(projection)
+        dst_layer = mem_ds.CreateLayer("polygons", srs=srs)
+        dst_layer.CreateField(ogr.FieldDefn("VALUE", ogr.OFTInteger))
+        val_idx = dst_layer.GetLayerDefn().GetFieldIndex("VALUE")
+
+        gdal.Polygonize(src_band, mask_band, dst_layer, val_idx, [], callback=None)
+
+        src_ds = None
+        msk_src = None
+        gdal.Unlink(vsimem_raster)
+        gdal.Unlink(vsimem_mask)
+
+        # ── 4. Merge per interval with unaryUnion and add to table/layer ──
+        for idx in range(len(intervals) - 1):
+            dst_layer.SetAttributeFilter(f"VALUE = {idx + 1}")
+            qgs_geoms = []
+            for feat in dst_layer:
+                geom_ref = feat.GetGeometryRef()
+                if geom_ref is not None:
+                    qgs_geoms.append(QgsGeometry.fromWkt(geom_ref.ExportToWkt()))
+            dst_layer.ResetReading()
+
+            if not qgs_geoms:
                 continue
 
-            # Merge geometries
-            merged_geom = features[0].geometry()
-            for feat in features[1:]:
-                merged_geom = merged_geom.combine(feat.geometry())
-
+            merged_geom = QgsGeometry.unaryUnion(qgs_geoms)
             wkt = merged_geom.asWkt(precision=5)
 
-            # Update the table with WKT
+            interval = intervals[idx]
             row = self.p.main_widget.twDepthList.rowCount()
             self.p.main_widget.twDepthList.insertRow(row)
             self.p.main_widget.twDepthList.setItem(row, 0, QTableWidgetItem(str(row + 1)))
             self.p.main_widget.twDepthList.setItem(row, 1, QTableWidgetItem(f"{interval}-{intervals[idx + 1]}"))
-            self.p.main_widget.twDepthList.setItem(row, 2, QTableWidgetItem(wkt))
+            self.p.main_widget.twDepthList.setItem(row, 2, _wkt_table_item(wkt))
 
-            # Add to consolidated depth layer (defer styling until after loop)
-            depth_val = intervals[idx + 1]  # upper bound of interval
+            depth_val = intervals[idx + 1]
             self._add_depth_feature(row + 1, depth_val, wkt, row, defer_style=True)
 
         self._apply_depth_graduated_style()
@@ -467,10 +542,10 @@ class OObject:
         item2 = QTableWidgetItem(f'{default_depth}')
         polies = self.area.getFeatures()
         for poly in polies:
-            item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
+            wkt_poly = poly.geometry().asWkt(precision=5)
             self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 0, item1)
             self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 1, item2)
-            self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 2, item3)
+            self.p.main_widget.twDepthList.setItem(self.deph_id - 1, 2, _wkt_table_item(wkt_poly))
 
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
@@ -592,7 +667,7 @@ class OObject:
             self.p.main_widget.twDepthList.insertRow(row_index)
             self.p.main_widget.twDepthList.setItem(row_index, 0, QTableWidgetItem(str(row_index + 1)))
             self.p.main_widget.twDepthList.setItem(row_index, 1, QTableWidgetItem(str(value)))
-            self.p.main_widget.twDepthList.setItem(row_index, 2, QTableWidgetItem(wkt))
+            self.p.main_widget.twDepthList.setItem(row_index, 2, _wkt_table_item(wkt))
 
             depth_val = float(value) if value else 0.0
             self._add_depth_feature(row_index + 1, depth_val, wkt, row_index, defer_style=True)

@@ -358,3 +358,141 @@ def test_validate_routes_empty_for_clean_project():
         '2': _seg("15.0 55.0", "16.0 55.0", 100_000),
     }
     assert validate_routes(sd).empty
+
+
+# ---------------------------------------------------------------------------
+# split_leg_at_points — multi-crossing fix
+# ---------------------------------------------------------------------------
+
+from geometries.route_validation import split_leg_at_points, _make_id_provider
+
+
+def _simple_sd(start: str, end: str, name: str = 'LEG_1_1') -> dict:
+    return {
+        '1': {
+            'Start_Point': start, 'End_Point': end,
+            'line_length': 100_000, 'Width': 5000,
+            'Route_Id': 1, 'Segment_Id': '1', 'Leg_name': name,
+        }
+    }
+
+
+class TestSplitLegAtPoints:
+    def test_no_points_is_noop(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0")
+        result = split_leg_at_points(sd, '1', [], _make_id_provider(sd))
+        assert result == ['1']
+        assert len(sd) == 1
+
+    def test_one_point_produces_two_sub_legs(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0", 'LEG_A')
+        result = split_leg_at_points(sd, '1', [(15.0, 55.0)], _make_id_provider(sd))
+        assert len(result) == 2
+        assert result[0] == '1'               # original id kept for first sub
+        assert len(sd) == 2
+        assert sd['1']['Leg_name'] == 'LEG_A_a'
+        assert sd[result[1]]['Leg_name'] == 'LEG_A_b'
+
+    def test_two_points_produce_three_sub_legs_a_b_c(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0", 'LEG_5_13')
+        result = split_leg_at_points(
+            sd, '1', [(14.67, 55.0), (15.33, 55.0)], _make_id_provider(sd)
+        )
+        assert len(result) == 3
+        assert result[0] == '1'
+        assert sd['1']['Leg_name'] == 'LEG_5_13_a'
+        assert sd[result[1]]['Leg_name'] == 'LEG_5_13_b'
+        assert sd[result[2]]['Leg_name'] == 'LEG_5_13_c'
+
+    def test_three_points_produce_four_sub_legs(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0", 'LEG_X')
+        result = split_leg_at_points(
+            sd, '1',
+            [(14.5, 55.0), (15.0, 55.0), (15.5, 55.0)],
+            _make_id_provider(sd),
+        )
+        assert len(result) == 4
+        for i, letter in enumerate('abcd'):
+            assert sd[result[i]]['Leg_name'] == f'LEG_X_{letter}'
+
+    def test_sub_leg_endpoints_are_contiguous(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0")
+        result = split_leg_at_points(
+            sd, '1', [(14.67, 55.0), (15.33, 55.0)], _make_id_provider(sd)
+        )
+        # End of each sub-leg should equal start of the next.
+        for i in range(len(result) - 1):
+            end_pt = parse_wkt_point(sd[result[i]]['End_Point'])
+            start_pt = parse_wkt_point(sd[result[i + 1]]['Start_Point'])
+            assert end_pt == start_pt
+
+    def test_first_sub_leg_starts_at_original_start(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0")
+        result = split_leg_at_points(
+            sd, '1', [(15.0, 55.0)], _make_id_provider(sd)
+        )
+        assert parse_wkt_point(sd[result[0]]['Start_Point']) == (14.0, 55.0)
+
+    def test_last_sub_leg_ends_at_original_end(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0")
+        result = split_leg_at_points(
+            sd, '1', [(15.0, 55.0)], _make_id_provider(sd)
+        )
+        assert parse_wkt_point(sd[result[-1]]['End_Point']) == (16.0, 55.0)
+
+    def test_traffic_copied_to_all_sub_legs(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0")
+        td = {'1': {'N': [100.0], 'S': [80.0]}}
+        result = split_leg_at_points(
+            sd, '1', [(14.67, 55.0), (15.33, 55.0)], _make_id_provider(sd), td
+        )
+        for sub_id in result:
+            assert sub_id in td
+            assert td[sub_id]['N'] == [100.0]
+
+    def test_original_leg_id_missing_is_noop(self):
+        sd = _simple_sd("14.0 55.0", "16.0 55.0")
+        result = split_leg_at_points(sd, '99', [(15.0, 55.0)], _make_id_provider(sd))
+        assert result == ['99']
+
+    def test_no_cascading_names_for_multiple_crossings(self):
+        """The old per-split loop produced LEG_5_13_a_a_a etc. This must not happen."""
+        sd = _simple_sd("14.0 55.0", "16.0 55.0", 'LEG_5_13')
+        result = split_leg_at_points(
+            sd, '1',
+            [(14.5, 55.0), (15.0, 55.0), (15.5, 55.0)],
+            _make_id_provider(sd),
+        )
+        for sub_id in result:
+            name = sd[sub_id]['Leg_name']
+            assert '_a_' not in name and name.count('_') <= name.count('LEG') + 3, (
+                f"Cascading name detected: {name}"
+            )
+
+    def test_resplit_sub_leg_no_cascading_and_no_collision(self):
+        """Re-splitting a sub-leg must not produce cascading grandchild names
+        AND must not reuse a suffix letter already taken by a sibling."""
+        # First split: LEG_1_1 → LEG_1_1_a (id='1'), LEG_1_1_b (id='2')
+        sd = _simple_sd("14.0 55.0", "16.0 55.0", 'LEG_1_1')
+        id_prov = _make_id_provider(sd)
+        first = split_leg_at_points(sd, '1', [(15.0, 55.0)], id_prov)
+        assert len(first) == 2
+        sub_b_id = first[1]
+        assert sd[sub_b_id]['Leg_name'] == 'LEG_1_1_b'
+
+        # Second split: re-split LEG_1_1_b at another point.
+        # LEG_1_1_a is already taken by a sibling, so sub-legs must be
+        # LEG_1_1_b and LEG_1_1_c (not cascading _b_a/_b_b, and not
+        # a duplicate _a which is already in use).
+        second = split_leg_at_points(sd, sub_b_id, [(15.5, 55.0)], id_prov)
+        assert len(second) == 2
+        names = [sd[sid]['Leg_name'] for sid in second]
+        # No cascading (no double-underscore letter sequences)
+        for n in names:
+            assert '_b_' not in n and '_a_' not in n, f"Cascading name: {n}"
+        # No collision: LEG_1_1_a is still held by the original first sub-leg
+        assert 'LEG_1_1_a' not in names, f"Duplicate suffix: {names}"
+        # Should be the next available pair: _b and _c
+        assert set(names) == {'LEG_1_1_b', 'LEG_1_1_c'}, (
+            f"Expected LEG_1_1_b and LEG_1_1_c, got {names}"
+        )

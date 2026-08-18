@@ -292,6 +292,75 @@ QToolTip {
                </layout>
               </item>
               <item>
+               <layout class="QHBoxLayout" name="horizontalLayout_DrawingIds">
+                <item>
+                 <widget class="QLabel" name="label_route_id">
+                  <property name="text">
+                   <string>Route:</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QSpinBox" name="sbRouteId">
+                  <property name="toolTip">
+                   <string>Route ID assigned to newly drawn legs</string>
+                  </property>
+                  <property name="alignment">
+                   <set>Qt::AlignHCenter</set>
+                  </property>
+                  <property name="minimum">
+                   <number>1</number>
+                  </property>
+                  <property name="maximum">
+                   <number>9999</number>
+                  </property>
+                  <property name="value">
+                   <number>1</number>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLabel" name="label_next_leg">
+                  <property name="text">
+                   <string>Next leg ID:</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QSpinBox" name="sbNextLegId">
+                  <property name="toolTip">
+                   <string>ID that will be assigned to the next drawn leg</string>
+                  </property>
+                  <property name="alignment">
+                   <set>Qt::AlignHCenter</set>
+                  </property>
+                  <property name="minimum">
+                   <number>1</number>
+                  </property>
+                  <property name="maximum">
+                   <number>99999</number>
+                  </property>
+                  <property name="value">
+                   <number>1</number>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <spacer name="horizontalSpacer_ids">
+                  <property name="orientation">
+                   <enum>Qt::Horizontal</enum>
+                  </property>
+                  <property name="sizeHint" stdset="0">
+                   <size>
+                    <width>40</width>
+                    <height>20</height>
+                   </size>
+                  </property>
+                 </spacer>
+                </item>
+               </layout>
+              </item>
+              <item>
                <widget class="QPushButton" name="pbUpdateAIS">
                 <property name="text">
                  <string>Update all distributions</string>
@@ -1190,16 +1259,93 @@ QToolTip {
                   </widget>
                  </item>
                  <item>
-                  <widget class="QLineEdit" name="LEGebcoExtension">
+                  <spacer name="horizontalSpacer_gebco">
+                   <property name="orientation">
+                    <enum>Qt::Horizontal</enum>
+                   </property>
+                   <property name="sizeHint" stdset="0">
+                    <size>
+                     <width>40</width>
+                     <height>20</height>
+                    </size>
+                   </property>
+                  </spacer>
+                 </item>
+                </layout>
+               </item>
+               <item>
+                <layout class="QHBoxLayout" name="horizontalLayout_bbox_ll">
+                 <item>
+                  <widget class="QLabel" name="label_bbox_ll">
                    <property name="text">
-                    <string>50</string>
+                    <string>Lower-left:</string>
                    </property>
                   </widget>
                  </item>
                  <item>
-                  <widget class="QLabel" name="label_44">
+                  <widget class="QLabel" name="label_bbox_ll_lat">
                    <property name="text">
-                    <string>%</string>
+                    <string>Lat:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLineEdit" name="LEBboxLLLat">
+                   <property name="placeholderText">
+                    <string>e.g. 55.0</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="label_bbox_ll_lon">
+                   <property name="text">
+                    <string>Lon:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLineEdit" name="LEBboxLLLon">
+                   <property name="placeholderText">
+                    <string>e.g. 10.0</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </item>
+               <item>
+                <layout class="QHBoxLayout" name="horizontalLayout_bbox_ur">
+                 <item>
+                  <widget class="QLabel" name="label_bbox_ur">
+                   <property name="text">
+                    <string>Upper-right:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="label_bbox_ur_lat">
+                   <property name="text">
+                    <string>Lat:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLineEdit" name="LEBboxURLat">
+                   <property name="placeholderText">
+                    <string>e.g. 56.0</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="label_bbox_ur_lon">
+                   <property name="text">
+                    <string>Lon:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLineEdit" name="LEBboxURLon">
+                   <property name="placeholderText">
+                    <string>e.g. 11.0</string>
                    </property>
                   </widget>
                  </item>
@@ -1238,9 +1384,12 @@ QToolTip {
                <item>
                 <widget class="QLabel" name="label_43">
                  <property name="text">
-                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;To get rougth data you can use the depth data from Gebco, to access it you need to register an account at &lt;a href=&quot;https://portal.opentopograph.org&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://portal.opentopograph.org&lt;/span&gt;&lt;/a&gt; and generate an API key. When obtaining data from Gebco you can add data &amp;quot;outside&amp;quot; the leg, in the field above you specify how much outside the legs you wants to add data for&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;To get rough data you can use the depth data from Gebco. Register an account at &lt;a href=&quot;https://portal.opentopography.org&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://portal.opentopography.org&lt;/span&gt;&lt;/a&gt; and generate an API key. Enter the lower-left and upper-right coordinates (lat/lon) of the area you want to fetch depth data for.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                  </property>
                  <property name="wordWrap">
+                  <bool>true</bool>
+                 </property>
+                 <property name="openExternalLinks">
                   <bool>true</bool>
                  </property>
                 </widget>

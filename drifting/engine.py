@@ -111,6 +111,8 @@ def _offset_line_perpendicular(line: LineString, offset_m: float) -> LineString:
 def build_directional_corridor(leg: LegState, direction_deg: int, cfg: DriftConfig) -> Polygon:
     shifted_line = _offset_line_perpendicular(leg.line, leg.mean_offset_m)
     spread = max(1.0, cfg.corridor_sigma_multiplier * max(0.0, leg.lateral_sigma_m))
+    if not math.isfinite(spread):
+        spread = 1.0
     base = shifted_line.buffer(spread)
 
     math_deg = compass_to_math_deg(direction_deg)

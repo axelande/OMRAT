@@ -441,8 +441,8 @@ class AIS:
         self.omrat.segment_data[key]['std1_1'] = line1.std()
         self.omrat.segment_data[key]['mean2_1'] = line2.mean()
         self.omrat.segment_data[key]['std2_1'] = line2.std()
-        self.omrat.segment_data[key]['weight1_1'] = 100
-        self.omrat.segment_data[key]['weight2_1'] = 100
+        self.omrat.segment_data[key]['weight1_1'] = 100 if len(line1) > 0 else 0
+        self.omrat.segment_data[key]['weight2_1'] = 100 if len(line2) > 0 else 0
         self.omrat.segment_data[key]['dist1'] = line1
         self.omrat.segment_data[key]['dist2'] = line2
         if float(self.omrat.main_widget.leNormMean1_1.text()) == 0.0:

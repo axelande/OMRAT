@@ -69,8 +69,11 @@ class Traffic:
         self.dw.cbTrafficSelectSeg.clear()
         nrs = self.dw.twRouteList.rowCount()
         for i in range(nrs):
-            self.dw.cbTrafficSelectSeg.addItem(self.dw.twRouteList.item(i, 0).text())
-        self.c_seg = self.dw.cbTrafficSelectSeg.currentText()
+            seg_id = self.dw.twRouteList.item(i, 0).text()
+            name_item = self.dw.twRouteList.item(i, 2)
+            label = name_item.text() if name_item is not None else seg_id
+            self.dw.cbTrafficSelectSeg.addItem(label, seg_id)
+        self.c_seg = self.dw.cbTrafficSelectSeg.currentData() or ''
 
     def set_table_headings(self):
         """Sets the column and row names of the table"""
@@ -144,7 +147,7 @@ class Traffic:
         if self.run_update:
             self.save()
         if caller == 'segment':
-            self.c_seg = self.dw.cbTrafficSelectSeg.currentText()
+            self.c_seg = self.dw.cbTrafficSelectSeg.currentData() or ''
             self.update_direction_select()
         rows = self.dw.twTrafficData.rowCount()
         cols = self.dw.twTrafficData.columnCount()
@@ -210,6 +213,9 @@ class Traffic:
         self.dw.cbTrafficDirectionSelect.clear()
         if len(self.traffic_data) == 0 or self.c_seg == '':
             return
+        if self.c_seg not in self.traffic_data:
+            self.c_seg = ''
+            return
         for key in self.traffic_data[self.c_seg].keys():
             self.dw.cbTrafficDirectionSelect.addItem(key)
         self.c_di = self.dw.cbTrafficDirectionSelect.currentText()
@@ -219,13 +225,21 @@ class Traffic:
         """Saves the previous "table" in traffic_data"""
         if any([self.c_seg == "", self.c_di == "", self.last_var == ""]):
             return
+        seg = self.traffic_data.get(self.c_seg)
+        if seg is None:
+            return
+        di = seg.get(self.c_di)
+        if di is None:
+            return
+        if self.last_var not in di:
+            return
         rows = self.dw.twTrafficData.rowCount()
         cols = self.dw.twTrafficData.columnCount()
         typ = self.last_var
         for row in range(rows):
             for col in range(cols):
                 val = self.dw.twTrafficData.cellWidget(row, col)
-                self.traffic_data[self.c_seg][self.c_di][typ][row][col] = val.value()
+                di[typ][row][col] = val.value()
 
     def commit_changes(self):
         """Copy the output from the traffic data within this module to omrats traffic_data"""

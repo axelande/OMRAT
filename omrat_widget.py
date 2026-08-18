@@ -55,6 +55,8 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.pbLoadRoute: QtWidgets.QPushButton
         self.pbRemoveRoute: QtWidgets.QPushButton
         self.pbStopRoute: QtWidgets.QPushButton
+        self.sbRouteId: QtWidgets.QSpinBox
+        self.sbNextLegId: QtWidgets.QSpinBox
         self.pbUpdateAIS: QtWidgets.QPushButton
         self.laDir1: QtWidgets.QLabel
         self.laDir2: QtWidgets.QLabel
@@ -105,7 +107,10 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.twDepthList: QtWidgets.QTableWidget
         self.pbGetGebcoDephts: QtWidgets.QPushButton
         self.PBUpdateDepthIntervals: QtWidgets.QPushButton
-        self.LEGebcoExtension : QtWidgets.QLineEdit
+        self.LEBboxLLLat: QtWidgets.QLineEdit
+        self.LEBboxLLLon: QtWidgets.QLineEdit
+        self.LEBboxURLat: QtWidgets.QLineEdit
+        self.LEBboxURLon: QtWidgets.QLineEdit
         self.LEOpenTopoAPIKey: QtWidgets.QLineEdit
         self.LEMaxDepth: QtWidgets.QLineEdit
         self.SBDepthInterval: QtWidgets.QSpinBox

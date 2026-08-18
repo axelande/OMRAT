@@ -9,9 +9,10 @@ from qgis.core import (
     QgsVectorLayer, QgsFeature, QgsGeometry, QgsLineString, QgsPoint, QgsProject,
     QgsField, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFields,
     QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsSingleSymbolRenderer,
-    QgsLineSymbol, QgsPointXY
+    QgsLineSymbol, QgsPointXY, QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QMetaType
+from qgis.gui import QgsRubberBand
+from qgis.PyQt.QtCore import QMetaType, Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 
@@ -56,7 +57,16 @@ class HandleQGISIface:
         self.item_changed_connected = False
         self.buffer_edits: list[QgsVectorLayerEditBuffer] = []
         self.leg_dirs: dict[str, list[str]] = {}
+        self._rubber_band: QgsRubberBand | None = None
         self.omrat.main_widget.twRouteList.cellClicked.connect(self.on_route_table_cell_clicked)
+        # Spinboxes for current route / next-leg IDs (declared in the .ui).
+        mw = self.omrat.main_widget
+        if hasattr(mw, 'sbRouteId'):
+            mw.sbRouteId.setValue(self.cur_route_id)
+            mw.sbRouteId.valueChanged.connect(self._on_route_id_changed)
+        if hasattr(mw, 'sbNextLegId'):
+            mw.sbNextLegId.setValue(self.segment_id + 1)
+            mw.sbNextLegId.valueChanged.connect(self._on_next_leg_id_changed)
 
     def add_new_route(self):
         """Starts the editing for a new route."""
@@ -67,6 +77,7 @@ class HandleQGISIface:
         if canvas is not None:
             canvas.setMapTool(self.mapTool)
         self.mapTool.canvasClicked.connect(self.onMapClick)
+        self.mapTool.canvasMoved.connect(self._on_canvas_moved)
         self.omrat.main_widget.pbStopRoute.setEnabled(True)
 
     def onMapClick(self, point: QgsPoint):
@@ -75,6 +86,82 @@ class HandleQGISIface:
             self.create_point(q_point)
         else:
             self.create_line(q_point)
+
+    # ------------------------------------------------------------------
+    # Rubber-band preview helpers
+    # ------------------------------------------------------------------
+
+    def _init_rubber_band(self) -> None:
+        """Create (or recreate) the dashed rubber-band line on the canvas."""
+        self._clear_rubber_band()
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is None:
+            return
+        rb = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+        rb.setColor(QColor(80, 80, 80, 180))
+        rb.setWidth(1)
+        rb.setLineStyle(getattr(Qt, 'DashLine', None) or Qt.PenStyle.DashLine)
+        self._rubber_band = rb
+
+    def _on_canvas_moved(self, point: QgsPointXY) -> None:
+        """Update the rubber-band end-point as the cursor moves."""
+        if self._rubber_band is None or self.current_start_point is None:
+            return
+        canvas = self.omrat.iface.mapCanvas()
+        start = self._to_canvas_crs(self.current_start_point, canvas)
+        self._rubber_band.reset(QgsWkbTypes.LineGeometry)
+        self._rubber_band.addPoint(start, False)
+        self._rubber_band.addPoint(point, True)
+
+    def _to_canvas_crs(self, pt_4326: QgsPointXY, canvas) -> QgsPointXY:
+        """Transform a point from EPSG:4326 to the canvas CRS."""
+        canvas_crs = canvas.mapSettings().destinationCrs()
+        src_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        if canvas_crs.authid() == src_crs.authid():
+            return pt_4326
+        try:
+            tr = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
+            return tr.transform(pt_4326)
+        except Exception:
+            return pt_4326
+
+    def _clear_rubber_band(self) -> None:
+        """Remove the rubber-band line from the canvas."""
+        if self._rubber_band is not None:
+            try:
+                self._rubber_band.reset(QgsWkbTypes.LineGeometry)
+                canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+                if canvas is not None:
+                    canvas.scene().removeItem(self._rubber_band)
+            except Exception:
+                pass
+            self._rubber_band = None
+
+    # ------------------------------------------------------------------
+    # Spinbox sync helpers
+    # ------------------------------------------------------------------
+
+    def sync_drawing_spinboxes(self) -> None:
+        """Push current route/leg IDs into the UI spinboxes (blocks signals to avoid loops)."""
+        mw = self.omrat.main_widget
+        for name, value in (
+            ('sbRouteId', self.cur_route_id),
+            ('sbNextLegId', self.segment_id + 1),
+        ):
+            sb = getattr(mw, name, None)
+            if sb is None:
+                continue
+            sb.blockSignals(True)
+            try:
+                sb.setValue(value)
+            finally:
+                sb.blockSignals(False)
+
+    def _on_route_id_changed(self, value: int) -> None:
+        self.cur_route_id = value
+
+    def _on_next_leg_id_changed(self, value: int) -> None:
+        self.segment_id = value - 1
 
     def create_point(self, point: QgsPoint):
         self.point_layer = QgsVectorLayer("Point?crs=EPSG:4326", "StartPoint", "memory")
@@ -89,6 +176,8 @@ class HandleQGISIface:
         if isinstance(prov, QgsVectorDataProvider):
             prov.addFeature(feat)
         self.current_start_point = QgsPointXY(point.x(), point.y())
+        # Create the rubber-band preview line for the next leg.
+        self._init_rubber_band()
 
     def create_fields(self) -> QgsFields:
         fields = QgsFields()
@@ -105,7 +194,7 @@ class HandleQGISIface:
         # the moment it appears in the QGIS layer panel (rather than
         # only after a save -> reload round-trip).
         self.segment_id += 1
-        layer_name = f"Segment {self.cur_route_id} - {self.segment_id}"
+        layer_name = f"LEG_{self.cur_route_id}_{self.segment_id}"
         vl = QgsVectorLayer("LineString?crs=EPSG:4326", layer_name, "memory")
         if not vl.isValid():
             print("Error: Line layer is not valid")
@@ -186,6 +275,7 @@ class HandleQGISIface:
             self.save_route(QgsPoint(start_point.x(), start_point.y()), end_point)
 
             vl.setCustomProperty("segment_id", self.segment_id)
+            self.sync_drawing_spinboxes()
 
     def unload(self):
         """Remove temporary layers and disconnect signals."""
@@ -232,6 +322,7 @@ class HandleQGISIface:
         except TypeError:
             pass
         # Break circular references
+        self._clear_rubber_band()
         self.tangent_layer = None
         self.mapTool = None
         self.vector_layers = []
@@ -295,6 +386,75 @@ class HandleQGISIface:
         self.segment_id = 0
         self.cur_route_id = 1
         self.leg_dirs = {}
+        self._clear_rubber_band()
+        self.sync_drawing_spinboxes()
+
+    def _find_layer_for_seg_id(self, seg_id: int) -> "QgsVectorLayer | None":
+        """Return the vector layer whose first feature has segmentId == seg_id."""
+        for layer in self.vector_layers:
+            try:
+                for feat in layer.getFeatures():
+                    if feat["segmentId"] == seg_id:
+                        return layer
+            except Exception:
+                pass
+        return None
+
+    def remove_leg(self) -> None:
+        """Remove selected leg(s) from the route table, QGIS layers, and all data dicts."""
+        table = self.omrat.main_widget.twRouteList
+        selected_rows: set[int] = {item.row() for item in table.selectedItems()}
+        if not selected_rows:
+            return
+
+        for row in sorted(selected_rows, reverse=True):
+            seg_id_item = table.item(row, 0)
+            if seg_id_item is None:
+                continue
+            try:
+                seg_id = int(seg_id_item.text())
+            except ValueError:
+                continue
+            seg_key = str(seg_id)
+
+            layer_to_remove = self._find_layer_for_seg_id(seg_id)
+
+            if layer_to_remove is not None:
+                edit_buffer = layer_to_remove.editBuffer()
+                if edit_buffer is not None:
+                    try:
+                        edit_buffer.geometryChanged.disconnect()
+                    except TypeError:
+                        pass
+                    if edit_buffer in self.buffer_edits:
+                        self.buffer_edits.remove(edit_buffer)
+                self.vector_layers.remove(layer_to_remove)
+                try:
+                    QgsProject.instance().removeMapLayer(layer_to_remove.id())
+                except Exception:
+                    pass
+
+            # Remove tangent lines for this segment.
+            if self.tangent_layer is not None:
+                self.remove_existing_tangent(seg_id)
+
+            # Remove from all data dicts.
+            self.omrat.segment_data.pop(seg_key, None)
+            self.omrat.traffic_data.pop(seg_key, None)
+            self.leg_dirs.pop(seg_key, None)
+
+            table.removeRow(row)
+
+        # Rebuild junction registry to remove references to deleted legs.
+        if hasattr(self.omrat, 'junctions') and self.omrat.junctions is not None:
+            self.omrat.junctions.rebuild_from_segments(self.omrat.segment_data, prefer_user=True)
+
+        # Refresh traffic UI so the removed leg no longer appears in the selector.
+        self.omrat.run_traffic_module()
+
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is not None:
+            canvas.refresh()
 
     def _auto_split_on_intersection(
         self,
@@ -318,10 +478,10 @@ class HandleQGISIface:
         """
         from geometries.route_validation import (
             _segments_intersect,
-            apply_intersection_split,
             LegIntersection,
+            split_leg_at_points,
+            _make_id_provider,
         )
-
         sd = self.omrat.segment_data
         new_leg = sd.get(new_leg_id)
         if not isinstance(new_leg, dict):
@@ -355,8 +515,27 @@ class HandleQGISIface:
             return False
 
         td = getattr(self.omrat, 'traffic_data', None)
+
+        # Sort intersections by their position along the new leg so that
+        # sub-legs are created in left-to-right (start-to-end) order.
+        intersections.sort(key=lambda ix: ix.t1)
+
+        # One shared id-provider so all new IDs are allocated without gaps.
+        id_prov = _make_id_provider(sd)
+
+        # Split the new leg at ALL crossing points in one atomic pass,
+        # producing clean _a / _b / _c sub-legs instead of cascading _a_b_a.
+        split_leg_at_points(
+            sd, new_leg_id,
+            [ix.point for ix in intersections],
+            id_prov, td,
+        )
+
+        # Split each crossed leg once at its own intersection point.
+        # Use split_leg_at_points so suffix-stripping and collision-avoidance
+        # apply (same logic as for the new leg above).
         for ix in intersections:
-            apply_intersection_split(sd, ix, traffic_data=td)
+            split_leg_at_points(sd, ix.leg2_id, [ix.point], id_prov, td)
 
         # Remove the transient layer that was already added to the QGIS
         # project — reload_legs_from_segment_data recreates all legs from
@@ -510,6 +689,7 @@ class HandleQGISIface:
         # Bump the leg-id counter past the highest current id so future
         # interactive draws don't collide.
         self.segment_id = max(max_id, self.segment_id)
+        self.sync_drawing_spinboxes()
 
         # Reconnect the width-changed handler.
         if prev_item_changed and not self.item_changed_connected:
@@ -735,6 +915,11 @@ class HandleQGISIface:
                 'Segment_Id': self.segment_id,
                 'Leg_name': f'LEG_{self.cur_route_id}_{self.segment_id}',
             }
+            # Initialise an empty traffic block so save() and the UI
+            # don't crash with KeyError before AIS data are loaded.
+            traffic = getattr(self.omrat, 'traffic', None)
+            if traffic is not None and seg_key not in self.omrat.traffic_data:
+                traffic.create_empty_dict(seg_key, dirs)
             # Stamp the write-once import baseline for the audit report.
             imported = getattr(self.omrat, 'segments_imported', None)
             if isinstance(imported, dict) and f'{self.segment_id}' not in imported:
@@ -746,7 +931,8 @@ class HandleQGISIface:
                     'End_Point': point.asWkt(),
                 }
         self.leg_dirs[f'{self.segment_id}'] = dirs
-        main_widget.cbTrafficSelectSeg.addItem(f'{self.segment_id}')
+        leg_name = f'LEG_{self.cur_route_id}_{self.segment_id}'
+        main_widget.cbTrafficSelectSeg.addItem(leg_name, f'{self.segment_id}')
         self.omrat.traffic.c_seg = f'{self.segment_id}'
         self.current_start_point = None
 
@@ -789,8 +975,12 @@ class HandleQGISIface:
 
     def remove_existing_tangent(self, segment_id: int):
         ids = [f.id() for f in self.tangent_layer.getFeatures() if f["type"] == f"Tangent Line {segment_id}"]
-        if ids:
-            self.tangent_layer.deleteFeatures(ids)
+        if not ids:
+            return
+        # Use the data provider directly — consistent with add_tangent_feature
+        # which also uses dataProvider().addFeatures(), so no edit mode needed.
+        self.tangent_layer.dataProvider().deleteFeatures(ids)
+        self.tangent_layer.triggerRepaint()
 
     def add_tangent_feature(self, start: QgsPointXY, end: QgsPointXY, segment_id: int):
         self.remove_existing_tangent(segment_id)
@@ -824,25 +1014,47 @@ class HandleQGISIface:
         self.tangent_layer.triggerRepaint()
 
     def on_width_changed(self, item: QTableWidgetItem):
-        """Handle changes to the width in the twRouteList table."""
+        """Handle edits to the route table: width (col 5) and Leg_name (col 2)."""
         column = item.column()
         row = item.row()
-        if column == 5:  # Assuming the 'Width' column is at index 5
-            segment_id = int(self.omrat.main_widget.twRouteList.item(row, 0).text())
+        seg_id_item = self.omrat.main_widget.twRouteList.item(row, 0)
+        if seg_id_item is None:
+            return
+        try:
+            segment_id = int(seg_id_item.text())
+        except ValueError:
+            return
+
+        if column == 5:  # Width
             start_point_wkt = self.omrat.main_widget.twRouteList.item(row, 3).text()
             end_point_wkt = self.omrat.main_widget.twRouteList.item(row, 4).text()
             width = float(self.omrat.main_widget.twRouteList.item(row, 5).text())
-
-            # Convert WKT to QgsGeometry
+            seg_key = str(segment_id)
+            if seg_key in self.omrat.segment_data:
+                self.omrat.segment_data[seg_key]['Width'] = int(width)
             start_point_geom = QgsGeometry.fromWkt(f"Point ({start_point_wkt})")
             end_point_geom = QgsGeometry.fromWkt(f"Point ({end_point_wkt})")
-
-            # Extract QgsPoint from QgsGeometry
             if not start_point_geom.isEmpty() and not end_point_geom.isEmpty():
                 start_point: QgsPointXY = start_point_geom.asPoint()
                 end_point: QgsPointXY = end_point_geom.asPoint()
-                # Remove the existing tangent line and redraw it with the updated width
                 self.create_offset_lines(start_point, end_point, width / 2, segment_id)
+
+        elif column == 2:  # Leg_name
+            new_name = item.text()
+            seg_key = str(segment_id)
+            if seg_key in self.omrat.segment_data:
+                self.omrat.segment_data[seg_key]['Leg_name'] = new_name
+            layer = self._find_layer_for_seg_id(segment_id)
+            if layer is not None:
+                layer.setName(new_name)
+                label_idx = layer.fields().lookupField("label")
+                if label_idx >= 0:
+                    pr = layer.dataProvider()
+                    for feat in layer.getFeatures():
+                        if feat["segmentId"] == segment_id:
+                            pr.changeAttributeValues({feat.id(): {label_idx: new_name}})
+                            break
+                layer.triggerRepaint()
 
     def point4326_from_wkt(self, wkt: str) -> QgsPoint:
         """Converts a WKT string to a QgsGeometry in EPSG:4326."""

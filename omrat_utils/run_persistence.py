@@ -213,7 +213,7 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
         from geometries.result_layers import (
             apply_graduated_symbology,
             _line_symbol_factory, _marker_symbol_factory,
-            _polygon_symbol_factory, _apply_graduated,
+            _apply_graduated,
         )
     except Exception:
         return
@@ -237,19 +237,11 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
             if qgis_layer.fields().indexOf('total_edge_probability') >= 0
             else 'total_prob'
         )
-        # New per-leg powered layers are LineString; legacy gpkgs are polygons.
-        try:
-            from qgis.core import Qgis as _Qgis
-            is_line = qgis_layer.geometryType() == _Qgis.GeometryType.Line
-        except Exception:
-            is_line = False
-        symbol_factory = _line_symbol_factory if is_line else _polygon_symbol_factory
-        _apply_graduated(qgis_layer, attr, symbol_factory)
-        # Re-apply edge-fid labelling on the loaded layer too.
+        # Powered layers are always LineString boundary segments.
+        apply_graduated_symbology(qgis_layer, attribute=attr)
         try:
             from geometries.result_layers import _enable_fid_labels
-            label_field = 'segment_id' if qgis_layer.fields().indexOf('segment_id') >= 0 else 'obstacle_id'
-            _enable_fid_labels(qgis_layer, label_field)
+            _enable_fid_labels(qgis_layer, 'obstacle_id')
         except Exception:
             pass
     elif layer_name == 'collision_lines':

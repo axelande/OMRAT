@@ -71,7 +71,7 @@ After one leg the Routes tab shows the new row:
    :alt: Routes tab after a single leg has been placed.
 
    The first leg appears in ``twRouteList`` (Segment 1, Route 1).
-   Adjust **Width** to the half-width of the corridor in metres
+   Adjust **Width** to the width of the corridor in metres
    (5000 = a 5 km wide corridor).
 
 .. figure:: _static/screenshots/quickstart/qs_04_canvas_with_legs.png
@@ -100,8 +100,9 @@ Where to get depth data:
   free 1/16 arc-min DTM for European seas.  Download a tile, contour
   it in QGIS (*Raster → Extraction → Contour Polygons*), then load
   the resulting polygons into the Depths tab.
-* **GEBCO** (https://www.gebco.net/) - global 15-arc-second bathymetry.
-  Same workflow.
+* **GEBCO via OpenTopography** - the Depths tab has a built-in downloader
+  that fetches GEBCO depth data directly inside OMRAT.  See
+  :ref:`gebco-api-key` below for how to get the free API key required.
 * **Local hydrographic offices** - national bathymetry products are
   usually higher resolution but require a license.
 * **ENCs** (Electronic Navigational Charts) - if you have access to
@@ -118,6 +119,63 @@ depths are added:
 
    Depths tab on a fresh project.  Each row links one polygon to its
    depth value (in metres, positive downwards).
+
+
+.. _gebco-api-key:
+
+3a. Fetching GEBCO depths directly (OpenTopography)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+OMRAT can download GEBCO bathymetry for your project area and convert
+it to depth polygons in one click, without leaving QGIS.  You need a
+**free** OpenTopography API key first.
+
+**Step 1 — Create an OpenTopography account**
+
+   Go to https://portal.opentopography.org and click **Sign Up** (top
+   right).  Fill in a username, e-mail address, and password, then
+   confirm your e-mail.
+
+**Step 2 — Generate an API key**
+
+   Log in, then click your username in the top-right corner and choose
+   **MyOpenTopo → My Account**.  Scroll to the **API Access** section
+   and click **Request API Key**.  The key is a short alphanumeric
+   string (e.g. ``abc123def456``).  Copy it.
+
+**Step 3 — Paste the key into OMRAT**
+
+   In the Depths tab, paste the key into the **API Key** field (the
+   text box to the right of the label "API Key:").  OMRAT saves it
+   automatically between sessions so you only need to do this once.
+
+**Step 4 — Enter your bounding box**
+
+   Fill in the four coordinate boxes:
+
+   * **LL Lat / LL Lon** — latitude and longitude of the south-west
+     (lower-left) corner of the area you want to download.
+   * **UR Lat / UR Lon** — latitude and longitude of the north-east
+     (upper-right) corner.
+
+   A good starting point is to add a small buffer around your routes.
+   You can read off coordinates from the QGIS status bar (shown when
+   you hover over the canvas).
+
+**Step 5 — Set depth intervals and fetch**
+
+   Enter the maximum depth of interest in **Max depth (m)** and a
+   contour step in **Depth interval (m)**.  Click **Update depth
+   intervals** to preview the contour levels, then click
+   **Get GEBCO data**.  OMRAT downloads the GeoTIFF, vectorizes it,
+   and adds one row per depth interval to the table automatically.
+
+.. note::
+
+   GEBCO resolution is 15 arc-seconds (~450 m at mid-latitudes).  It
+   is appropriate for open-water or offshore risk assessments; for
+   nearshore or port approaches you should use higher-resolution
+   hydrographic charts or ENCs.
 
 
 4. Define obstacles (objects)

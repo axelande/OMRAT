@@ -286,8 +286,11 @@ class ShipCollisionModelMixin:
         dir1, dir2 = dir_keys[0], dir_keys[1]
         arrays1 = self._dir_arrays(leg_dirs.get(dir1, {}))
         arrays2 = self._dir_arrays(leg_dirs.get(dir2, {}))
-        mu1_lat, sigma1_lat = self._get_weighted_mu_sigma(seg_info, 0)
-        mu2_lat, sigma2_lat = self._get_weighted_mu_sigma(seg_info, 1)
+        try:
+            mu1_lat, sigma1_lat = self._get_weighted_mu_sigma(seg_info, 0)
+            mu2_lat, sigma2_lat = self._get_weighted_mu_sigma(seg_info, 1)
+        except ValueError:
+            return 0.0
 
         return self._head_on_outer_loop(
             arrays1, arrays2,
@@ -399,7 +402,10 @@ class ShipCollisionModelMixin:
 
         for dir_idx, dir_key in enumerate(dir_keys):
             freq, speed, beam = self._dir_arrays(leg_dirs.get(dir_key, {}))
-            mu_ot, sigma_ot = self._get_weighted_mu_sigma(seg_info, dir_idx)
+            try:
+                mu_ot, sigma_ot = self._get_weighted_mu_sigma(seg_info, dir_idx)
+            except ValueError:
+                continue
             ship_cells = self._collect_ship_cells(freq, speed, beam, length_intervals)
 
             for i, (loa_i, type_i, q_fast, v_fast, b_fast) in enumerate(ship_cells):

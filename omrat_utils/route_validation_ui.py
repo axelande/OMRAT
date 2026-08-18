@@ -36,9 +36,10 @@ from qgis.PyQt.QtWidgets import (
 from geometries.route_validation import (
     CloseWaypointPair,
     LegIntersection,
-    apply_intersection_split,
     apply_waypoint_merge,
     validate_routes,
+    split_leg_at_points,
+    _make_id_provider,
 )
 
 if TYPE_CHECKING:
@@ -256,12 +257,30 @@ def _apply_merges_and_splits(
         if moved > 0:
             out.merges_applied += 1
     fresh_intersections = validate_routes(sd, tol_frac=tol_frac).intersections
+    # Collect all user-confirmed crossings first, then apply them together.
+    # Applying one-at-a-time on the already-mutated segment_data causes the
+    # cascading _a_b_a naming when one leg crosses multiple others.
+    confirmed_hits: list[LegIntersection] = []
     for hit in fresh_intersections:
         if not _show_split_dialog(hit, sd, omrat, show_dialog, parent):
             out.skipped += 1
             continue
-        apply_intersection_split(sd, hit, traffic_data=td)
-        out.splits_applied += 1
+        confirmed_hits.append(hit)
+
+    if confirmed_hits:
+        # Group split points per leg: {leg_id: [(t_param, point), ...]}
+        from collections import defaultdict
+        leg_splits: dict[str, list[tuple[float, tuple[float, float]]]] = defaultdict(list)
+        for hit in confirmed_hits:
+            leg_splits[hit.leg1_id].append((hit.t1, hit.point))
+            leg_splits[hit.leg2_id].append((hit.t2, hit.point))
+
+        id_prov = _make_id_provider(sd)
+        for leg_id, splits in leg_splits.items():
+            splits.sort(key=lambda x: x[0])
+            split_leg_at_points(sd, leg_id, [s[1] for s in splits], id_prov, td)
+
+        out.splits_applied += len(confirmed_hits)
 
 
 def _reload_legs_after_mutation(omrat: "OMRAT") -> None:

@@ -55,16 +55,21 @@ def traffic(qgis_iface):
 class TestFillSegSelect:
     def test_populates_from_route_table(self, traffic, qgis_iface):
         from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
-        # Attach a route-list table (normally on the main widget, not dw).
+        # Route list has at least 3 columns: Segment_Id(0), Route_Id(1), Leg_name(2).
         traffic.dw.twRouteList = QTableWidget()
-        traffic.dw.twRouteList.setColumnCount(1)
+        traffic.dw.twRouteList.setColumnCount(3)
         traffic.dw.twRouteList.setRowCount(2)
-        traffic.dw.twRouteList.setItem(0, 0, QTableWidgetItem('L1'))
-        traffic.dw.twRouteList.setItem(1, 0, QTableWidgetItem('L2'))
+        traffic.dw.twRouteList.setItem(0, 0, QTableWidgetItem('1'))
+        traffic.dw.twRouteList.setItem(0, 2, QTableWidgetItem('LEG_1_1'))
+        traffic.dw.twRouteList.setItem(1, 0, QTableWidgetItem('2'))
+        traffic.dw.twRouteList.setItem(1, 2, QTableWidgetItem('LEG_1_2'))
         traffic.fill_cbTrafficSelectSeg()
         assert traffic.dw.cbTrafficSelectSeg.count() == 2
-        assert traffic.dw.cbTrafficSelectSeg.itemText(0) == 'L1'
-        assert traffic.dw.cbTrafficSelectSeg.itemText(1) == 'L2'
+        # Display text is the leg name; stored data is the segment ID.
+        assert traffic.dw.cbTrafficSelectSeg.itemText(0) == 'LEG_1_1'
+        assert traffic.dw.cbTrafficSelectSeg.itemText(1) == 'LEG_1_2'
+        assert traffic.dw.cbTrafficSelectSeg.itemData(0) == '1'
+        assert traffic.dw.cbTrafficSelectSeg.itemData(1) == '2'
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +134,7 @@ class TestUpdateTrafficTbl:
         traffic.c_seg = 'L1'
         traffic.c_di = 'East'
         traffic.last_var = 'Speed (knots)'
-        traffic.dw.cbTrafficSelectSeg.addItem('L1')
+        traffic.dw.cbTrafficSelectSeg.addItem('LEG_1_L1', 'L1')
         traffic.dw.cbTrafficDirectionSelect.addItem('East')
         # cbSelectType has pre-populated items from the .ui; pick Speed (knots).
         traffic.dw.cbSelectType.setCurrentText('Speed (knots)')
@@ -175,8 +180,9 @@ class TestUpdateTrafficTbl:
         traffic.set_table_headings()
         traffic.create_empty_dict('L1', ['East', 'West'])
         traffic.c_seg = 'L1'
-        traffic.dw.cbTrafficSelectSeg.addItem('L1')
-        traffic.dw.cbTrafficSelectSeg.setCurrentText('L1')
+        # addItem(display, userData): display is the leg name, data is the seg key.
+        traffic.dw.cbTrafficSelectSeg.addItem('LEG_1_L1', 'L1')
+        traffic.dw.cbTrafficSelectSeg.setCurrentIndex(0)
         traffic.dw.cbTrafficDirectionSelect.addItem('East')  # will be cleared
         traffic.run_update = False
         traffic.update_traffic_tbl('segment')

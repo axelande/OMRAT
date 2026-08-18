@@ -28,6 +28,13 @@ from qgis.PyQt.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+from qgis.core import (
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
+    QgsPointXY,
+    QgsProject,
+    QgsRectangle,
+)
 
 from omrat_utils.widgets import NoWheelDoubleSpinBox
 
@@ -184,6 +191,7 @@ class JunctionMatrixDialog(QDialog):
         self.cmb.currentIndexChanged.connect(self._on_junction_changed)
         if self._junction_ids:
             self._render_for_index(0)
+            self._zoom_to_junction(0)
 
     # ------------------------------------------------------------------
 
@@ -205,6 +213,38 @@ class JunctionMatrixDialog(QDialog):
     def _on_junction_changed(self, index: int) -> None:
         if 0 <= index < len(self._junction_ids):
             self._render_for_index(index)
+            self._zoom_to_junction(index)
+
+    def _zoom_to_junction(self, index: int) -> None:
+        """Pan/zoom the canvas to the selected junction point."""
+        iface = getattr(self.omrat, 'iface', None)
+        if iface is None:
+            return
+        canvas = iface.mapCanvas()
+        if canvas is None:
+            return
+        handler = getattr(self.omrat, 'junctions', None)
+        if handler is None or not self._junction_ids:
+            return
+        jid = self._junction_ids[index]
+        j = handler.registry.get(jid)
+        if j is None:
+            return
+        lon, lat = j.point
+        pad = 0.005
+        rect = QgsRectangle(lon - pad, lat - pad, lon + pad, lat + pad)
+        canvas_crs = canvas.mapSettings().destinationCrs()
+        src_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        if canvas_crs.authid() != src_crs.authid():
+            try:
+                tr = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
+                ll = tr.transform(QgsPointXY(rect.xMinimum(), rect.yMinimum()))
+                ur = tr.transform(QgsPointXY(rect.xMaximum(), rect.yMaximum()))
+                rect = QgsRectangle(ll.x(), ll.y(), ur.x(), ur.y())
+            except Exception:  # nosec B110
+                pass
+        canvas.setExtent(rect)
+        canvas.refresh()
 
     def _render_for_index(self, index: int) -> None:
         handler = self.omrat.junctions
@@ -236,6 +276,15 @@ class JunctionMatrixDialog(QDialog):
 
 def open_junction_dialog(omrat: "OMRAT") -> None:
     """Convenience entry point used by the menu action."""
+    # Re-use an existing open dialog rather than stacking multiple ones.
+    existing = getattr(omrat, '_junction_matrix_dialog', None)
+    if existing is not None and existing.isVisible():
+        existing.raise_()
+        existing.activateWindow()
+        return
     parent = getattr(omrat, 'main_widget', None)
     dlg = JunctionMatrixDialog(omrat, parent)
-    dlg.exec()
+    dlg.setWindowModality(Qt.NonModal)
+    # Store on omrat so Python doesn't GC the dialog while it's open.
+    omrat._junction_matrix_dialog = dlg
+    dlg.show()

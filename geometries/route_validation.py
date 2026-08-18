@@ -426,6 +426,8 @@ def _split_one_leg(
     ep = parse_wkt_point(parent.get('End_Point'))
     if sp is None or ep is None:
         return None
+    import re as _re
+    import string as _string
     second_id = new_id_provider()
     first = _copy.deepcopy(parent)
     second = _copy.deepcopy(parent)
@@ -433,14 +435,27 @@ def _split_one_leg(
     first['End_Point'] = mid_str
     first['line_length'] = haversine_m(sp, split_point)
     first['Segment_Id'] = leg_id
-    if 'Leg_name' in first:
-        first['Leg_name'] = f"{first['Leg_name']}_a"
     second['Start_Point'] = mid_str
     second['End_Point'] = format_wkt_point(*ep)
     second['line_length'] = haversine_m(split_point, ep)
     second['Segment_Id'] = second_id
-    if 'Leg_name' in second:
-        second['Leg_name'] = f"{second['Leg_name']}_b"
+    if 'Leg_name' in first:
+        _raw = first['Leg_name']
+        base = _re.sub(r'(_[a-z])+$', '', _raw)
+        _taken = {v.get('Leg_name', '') for k, v in segment_data.items()
+                  if k != leg_id and isinstance(v, dict)}
+        _avail: list[str] = []
+        _si = 0
+        while len(_avail) < 2:
+            if _si < 26:
+                s = _string.ascii_lowercase[_si]  
+            else:
+                s = _string.ascii_lowercase[_si // 26 - 1] + _string.ascii_lowercase[_si % 26]
+            if f"{base}_{s}" not in _taken:
+                _avail.append(s)
+            _si += 1
+        first['Leg_name'] = f"{base}_{_avail[0]}"
+        second['Leg_name'] = f"{base}_{_avail[1]}"
     segment_data[leg_id] = first
     segment_data[second_id] = second
     return leg_id, second_id
@@ -495,6 +510,106 @@ def apply_intersection_split(
             # id.  Both inherit the same traffic block.
             traffic_data[split[1]] = parent_traffic
     return result
+
+
+def split_leg_at_points(
+    segment_data: dict[str, Any],
+    leg_id: str,
+    split_points: list[tuple[float, float]],
+    new_id_provider: Callable[[], str],
+    traffic_data: dict[str, Any] | None = None,
+) -> list[str]:
+    """Split ``leg_id`` at N points, producing N+1 ordered sub-legs.
+
+    Sub-legs are named ``{base}_a``, ``{base}_b``, ``{base}_c``, … so that
+    a single call correctly handles a leg that crosses multiple other legs
+    without the cascading ``_a_b_a`` explosion caused by calling
+    ``_split_one_leg`` repeatedly on an already-shortened piece.
+
+    ``split_points`` must be sorted by position along the leg (ascending t).
+    The first sub-leg keeps the original ``leg_id`` so UI references stay
+    valid; the remaining N sub-legs receive fresh ids from ``new_id_provider``.
+    Traffic blocks are deep-copied to every sub-leg when ``traffic_data`` is
+    provided.  Returns the list of all sub-leg ids in order.
+    """
+    import copy as _copy
+    import string
+
+    n = len(split_points)
+    if n == 0:
+        return [leg_id]
+
+    parent = segment_data.get(leg_id)
+    if not isinstance(parent, dict):
+        return [leg_id]
+    sp = parse_wkt_point(parent.get('Start_Point'))
+    ep = parse_wkt_point(parent.get('End_Point'))
+    if sp is None or ep is None:
+        return [leg_id]
+
+    import re as _re
+    _raw_name = parent.get('Leg_name', leg_id)
+    # Strip any trailing _a/_b/_c chains so re-splitting a sub-leg
+    # (e.g. "LEG_1_1_b") produces siblings of the root ("LEG_1_1_a",
+    # "LEG_1_1_b") rather than cascading grandchildren ("LEG_1_1_b_a").
+    base_name = _re.sub(r'(_[a-z])+$', '', _raw_name)
+    parent_traffic = (
+        _copy.deepcopy(traffic_data[leg_id])
+        if traffic_data is not None and leg_id in traffic_data
+        else None
+    )
+
+    def _raw_suffix(i: int) -> str:
+        if i < 26:
+            return string.ascii_lowercase[i]
+        return string.ascii_lowercase[i // 26 - 1] + string.ascii_lowercase[i % 26]
+
+    # Collect names already used by OTHER legs so we can skip conflicting
+    # suffixes (e.g. if LEG_3_7_b already exists, the new sub-leg of
+    # LEG_3_7_a becomes LEG_3_7_c rather than a duplicate LEG_3_7_b).
+    _taken = {
+        v.get('Leg_name', '')
+        for k, v in segment_data.items()
+        if k != leg_id and isinstance(v, dict)
+    }
+    _avail: list[str] = []
+    _si = 0
+    while len(_avail) < n + 1:
+        s = _raw_suffix(_si)
+        if f"{base_name}_{s}" not in _taken:
+            _avail.append(s)
+        _si += 1
+
+    new_ids = [new_id_provider() for _ in range(n)]
+    all_ids = [leg_id] + new_ids
+    all_points = [sp] + list(split_points) + [ep]
+
+    for i, sub_id in enumerate(all_ids):
+        sub = _copy.deepcopy(parent)
+        sub['Start_Point'] = format_wkt_point(*all_points[i])
+        sub['End_Point'] = format_wkt_point(*all_points[i + 1])
+        sub['line_length'] = haversine_m(all_points[i], all_points[i + 1])
+        sub['Segment_Id'] = sub_id
+        sub['Leg_name'] = f"{base_name}_{_avail[i]}"
+        segment_data[sub_id] = sub
+        if traffic_data is not None and parent_traffic is not None:
+            traffic_data[sub_id] = _copy.deepcopy(parent_traffic)
+
+    return all_ids
+
+
+def _make_id_provider(segment_data: dict[str, Any]) -> Callable[[], str]:
+    """Return a closure that yields fresh integer-string leg IDs."""
+    state: dict[str, int | None] = {'next': None}
+
+    def _provider() -> str:
+        if state['next'] is None:
+            state['next'] = int(_next_leg_id(segment_data))
+        else:
+            state['next'] += 1
+        return str(state['next'])
+
+    return _provider
 
 
 # ---------------------------------------------------------------------------

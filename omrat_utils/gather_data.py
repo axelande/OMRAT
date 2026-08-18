@@ -1,12 +1,15 @@
 from __future__ import annotations
 import copy
-from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
-from typing import Any
-import numpy as np
+from typing import Any, TYPE_CHECKING
 
-from typing import TYPE_CHECKING
+import numpy as np
+from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
+
 if TYPE_CHECKING:
     from omrat import OMRAT
+
+_USER_ROLE = getattr(Qt, 'UserRole', None) or Qt.ItemDataRole.UserRole
 
 
 def dict_ndarray_to_list(data: dict[str, dict[str, np.ndarray]]) -> dict[str, dict[str, list]]:
@@ -57,8 +60,8 @@ class GatherData:
         self.data['traffic_data'] = copy.deepcopy(self.p.traffic_data)
         self.data['segment_data'] = copy.deepcopy(self.p.segment_data)
         for key, item in self.data['segment_data'].items():
-            self.data['segment_data'][key]['dist1'] = copy.deepcopy(item['dist1'].tolist())
-            self.data['segment_data'][key]['dist2'] = copy.deepcopy(item['dist2'].tolist())
+            self.data['segment_data'][key]['dist1'] = list(item.get('dist1', np.array([])))
+            self.data['segment_data'][key]['dist2'] = list(item.get('dist2', np.array([])))
         self.get_segment_tbl()
 
         self.data['depths'] = []
@@ -250,7 +253,12 @@ class GatherData:
         return result
 
     def obtain_table_data(self, tbl) -> list:
-        """Obtain data from a table"""
+        """Obtain data from a table.
+
+        Cells that store a truncated display (e.g. WKT polygon summaries) keep
+        the full value in Qt.UserRole; prefer that over the display text so that
+        the full WKT is saved rather than the short label.
+        """
         tbl_data = []
         rows = tbl.rowCount()
         cols = tbl.columnCount()
@@ -259,7 +267,9 @@ class GatherData:
             for col in range(cols):
                 value = tbl.item(row, col)
                 if value is not None:
-                    line.append(value.text())
+                    get_data = getattr(value, 'data', None)
+                    user_data = get_data(_USER_ROLE) if get_data is not None else None
+                    line.append(user_data if user_data is not None else value.text())
             tbl_data.append(line)
         return tbl_data
 
@@ -340,8 +350,8 @@ class GatherData:
             for sid, rec in imported_raw.items() if isinstance(rec, dict)
         }
         for key, item in data['segment_data'].items():
-            self.p.segment_data[key]['dist1'] = np.array(item['dist1'])
-            self.p.segment_data[key]['dist2'] = np.array(item['dist2'])
+            self.p.segment_data[key]['dist1'] = np.array(item.get('dist1', []))
+            self.p.segment_data[key]['dist2'] = np.array(item.get('dist2', []))
         self.populate_segment_tbl(data['segment_data'], self.p.main_widget.twRouteList)
         self.populate_cbTrafficSelectSeg()
         self.p.main_widget.leNormMean1_1.setText('')
@@ -422,15 +432,24 @@ class GatherData:
     def populate_cbTrafficSelectSeg(self):
         """Sets the segment names in cbTrafficSelectSeg"""
         self.p.main_widget.cbTrafficSelectSeg.clear()
-        for key in self.p.segment_data.keys():
-            self.p.main_widget.cbTrafficSelectSeg.addItem(str(key))
-        self.p.traffic.c_seg = self.p.main_widget.cbTrafficSelectSeg.currentText()
+        for key, seg in self.p.segment_data.items():
+            label = seg.get('Leg_name') or str(key)
+            self.p.main_widget.cbTrafficSelectSeg.addItem(label, str(key))
+        self.p.traffic.c_seg = self.p.main_widget.cbTrafficSelectSeg.currentData() or ''
 
     def populate_tbl(self, data: list, tbl: QTableWidget):
+        from omrat_utils.handle_object import _wkt_table_item
+        _WKT_PREFIXES = ('polygon', 'multipolygon', 'point', 'linestring',
+                         'multilinestring', 'geometrycollection')
         tbl.setRowCount(len(data))
         for i, line in enumerate(data):
             for j, value in enumerate(line):
-                item = QTableWidgetItem(value)
+                if (isinstance(value, str)
+                        and value.lower().split('(')[0].strip() in _WKT_PREFIXES
+                        and len(value) > 60):
+                    item = _wkt_table_item(value)
+                else:
+                    item = QTableWidgetItem(value)
                 tbl.setItem(i, j, item)
 
     def populate_segment_tbl(self, data: dict[str, dict[str, Any]], tbl: QTableWidget):

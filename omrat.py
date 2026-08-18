@@ -504,7 +504,6 @@ class OMRAT(
         if self.main_widget.is_active:
             self.main_widget.pbAddRoute.clicked.disconnect()
             self.main_widget.pbStopRoute.clicked.disconnect()
-            self.main_widget.pbLoadRoute.clicked.disconnect()
             self.main_widget.pbRemoveRoute.clicked.disconnect()
             self.main_widget.pbAddSimpleDepth.clicked.disconnect()
             self.main_widget.pbLoadDepth.clicked.disconnect()
@@ -513,6 +512,10 @@ class OMRAT(
             self.main_widget.pbLoadObject.clicked.disconnect()
             self.main_widget.pbRemoveObject.clicked.disconnect()
             self.main_widget.pbRunModel.clicked.disconnect()
+            try:
+                self.main_widget.pbLoadRoute.clicked.disconnect()
+            except TypeError:
+                pass
 
         # Set plugin state to inactive
         self.pluginIsActive = False
@@ -589,7 +592,7 @@ class OMRAT(
     def _init_segment_layer(self, seg_data: dict, crs: str):
         route_id = seg_data['Route_Id']
         seg_id = seg_data['Segment_Id']
-        name = f"Segment {route_id} - {seg_id}"
+        name = seg_data.get('Leg_name', f'LEG_{route_id}_{seg_id}')
         vl = QgsVectorLayer("LineString?crs=EPSG:4326", name, "memory")
         QgsProject.instance().addMapLayer(vl)
         self.segment_id += 1
@@ -615,7 +618,7 @@ class OMRAT(
         fet.setAttributes([
             seg_data["Segment_Id"], seg_data["Route_Id"],
             seg_data["Start_Point"], seg_data["End_Point"],
-            f"LEG_{seg_data['Route_Id']}_{seg_data['Segment_Id']}",
+            seg_data.get('Leg_name', f"LEG_{seg_data['Route_Id']}_{seg_data['Segment_Id']}"),
         ])
         fet.setId(fid)
         return fet
@@ -672,6 +675,15 @@ class OMRAT(
             max_id = self.segment_id
         self.qgis_geoms.segment_id = max_id
         self.segment_id = max_id
+        try:
+            max_route = max(
+                int(str(v.get('Route_Id', 1)))
+                for v in data['segment_data'].values()
+            )
+            self.qgis_geoms.cur_route_id = max_route + 1
+        except Exception:
+            pass
+        self.qgis_geoms.sync_drawing_spinboxes()
         self.iface.mapCanvas().refresh()
 
     def reset_route_table(self) -> None:
@@ -923,6 +935,8 @@ class OMRAT(
         # stamps Route_Id / Leg_name on freshly-drawn legs.
         self.qgis_geoms.cur_route_id += 1
         self.qgis_geoms.current_start_point = None
+        self.qgis_geoms._clear_rubber_band()
+        self.qgis_geoms.sync_drawing_spinboxes()
 
         # Set the active tool to "Pan Map"
         canvas: QgsMapCanvas | None = self.iface.mapCanvas()
@@ -1011,6 +1025,7 @@ class OMRAT(
     def _connect_toolbar_buttons(self) -> None:
         self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
         self.main_widget.pbStopRoute.clicked.connect(self.stop_route)
+        self.main_widget.pbRemoveRoute.clicked.connect(self.qgis_geoms.remove_leg)
         self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
         self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
         self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)

@@ -437,6 +437,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                             wt * (dist.std() ** 2)
                             for dist, wt in zip(dists_dir, w_dir) if wt > 0
                         )))
+                        if not np.isfinite(weighted_std):
+                            weighted_std = 0.0
                         lateral_spread = 5.0 * weighted_std
             except Exception:
                 dists_dir = []

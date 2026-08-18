@@ -47,6 +47,7 @@ class AisUpdateTask(QgsTask):
         self.junction_counts: dict | None = None
         self.last_key: str | None = None
         self.error: str | None = None
+        self.bad_legs: list[str] = []  # legs skipped due to invalid geometry
 
     # ------------------------------------------------------------------
     # Helpers
@@ -114,8 +115,25 @@ class AisUpdateTask(QgsTask):
         from shapely import wkt
         ais = self.ais
         dirs = self.leg_dirs.get(leg_key, [])
-        start_p = wkt.loads(f"Point ({leg_d['Start_Point']})")
-        end_p = wkt.loads(f"Point ({leg_d['End_Point']})")
+        start_raw = str(leg_d.get('Start_Point', '')).strip()
+        end_raw = str(leg_d.get('End_Point', '')).strip()
+        if not start_raw or not end_raw:
+            QgsMessageLog.logMessage(
+                f"AIS fetch: skipping leg {leg_key} — missing Start_Point or End_Point",
+                "OMRAT", Qgis.Warning,
+            )
+            self.bad_legs.append(leg_key)
+            return
+        try:
+            start_p = wkt.loads(f"Point ({start_raw})")
+            end_p = wkt.loads(f"Point ({end_raw})")
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"AIS fetch: skipping leg {leg_key} — invalid geometry: {exc}",
+                "OMRAT", Qgis.Warning,
+            )
+            self.bad_legs.append(leg_key)
+            return
         pl = get_pl(ais.db, lat1=start_p.y, lat2=end_p.y, lon1=start_p.x, lon2=end_p.x, l_width=float(leg_d['Width']))
         ais_data = ais.run_sql(pl)
         sql = (f"select degrees(ST_Azimuth(ST_Point({start_p.x}, {start_p.y})::geography, "
@@ -183,8 +201,8 @@ class AisUpdateTask(QgsTask):
         sd['std1_1'] = float(line1.std()) if len(line1) else 0.0
         sd['mean2_1'] = float(line2.mean()) if len(line2) else 0.0
         sd['std2_1'] = float(line2.std()) if len(line2) else 0.0
-        sd['weight1_1'] = 100
-        sd['weight2_1'] = 100
+        sd['weight1_1'] = 100 if len(line1) > 0 else 0
+        sd['weight2_1'] = 100 if len(line2) > 0 else 0
         sd['dist1'] = line1
         sd['dist2'] = line2
         for j in range(1, 3):
@@ -223,6 +241,63 @@ class AisUpdateTask(QgsTask):
         except Exception as exc:
             QgsMessageLog.logMessage(f"Junction transition refresh skipped: {exc}", "OMRAT", Qgis.Warning)
 
+    def _prompt_remove_bad_legs(self, omrat: Any) -> None:
+        """Ask the user whether to remove legs that had invalid geometry."""
+        if not self.bad_legs:
+            return
+        leg_list = '\n'.join(f'  • {k}' for k in self.bad_legs)
+        answer = QMessageBox.question(
+            omrat.main_widget,
+            omrat.tr("Invalid leg geometry"),
+            omrat.tr(
+                f"The following leg(s) have an empty or invalid geometry "
+                f"and produced no AIS data:\n{leg_list}\n\n"
+                f"Do you want to remove them from the route?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        bad_set = set(self.bad_legs)
+        table = omrat.main_widget.twRouteList
+        qg = getattr(omrat, 'qgis_geoms', None)
+        rows_to_remove: list[tuple[int, str]] = []
+        for row in range(table.rowCount()):
+            cell = table.item(row, 0)
+            if cell is not None and cell.text() in bad_set:
+                rows_to_remove.append((row, cell.text()))
+        for row, key in sorted(rows_to_remove, reverse=True):
+            if qg is not None:
+                try:
+                    layer = qg._find_layer_for_seg_id(int(key))
+                    if layer is not None:
+                        eb = layer.editBuffer()
+                        if eb is not None:
+                            try:
+                                eb.geometryChanged.disconnect()
+                            except TypeError:
+                                pass
+                            if eb in qg.buffer_edits:
+                                qg.buffer_edits.remove(eb)
+                        qg.vector_layers[:] = [vl for vl in qg.vector_layers if vl is not layer]
+                        from qgis.core import QgsProject
+                        QgsProject.instance().removeMapLayer(layer.id())
+                except Exception:
+                    pass
+                qg.leg_dirs.pop(key, None)
+            omrat.segment_data.pop(key, None)
+            omrat.traffic_data.pop(key, None)
+            table.removeRow(row)
+        if getattr(omrat, 'junctions', None) is not None:
+            omrat.junctions.rebuild_from_segments(omrat.segment_data, prefer_user=True)
+        if hasattr(omrat, 'run_traffic_module'):
+            omrat.run_traffic_module()
+        try:
+            omrat.iface.mapCanvas().refresh()
+        except Exception:
+            pass
+
     def finished(self, result: bool) -> None:
         ais = self.ais
         omrat = ais.omrat
@@ -244,3 +319,4 @@ class AisUpdateTask(QgsTask):
             self._apply_leg_result(omrat, leg_key, res)
         self._update_last_leg_display(omrat)
         self._refresh_junction_registry(omrat)
+        self._prompt_remove_bad_legs(omrat)

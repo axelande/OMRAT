@@ -203,7 +203,11 @@ def test_stop_route_advances_qgis_geoms_route_id(monkeypatch):
     import omrat as omrat_mod
     # Stub the QGIS map-tool class so we don't need a live canvas.
     monkeypatch.setattr(omrat_mod, 'QgsMapToolPan', lambda canvas: MagicMock())
-    qg = SimpleNamespace(vector_layers=[], cur_route_id=1, current_start_point=object())
+    qg = SimpleNamespace(
+        vector_layers=[], cur_route_id=1, current_start_point=object(),
+        _clear_rubber_band=lambda: None,
+        sync_drawing_spinboxes=lambda: None,
+    )
     iface = MagicMock()
     iface.mapCanvas.return_value = MagicMock()
     iface.actionPan.return_value = None

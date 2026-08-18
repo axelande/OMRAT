@@ -87,8 +87,9 @@ def get_distribution(segment_data: dict[str, Any], direction: int) -> tuple[list
 
     for i in range(1, 4):
         if f'weight{d}_{i}' in segment_data:
-            if segment_data[f'weight{d}_{i}'] > 0:
-                di = norm(loc=float(segment_data[f'mean{d}_{i}']), scale=float(segment_data[f'std{d}_{i}']))
+            std_val = float(segment_data[f'std{d}_{i}'])
+            if segment_data[f'weight{d}_{i}'] > 0 and std_val > 0 and np.isfinite(std_val):
+                di = norm(loc=float(segment_data[f'mean{d}_{i}']), scale=std_val)
                 distributions.append(di)
                 weights.append(float(segment_data[f'weight{d}_{i}']))
             else:

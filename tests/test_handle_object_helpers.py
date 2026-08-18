@@ -11,15 +11,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from omrat_utils.handle_object import (
+from omrat_utils.handle_object import (  # noqa: E402
     build_gebco_url,
-    expand_bbox,
     get_bbox,
     get_depth_color,
     get_leg_coordinates,
@@ -34,6 +31,7 @@ class TestGetLegCoordinates:
     def test_reads_start_and_end_from_table(self):
         tbl = MagicMock()
         tbl.rowCount.return_value = 2
+
         def item(row, col):
             grid = {
                 (0, 3): '14.0 55.0', (0, 4): '14.5 55.1',
@@ -54,6 +52,7 @@ class TestGetLegCoordinates:
     def test_malformed_coord_skipped(self):
         tbl = MagicMock()
         tbl.rowCount.return_value = 1
+
         def item(row, col):
             grid = {
                 (0, 3): 'nonsense', (0, 4): '14.5 55.1',
@@ -65,7 +64,7 @@ class TestGetLegCoordinates:
 
 
 # ---------------------------------------------------------------------------
-# get_bbox / expand_bbox
+# get_bbox
 # ---------------------------------------------------------------------------
 
 class TestGetBbox:
@@ -78,20 +77,6 @@ class TestGetBbox:
     def test_single_point(self):
         assert get_bbox([(10.0, 20.0)]) == (20.0, 20.0, 10.0, 10.0)
 
-
-class TestExpandBbox:
-    def test_zero_percent_expansion_returns_same_bbox(self):
-        assert expand_bbox(10, 20, 30, 40, 0) == (10.0, 20.0, 30.0, 40.0)
-
-    def test_10_percent_expansion(self):
-        # lat range = 10, lon range = 10, 10% = 1 each side.
-        out = expand_bbox(10, 20, 30, 40, 10)
-        assert out == (9.0, 21.0, 29.0, 41.0)
-
-    def test_handles_zero_range(self):
-        # Degenerate lat range -> no expansion.
-        out = expand_bbox(55.0, 55.0, 14.0, 15.0, 10)
-        assert out[0] == out[1] == 55.0
 
 # ---------------------------------------------------------------------------
 # get_depth_color

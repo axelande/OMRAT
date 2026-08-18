@@ -7,6 +7,7 @@ from helpers.qt_conversions import create_regex_validator
 
 class PointTool(QgsMapToolEmitPoint):
     canvasClicked = pyqtSignal('QgsPointXY')
+    canvasMoved = pyqtSignal('QgsPointXY')
 
     def __init__(self, canvas):
         super(QgsMapTool, self).__init__(canvas)
@@ -14,6 +15,9 @@ class PointTool(QgsMapToolEmitPoint):
     def canvasReleaseEvent(self, event):
         point_canvas_crs = event.mapPoint()
         self.canvasClicked.emit(point_canvas_crs)
+
+    def canvasMoveEvent(self, event):
+        self.canvasMoved.emit(event.mapPoint())
 
 
 class NumericDelegate(QStyledItemDelegate):
