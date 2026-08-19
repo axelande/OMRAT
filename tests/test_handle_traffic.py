@@ -79,9 +79,9 @@ class TestFillSegSelect:
 class TestSetTableHeadings:
     def test_headings_from_ship_cat(self, traffic):
         traffic.set_table_headings()
-        # 2 types x 2 size bins from the fixture.
-        assert traffic.dw.twTrafficData.rowCount() == 2
-        assert traffic.dw.twTrafficData.columnCount() == 2
+        # 2 types x 2 size bins from the fixture + 1 Total row/col each.
+        assert traffic.dw.twTrafficData.rowCount() == 3
+        assert traffic.dw.twTrafficData.columnCount() == 3
 
     def test_fontmetrics_failure_swallowed(self, traffic, monkeypatch):
         """A TypeError from fontMetrics is caught silently (L85-87)."""
@@ -125,8 +125,8 @@ class TestUpdateTrafficTbl:
         traffic.create_empty_dict('L1', ['East'])
         # Populate every cell in Speed (knots) so the update_traffic_tbl loop
         # doesn't trip over an empty list when building a QDoubleSpinBox.
-        rows = traffic.dw.twTrafficData.rowCount()
-        cols = traffic.dw.twTrafficData.columnCount()
+        rows = traffic._data_rows
+        cols = traffic._data_cols
         for r in range(rows):
             for c in range(cols):
                 traffic.traffic_data['L1']['East']['Speed (knots)'][r][c] = 0

@@ -528,7 +528,7 @@ class Traffic:
 
     def _on_follow_global_toggled(self, type_idx: int, ticked: bool) -> None:
         scaling = self._project_scaling()
-        self.ensure_follow_global(self.dw.twTrafficData.rowCount())
+        self.ensure_follow_global(self._data_rows)
         flags = scaling['follow_global']
         if type_idx < len(flags):
             flags[type_idx] = bool(ticked)
