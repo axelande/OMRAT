@@ -93,7 +93,7 @@ class Storage:
                 try:
                     did, depth, poly = dep
                     result.append([str(did), str(depth), str(poly)])
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
         return result
 
@@ -108,7 +108,7 @@ class Storage:
                 try:
                     oid, height, poly = obj
                     result.append([str(oid), str(height), str(poly)])
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
         return result
 
@@ -186,7 +186,7 @@ class Storage:
                     f"__import__('scipy.stats', fromlist=['norm'])"
                     f".norm(loc={mean}, scale={std}).cdf(x)"
                 )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         repair.setdefault('use_lognormal', False)
         drift['repair'] = repair
@@ -197,7 +197,7 @@ class Storage:
             if anchor_p > 1.0:
                 anchor_p = anchor_p / 100.0
             drift['anchor_p'] = max(0.0, min(1.0, anchor_p))
-        except Exception:
+        except Exception:  # nosec B110 B112
             drift['anchor_p'] = 0.7
         drift.setdefault('anchor_d', drift.get('anchor_depth', 0))
         drift.setdefault('start_from', 'leg_center')
@@ -207,14 +207,14 @@ class Storage:
             for k, v in drift['blackout_by_ship_type'].items():
                 try:
                     converted[int(k)] = float(v)
-                except Exception:
+                except Exception:  # nosec B110 B112
                     continue
             drift['blackout_by_ship_type'] = converted
         else:
             try:
                 from compute.basic_equations import default_blackout_by_ship_type
                 drift['blackout_by_ship_type'] = default_blackout_by_ship_type()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 drift['blackout_by_ship_type'] = {}
         return drift
 
@@ -235,7 +235,7 @@ class Storage:
                 'spill_fraction': default_spill_fraction(),
                 'catastrophe_levels': default_catastrophe_levels(),
             }
-        except Exception:
+        except Exception:  # nosec B110 B112
             return {'oil_onboard': [], 'spill_probability': [], 'spill_fraction': [], 'catastrophe_levels': []}
 
     def new_file_path(self, save, show_msg, dir_path, generic_name, filter_text):

@@ -52,7 +52,7 @@ def get_leg_coordinates(tbl: QTableWidget) -> list[tuple[float, float]]:
                 coord = coord_str.split(' ')
                 lon, lat = float(coord[0]), float(coord[1])
                 coords.append((lon, lat))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 continue
     return coords
 
@@ -228,7 +228,7 @@ class OObject:
             ranges.append(rng)
 
         renderer = QgsGraduatedSymbolRenderer('depth', ranges)
-        renderer.setMode(QgsGraduatedSymbolRenderer.Custom)
+        renderer.setMode(QgsGraduatedSymbolRenderer.Mode.Custom)
         self.depth_layer.setRenderer(renderer)
         self.depth_layer.triggerRepaint()
 
@@ -250,7 +250,7 @@ class OObject:
         if self.area is not None:
             try:
                 self.area.featureAdded.disconnect(self.on_feature_added)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.area = QgsVectorLayer("Polygon?crs=epsg:4326", name, "memory")
 
@@ -344,7 +344,7 @@ class OObject:
         try:
             interval = int(self.p.main_widget.SBDepthInterval.value())
             max_depth = int(float(self.p.main_widget.LEMaxDepth.text()))
-        except Exception:
+        except Exception:  # nosec B110 B112
             self.p.show_error_popup("Please enter valid numbers for interval and max depth.", "update_depth_intervals")
             return
 
@@ -516,7 +516,7 @@ class OObject:
             self.store_depth()
             self.p.main_widget.pbAddSimpleDepth.setText('Add manual')
             # Add drawn polygon to consolidated depth layer
-            assert self.area is not None
+            assert self.area is not None  # nosec B101
             row = self.deph_id - 1
             wkt_item = self.p.main_widget.twDepthList.item(row, 2)
             depth_item = self.p.main_widget.twDepthList.item(row, 1)
@@ -719,13 +719,13 @@ class OObject:
         if self._depth_edit_buffer is not None:
             try:
                 self._depth_edit_buffer.geometryChanged.disconnect()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             self._depth_edit_buffer = None
         if self.depth_layer is not None:
             try:
                 QgsProject.instance().removeMapLayer(self.depth_layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             self.depth_layer = None
         self.depth_feature_row = {}
@@ -743,7 +743,7 @@ class OObject:
         try:
             for buf in self.object_buffer_edits:
                 buf.geometryChanged.disconnect()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         self.object_buffer_edits = []
         self.object_layer_row = {}
@@ -772,7 +772,7 @@ class OObject:
         for buf in self.object_buffer_edits:
             try:
                 buf.geometryChanged.disconnect()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.object_buffer_edits = []
 
@@ -780,7 +780,7 @@ class OObject:
         for layer in self.loaded_object_areas:
             try:
                 QgsProject.instance().removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.loaded_object_areas = []
         self.object_layer_row = {}
@@ -794,5 +794,5 @@ class OObject:
         try:
             self.p.main_widget.pbAddSimpleDepth.setText('Add manual')
             self.p.main_widget.pbAddSimpleObject.setText('Add manual')
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass

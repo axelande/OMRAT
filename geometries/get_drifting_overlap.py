@@ -122,7 +122,7 @@ class DriftingOverlapVisualizer:
         self.simulate_initial_selection()
 
     def setup_plot(self) -> None:
-        assert isinstance(self.ax1, Axes)
+        assert isinstance(self.ax1, Axes)  # nosec B101
         for line, name in zip(self.lines, self.line_names):
             x, y = line.xy
             # picker=15 gives a click tolerance that's reliable on
@@ -170,7 +170,7 @@ class DriftingOverlapVisualizer:
         for i, line in enumerate(self.lines):
             try:
                 xs, ys = line.xy
-            except Exception:
+            except Exception:  # nosec B110 B112
                 continue
             for x, y in zip(xs, ys):
                 d = float(np.linalg.norm(np.array([x, y]) - click))
@@ -258,7 +258,7 @@ class DriftingOverlapVisualizer:
         poly = self.current_extended_polygons[direction_idx]
         try:
             centroid = poly.centroid
-        except Exception:
+        except Exception:  # nosec B110 B112
             return
 
         class _MockButtonEvent:
@@ -331,7 +331,7 @@ class DriftingOverlapVisualizer:
                     try:
                         if not results[f"Polygon_{i}"][gi][j]:
                             continue
-                    except Exception:
+                    except Exception:  # nosec B110 B112
                         continue
                     geoms_to_sample = (
                         list(obj.geoms)
@@ -345,14 +345,14 @@ class DriftingOverlapVisualizer:
                                 if hasattr(g, 'exterior')
                                 else list(g.coords)
                             )
-                        except Exception:
+                        except Exception:  # nosec B110 B112
                             continue
                         for cx, cy in coords:
                             try:
                                 d = float(
                                     Point(cx, cy).distance(leg_line)
                                 )
-                            except Exception:
+                            except Exception:  # nosec B110 B112
                                 continue
                             if np.isfinite(d):
                                 dists.append(d)
@@ -449,9 +449,9 @@ class DriftingOverlapVisualizer:
         gpd.GeoSeries(self.current_base_polygon).plot(
             ax=self.ax2, color='blue', alpha=0.5,
         )
-        assert self.current_extended_polygons is not None
+        assert self.current_extended_polygons is not None  # nosec B101
         for i, polygon in enumerate(self.current_extended_polygons):
-            assert isinstance(polygon, Polygon)
+            assert isinstance(polygon, Polygon)  # nosec B101
             alpha = 0.3 if covered[i] else 0.1
             mpl_polygon = MplPolygon(
                 np.array(polygon.exterior.coords),
@@ -585,7 +585,7 @@ class DriftingOverlapVisualizer:
 
         try:
             canvas.draw()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         return dov
 
@@ -671,10 +671,10 @@ class DriftingOverlapVisualizer:
         try:
             last_leg = max(0, n_lines - 1)
             sidebar.selectRow(last_leg * len(self._DIRECTION_LABELS))
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         if self.current_extended_polygons is None:
             try:
                 self.simulate_initial_selection()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass

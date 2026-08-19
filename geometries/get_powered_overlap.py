@@ -149,7 +149,7 @@ def _ray_hit_distance(
         return None
     try:
         intersection = ray.intersection(obstacle_geom)
-    except Exception:
+    except Exception:  # nosec B110 B112
         return None
     coords = _get_all_coords(intersection)
     if not coords:
@@ -433,7 +433,7 @@ def _load_depth_obstacles(data: dict, proj: "SimpleProjector") -> list[dict]:
             geom = sw.loads(wkt_str)
             proj_geom = _project_wkt_geom(geom, proj)
             depth_f = float(depth_val)
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         if proj_geom.geom_type == 'MultiPolygon':
             for i, poly in enumerate(proj_geom.geoms):
@@ -456,7 +456,7 @@ def _load_object_obstacles(data: dict, proj: "SimpleProjector") -> list[dict]:
             geom = sw.loads(wkt_str)
             proj_geom = _project_wkt_geom(geom, proj)
             height_f = float(height) if height else 0.0
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         if proj_geom.geom_type == 'MultiPolygon':
             for i, poly in enumerate(proj_geom.geoms):
@@ -509,7 +509,7 @@ def _build_legs_and_obstacles(
     for seg_id, seg in data.get("segment_data", {}).items():
         try:
             legs[seg_id] = _build_leg_entry(seg_id, seg, traffic, proj)
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
     return legs, all_obstacles, depth_geoms, depth_geoms_deep, object_geoms
 
@@ -877,7 +877,7 @@ class PoweredOverlapVisualizer:
                 arrow_len * 1.05, 0, " leg direction",
                 fontsize=6, color="black", va="center",
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         ax.set_xlabel("Along-track distance from turning point (m)", fontsize=7)
         ax.set_ylabel("Lateral offset from centreline (m)", fontsize=7)
@@ -1127,7 +1127,7 @@ class PoweredOverlapVisualizer:
         first_seg = segments[list(segments.keys())[0]]
         try:
             lon0, lat0 = _parse_point(first_seg["Start_Point"])
-        except Exception:
+        except Exception:  # nosec B110 B112
             return None  # type: ignore[return-value]
         proj = SimpleProjector(lon0, lat0)
 

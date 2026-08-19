@@ -40,7 +40,7 @@ _LEGACY_KEYS = {
     "port": "omrat/db_port",
     "database": "omrat/db_name",
     "user": "omrat/db_user",
-    "password": "omrat/db_pass",  # pragma: allowlist secret - QSettings key path, not a secret
+    "password": "omrat/db_pass",  # nosec B105 -- QSettings key path, not a secret  # pragma: allowlist secret
 }
 
 

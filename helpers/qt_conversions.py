@@ -172,7 +172,7 @@ class QtCompat:
         if QtCompat.IS_QT6:
             return dialog.exec()
         else:
-            return dialog.exec_()
+            return dialog.exec()
 
     @staticmethod
     def sort_items(item_list: list, key: Any = None, reverse: bool = False) -> list:

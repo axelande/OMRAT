@@ -36,7 +36,7 @@ def _transform_anchor_to_utm(anchor_zone: Polygon, wgs84, utm_crs) -> Polygon:
     try:
         result = transform_geometry(anchor_zone, wgs84, utm_crs)
         return make_valid(result)
-    except Exception:
+    except Exception:  # nosec B110 B112
         return Polygon()
 
 
@@ -62,15 +62,15 @@ def _transform_corridor_to_wgs84(
         if not anchor_utm.is_empty:
             try:
                 anchor_wgs84 = make_valid(transform_geometry(anchor_utm, utm_crs, wgs84))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         if not deep_utm.is_empty:
             try:
                 deep_wgs84 = make_valid(transform_geometry(deep_utm, utm_crs, wgs84))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         return {'polygon': corridor_wgs84, 'anchor_polygon': anchor_wgs84, 'deep_polygon': deep_wgs84}
-    except Exception:
+    except Exception:  # nosec B110 B112
         return None
 
 
@@ -154,14 +154,14 @@ class DriftCorridorGenerator:
             f"{len(depth_obstacles)} depth obstacles (total area: {total_depth_area:.2f}), "
             f"{len(structure_obstacles)} structure obstacles (total area: {total_struct_area:.2f}), "
             f"anchor zone area: {anchor_zone.area:.2f} (threshold={anchor_threshold:.1f}m)",
-            "OMRAT", Qgis.Info
+            "OMRAT", Qgis.MessageLevel.Info
         )
 
         if depth_obstacles:
             depths = [v for p, v in depth_obstacles]
             QgsMessageLog.logMessage(
                 f"Depth obstacle values: min={min(depths)}, max={max(depths)}, threshold={depth_threshold}",
-                "OMRAT", Qgis.Info
+                "OMRAT", Qgis.MessageLevel.Info
             )
 
     def _get_legs_from_routes(self) -> list[LineString]:
@@ -177,7 +177,7 @@ class DriftCorridorGenerator:
                         shapely_geom = shapely_wkt.loads(wkt)
                         if isinstance(shapely_geom, LineString):
                             legs.append(shapely_geom)
-                    except Exception:
+                    except Exception:  # nosec B110 B112
                         pass
         return legs
 
@@ -222,7 +222,7 @@ class DriftCorridorGenerator:
                     continue
                 obstacles.extend(_expand_poly_geoms(geom, depth))
             except Exception as e:
-                QgsMessageLog.logMessage(f"Error parsing depth row {row}: {e}", "OMRAT", Qgis.Warning)
+                QgsMessageLog.logMessage(f"Error parsing depth row {row}: {e}", "OMRAT", Qgis.MessageLevel.Warning)
         return obstacles
 
     def _get_anchor_zone(self, anchor_threshold: float) -> Polygon:
@@ -251,7 +251,7 @@ class DriftCorridorGenerator:
                 geom = make_valid(geom)
                 if not geom.is_empty:
                     anchor_geoms.append(geom)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         if anchor_geoms:
             return make_valid(_unary_union(anchor_geoms))
@@ -332,7 +332,7 @@ class DriftCorridorGenerator:
                     continue
                 obstacles.extend(_expand_poly_geoms(shapely_wkt.loads(wkt_item.text()), height))
             except Exception as e:
-                QgsMessageLog.logMessage(f"Error parsing structure row {row}: {e}", "OMRAT", Qgis.Warning)
+                QgsMessageLog.logMessage(f"Error parsing structure row {row}: {e}", "OMRAT", Qgis.MessageLevel.Warning)
         return obstacles
 
     def _get_distribution_std(self) -> float:
@@ -380,7 +380,7 @@ class DriftCorridorGenerator:
             self._unpack_data(depth_threshold, height_threshold)
         )
         if not legs:
-            QgsMessageLog.logMessage("No legs found from routes", "OMRAT", Qgis.Warning)
+            QgsMessageLog.logMessage("No legs found from routes", "OMRAT", Qgis.MessageLevel.Warning)
             return []
         total_work = len(legs) * len(DIRECTIONS)
         if not self._report_progress(0, total_work, "Initializing..."):
@@ -389,7 +389,7 @@ class DriftCorridorGenerator:
         projection_dist = min(get_projection_distance(repair_params, drift_speed, target_prob), 50000)
         QgsMessageLog.logMessage(
             f"Corridor params: half_width={half_width:.1f}m, projection_dist={projection_dist:.1f}m",
-            "OMRAT", Qgis.Info,
+            "OMRAT", Qgis.MessageLevel.Info,
         )
         wgs84 = CRS("EPSG:4326")
         all_obstacles = depth_obs + struct_obs
@@ -419,7 +419,7 @@ class DriftCorridorGenerator:
         try:
             utm_crs = get_utm_crs(centroid.x, centroid.y)
             leg_utm = transform_geometry(leg, wgs84, utm_crs)
-        except Exception:
+        except Exception:  # nosec B110 B112
             return corridors, completed_work + len(DIRECTIONS)
         if not self._report_progress(completed_work, total_work,
                                      f"Transforming obstacles for leg {leg_idx + 1}/{total_legs}..."):
@@ -452,7 +452,7 @@ class DriftCorridorGenerator:
                 poly_utm = make_valid(poly_utm)
                 if not poly_utm.is_empty:
                     obstacles_utm.append((poly_utm, value))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         return obstacles_utm
 

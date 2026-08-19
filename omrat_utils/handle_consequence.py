@@ -38,7 +38,7 @@ def _qt_align_center() -> int:
     try:
         return int(Qt.AlignmentFlag.AlignCenter)
     except AttributeError:
-        return int(Qt.AlignCenter)
+        return int(Qt.AlignmentFlag.AlignCenter)
 
 
 def _qt_attr(klass, *names: str):
@@ -280,7 +280,7 @@ class Consequence:
                 QHeaderView.ResizeMode.Stretch,
             )
         except AttributeError:
-            tw.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            tw.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         for r in range(len(types)):
             for c in range(len(col_labels)):
                 spin = NoWheelDoubleSpinBox()
@@ -402,7 +402,7 @@ class Consequence:
                 QHeaderView.ResizeMode.Stretch,
             )
         except AttributeError:
-            tw.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            tw.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         for r in range(len(ACCIDENT_TYPES)):
             for c in range(len(SPILL_LEVELS)):
                 spin = NoWheelDoubleSpinBox()
@@ -527,7 +527,7 @@ class Consequence:
                 QHeaderView.ResizeMode.Stretch,
             )
         except AttributeError:
-            tw.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            tw.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         tw.verticalHeader().setVisible(False)
         for r, level in enumerate(levels):
             tw.setItem(r, 0, QTableWidgetItem(str(level.get('name', ''))))

@@ -103,7 +103,7 @@ def _offset_line_perpendicular(line: LineString, offset_m: float) -> LineString:
             shifted = max(list(shifted.geoms), key=lambda g: g.length)
         if isinstance(shifted, LineString):
             return shifted
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
     return line
 
@@ -349,7 +349,7 @@ def edge_hit_percent(corridor: Polygon, target_geom: BaseGeometry, width_m: floa
             return 0.0
         frac = max(0.0, min(1.0, overlap_len / float(width_m)))
         return frac * 100.0
-    except Exception:
+    except Exception:  # nosec B110 B112
         # Fallback to area overlap metric when boundary operations fail.
         return coverage_percent(corridor, target_geom)
 

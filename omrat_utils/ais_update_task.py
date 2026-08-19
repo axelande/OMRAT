@@ -30,7 +30,7 @@ class AisUpdateTask(QgsTask):
         var_defaults: dict[str, Any],
         leg_dirs: dict[str, list[str]],
     ) -> None:
-        super().__init__("OMRAT: Fetching AIS data", QgsTask.CanCancel)
+        super().__init__("OMRAT: Fetching AIS data", QgsTask.Flag.CanCancel)
         self.ais = ais
         self.legs = legs
         self.seg_table = seg_table
@@ -120,7 +120,7 @@ class AisUpdateTask(QgsTask):
         if not start_raw or not end_raw:
             QgsMessageLog.logMessage(
                 f"AIS fetch: skipping leg {leg_key} — missing Start_Point or End_Point",
-                "OMRAT", Qgis.Warning,
+                "OMRAT", Qgis.MessageLevel.Warning,
             )
             self.bad_legs.append(leg_key)
             return
@@ -130,7 +130,7 @@ class AisUpdateTask(QgsTask):
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f"AIS fetch: skipping leg {leg_key} — invalid geometry: {exc}",
-                "OMRAT", Qgis.Warning,
+                "OMRAT", Qgis.MessageLevel.Warning,
             )
             self.bad_legs.append(leg_key)
             return
@@ -156,7 +156,7 @@ class AisUpdateTask(QgsTask):
         try:
             self.junction_counts = ais.compute_junction_transitions(seg_table=self.seg_table)
         except Exception as exc:
-            QgsMessageLog.logMessage(f"Junction transition fetch skipped: {exc}", "OMRAT", Qgis.Warning)
+            QgsMessageLog.logMessage(f"Junction transition fetch skipped: {exc}", "OMRAT", Qgis.MessageLevel.Warning)
 
     def run(self) -> bool:
         try:
@@ -183,7 +183,7 @@ class AisUpdateTask(QgsTask):
         except Exception as exc:
             import traceback
             self.error = f"{exc}\n{traceback.format_exc()}"
-            QgsMessageLog.logMessage(f"AIS update task failed: {self.error}", "OMRAT", Qgis.Critical)
+            QgsMessageLog.logMessage(f"AIS update task failed: {self.error}", "OMRAT", Qgis.MessageLevel.Critical)
             return False
 
     # ------------------------------------------------------------------
@@ -239,7 +239,7 @@ class AisUpdateTask(QgsTask):
                 if self.junction_counts:
                     handler.apply_ais_counts(self.junction_counts)
         except Exception as exc:
-            QgsMessageLog.logMessage(f"Junction transition refresh skipped: {exc}", "OMRAT", Qgis.Warning)
+            QgsMessageLog.logMessage(f"Junction transition refresh skipped: {exc}", "OMRAT", Qgis.MessageLevel.Warning)
 
     def _prompt_remove_bad_legs(self, omrat: Any) -> None:
         """Ask the user whether to remove legs that had invalid geometry."""
@@ -254,10 +254,10 @@ class AisUpdateTask(QgsTask):
                 f"and produced no AIS data:\n{leg_list}\n\n"
                 f"Do you want to remove them from the route?"
             ),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
-        if answer != QMessageBox.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             return
         bad_set = set(self.bad_legs)
         table = omrat.main_widget.twRouteList
@@ -283,7 +283,7 @@ class AisUpdateTask(QgsTask):
                         qg.vector_layers[:] = [vl for vl in qg.vector_layers if vl is not layer]
                         from qgis.core import QgsProject
                         QgsProject.instance().removeMapLayer(layer.id())
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
                 qg.leg_dirs.pop(key, None)
             omrat.segment_data.pop(key, None)
@@ -295,7 +295,7 @@ class AisUpdateTask(QgsTask):
             omrat.run_traffic_module()
         try:
             omrat.iface.mapCanvas().refresh()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def finished(self, result: bool) -> None:

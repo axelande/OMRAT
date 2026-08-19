@@ -89,7 +89,7 @@ class DbSetupWizard(QWizard):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("OMRAT - Database setup")
-        self.setWizardStyle(QWizard.WizardStyle.ModernStyle if hasattr(QWizard, "WizardStyle") else QWizard.ModernStyle)
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.setMinimumSize(760, 760)
 
         # Shared state across pages.
@@ -1027,7 +1027,7 @@ class DonePage(QWizardPage):
 
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
-        self.summary.setTextFormat(Qt.RichText if hasattr(Qt, "RichText") else Qt.TextFormat.RichText)
+        self.summary.setTextFormat(Qt.TextFormat.RichText if hasattr(Qt, "RichText") else Qt.TextFormat.RichText)
         layout.addWidget(self.summary)
 
         self.cb_save = QCheckBox("Save these connection settings as the default profile")

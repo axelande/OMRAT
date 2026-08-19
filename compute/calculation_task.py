@@ -42,7 +42,7 @@ class CalculationTask(QgsTask):
             calc_object: The Calculation object with run_drifting_model method
             data: Dictionary of data passed to run_drifting_model
         """
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, QgsTask.Flag.CanCancel)
         self.calc = calc_object
         self.data = data
         self.exception: Optional[Exception] = None
@@ -88,7 +88,7 @@ class CalculationTask(QgsTask):
                 collision_report=getattr(self.calc, 'collision_report', None),
             )
         except Exception as exc:
-            QgsMessageLog.logMessage(f'Consequence calculation failed: {exc}', 'OMRAT', Qgis.Warning)
+            QgsMessageLog.logMessage(f'Consequence calculation failed: {exc}', 'OMRAT', Qgis.MessageLevel.Warning)
             self.calc.consequence_result = None
 
     def _run_all_phases(self) -> None:
@@ -114,7 +114,7 @@ class CalculationTask(QgsTask):
 
     def run(self) -> bool:
         """Execute the calculation in a background thread."""
-        QgsMessageLog.logMessage('Starting calculation...', 'OMRAT', Qgis.Info)
+        QgsMessageLog.logMessage('Starting calculation...', 'OMRAT', Qgis.MessageLevel.Info)
         try:
             from compute.data_preparation import apply_traffic_scaling
             apply_traffic_scaling(self.data)
@@ -122,16 +122,17 @@ class CalculationTask(QgsTask):
                 self.calc.set_progress_callback(self._make_progress_wrapper())
             self._run_all_phases()
             if self.isCanceled():
-                QgsMessageLog.logMessage('Calculation was cancelled by user', 'OMRAT', Qgis.Warning)
+                QgsMessageLog.logMessage('Calculation was cancelled by user', 'OMRAT', Qgis.MessageLevel.Warning)
                 return False
             self._update_description("Complete")
             self.setProgress(100)
-            QgsMessageLog.logMessage('All calculations completed successfully', 'OMRAT', Qgis.Success)
+            QgsMessageLog.logMessage('All calculations completed successfully', 'OMRAT', Qgis.MessageLevel.Success)
             return True
         except Exception as e:
             self.exception = e
             self.error_msg = str(e)
-            QgsMessageLog.logMessage(f'Calculation failed with error: {self.error_msg}', 'OMRAT', Qgis.Critical)
+            QgsMessageLog.logMessage(
+                f'Calculation failed with error: {self.error_msg}', 'OMRAT', Qgis.MessageLevel.Critical)
             return False
 
     def finished(self, result: bool) -> None:
@@ -149,14 +150,14 @@ class CalculationTask(QgsTask):
             QgsMessageLog.logMessage(
                 'Calculation task finished successfully',
                 'OMRAT',
-                Qgis.Success
+                Qgis.MessageLevel.Success
             )
         elif self.isCanceled():
             # Cancelled by user
             QgsMessageLog.logMessage(
                 'Calculation task was cancelled',
                 'OMRAT',
-                Qgis.Warning
+                Qgis.MessageLevel.Warning
             )
         else:
             # Failed with error
@@ -165,7 +166,7 @@ class CalculationTask(QgsTask):
             QgsMessageLog.logMessage(
                 f'Calculation task failed: {error_msg}',
                 'OMRAT',
-                Qgis.Critical
+                Qgis.MessageLevel.Critical
             )
 
     def cancel(self) -> None:
@@ -177,6 +178,6 @@ class CalculationTask(QgsTask):
         QgsMessageLog.logMessage(
             'Cancelling calculation task...',
             'OMRAT',
-            Qgis.Warning
+            Qgis.MessageLevel.Warning
         )
         super().cancel()

@@ -45,7 +45,7 @@ class DriftCorridorTask(QgsTask):
             height_threshold: Heights <= this value create shadows
             target_prob: Target probability for projection distance
         """
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, QgsTask.Flag.CanCancel)
         self.generator = generator
         self.depth_threshold = depth_threshold
         self.height_threshold = height_threshold
@@ -64,7 +64,7 @@ class DriftCorridorTask(QgsTask):
         QgsMessageLog.logMessage(
             'Starting drift corridor generation (v2)...',
             'OMRAT',
-            Qgis.Info
+            Qgis.MessageLevel.Info
         )
 
         try:
@@ -92,14 +92,14 @@ class DriftCorridorTask(QgsTask):
                 QgsMessageLog.logMessage(
                     'Drift corridor generation was cancelled by user',
                     'OMRAT',
-                    Qgis.Warning
+                    Qgis.MessageLevel.Warning
                 )
                 return False
 
             QgsMessageLog.logMessage(
                 f'Drift corridor generation completed: {len(self.corridors)} corridors',
                 'OMRAT',
-                Qgis.Success
+                Qgis.MessageLevel.Success
             )
             return True
 
@@ -109,7 +109,7 @@ class DriftCorridorTask(QgsTask):
             QgsMessageLog.logMessage(
                 f'Drift corridor generation failed: {self.error_msg}',
                 'OMRAT',
-                Qgis.Critical
+                Qgis.MessageLevel.Critical
             )
             return False
 
@@ -127,13 +127,13 @@ class DriftCorridorTask(QgsTask):
             QgsMessageLog.logMessage(
                 'Drift corridor task finished successfully',
                 'OMRAT',
-                Qgis.Success
+                Qgis.MessageLevel.Success
             )
         elif self.isCanceled():
             QgsMessageLog.logMessage(
                 'Drift corridor task was cancelled',
                 'OMRAT',
-                Qgis.Warning
+                Qgis.MessageLevel.Warning
             )
         else:
             error_msg = self.error_msg or "Unknown error"
@@ -141,7 +141,7 @@ class DriftCorridorTask(QgsTask):
             QgsMessageLog.logMessage(
                 f'Drift corridor task failed: {error_msg}',
                 'OMRAT',
-                Qgis.Critical
+                Qgis.MessageLevel.Critical
             )
 
     def cancel(self) -> None:
@@ -149,6 +149,6 @@ class DriftCorridorTask(QgsTask):
         QgsMessageLog.logMessage(
             'Cancelling drift corridor task...',
             'OMRAT',
-            Qgis.Warning
+            Qgis.MessageLevel.Warning
         )
         super().cancel()

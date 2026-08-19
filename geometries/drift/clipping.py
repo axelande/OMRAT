@@ -83,13 +83,13 @@ def clip_corridor_at_obstacles(corridor: Polygon, obstacles: list,
             if log_prefix:
                 QgsMessageLog.logMessage(
                     f"{log_prefix}Error processing obstacle: {e}",
-                    "OMRAT", Qgis.Warning
+                    "OMRAT", Qgis.MessageLevel.Warning
                 )
 
     if log_prefix:
         QgsMessageLog.logMessage(
             f"{log_prefix}Found {intersecting_count} obstacles, created {len(blocking_zones)} blocking zones",
-            "OMRAT", Qgis.Info
+            "OMRAT", Qgis.MessageLevel.Info
         )
 
     if not blocking_zones:
@@ -107,7 +107,7 @@ def clip_corridor_at_obstacles(corridor: Polygon, obstacles: list,
             reduction = (corridor.area - result.area) / corridor.area * 100
             QgsMessageLog.logMessage(
                 f"{log_prefix}Blocked {reduction:.1f}% of corridor area",
-                "OMRAT", Qgis.Info
+                "OMRAT", Qgis.MessageLevel.Info
             )
 
         return result
@@ -116,7 +116,7 @@ def clip_corridor_at_obstacles(corridor: Polygon, obstacles: list,
         if log_prefix:
             QgsMessageLog.logMessage(
                 f"{log_prefix}Error in clip_corridor_at_obstacles: {e}",
-                "OMRAT", Qgis.Warning
+                "OMRAT", Qgis.MessageLevel.Warning
             )
         return corridor
 
@@ -161,12 +161,12 @@ def split_corridor_by_anchor_zone(
 
     try:
         blue = make_valid(clipped.intersection(anchor_zone))
-    except Exception:
+    except Exception:  # nosec B110 B112
         blue = Polygon()
 
     try:
         green = make_valid(clipped.difference(anchor_zone))
-    except Exception:
+    except Exception:  # nosec B110 B112
         green = clipped
 
     # If there are no blue parts there is nothing to shadow.
@@ -194,7 +194,7 @@ def split_corridor_by_anchor_zone(
         green = make_valid(green.difference(all_shadows))
         if not green_behind_blue.is_empty:
             blue = make_valid(unary_union([blue, green_behind_blue]))
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass  # keep blue/green as-is on failure
 
     return blue, green
@@ -244,14 +244,14 @@ def keep_reachable_part(clipped: Polygon, original_corridor: Polygon,
         if log_prefix:
             QgsMessageLog.logMessage(
                 f"{log_prefix}No parts touch upwind edge, keeping largest",
-                "OMRAT", Qgis.Warning
+                "OMRAT", Qgis.MessageLevel.Warning
             )
         return max(parts, key=lambda p: p.area)
 
     if log_prefix and len(reachable_parts) < len(parts):
         QgsMessageLog.logMessage(
             f"{log_prefix}Kept {len(reachable_parts)}/{len(parts)} parts touching upwind edge",
-            "OMRAT", Qgis.Info
+            "OMRAT", Qgis.MessageLevel.Info
         )
 
     return make_valid(unary_union(reachable_parts))

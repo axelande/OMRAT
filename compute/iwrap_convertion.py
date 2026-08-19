@@ -41,7 +41,7 @@ try:
         GeometryCollection as ShpGeometryCollection,
     )
     HAVE_SHAPELY = True
-except Exception:
+except Exception:  # nosec B110 B112
     HAVE_SHAPELY = False
 
 
@@ -65,7 +65,7 @@ def parse_wkt_polygon(wkt):
             lon, lat = float(parts[0]), float(parts[1])
             coords.append((lat, lon))
         return coords
-    except Exception:
+    except Exception:  # nosec B110 B112
         return []
 
 
@@ -73,7 +73,7 @@ def parse_point_str(point_str):
     try:
         lon_str, lat_str = point_str.strip().split()
         return float(lat_str), float(lon_str)
-    except Exception:
+    except Exception:  # nosec B110 B112
         return None
 
 
@@ -274,7 +274,7 @@ def _as_float(v) -> float:
         if f != f or f in (float('inf'), float('-inf')):
             return 0.0
         return f
-    except Exception:
+    except Exception:  # nosec B110 B112
         return 0.0
 
 
@@ -408,7 +408,7 @@ def _build_objects_as_depths(objects_list: list) -> list:
         else:
             try:
                 oid, _height, poly = obj
-            except Exception:
+            except Exception:  # nosec B110 B112
                 continue
         result.append([str(oid), str(-1), str(poly)])
     return result
@@ -476,7 +476,7 @@ def _make_simple_polygons(
                 try:
                     from shapely import make_valid as _make_valid
                     geom = _make_valid(poly)
-                except Exception:
+                except Exception:  # nosec B110 B112
                     geom = poly.buffer(0)
             if isinstance(geom, ShpPolygon):
                 parts_out = [geom]
@@ -492,7 +492,7 @@ def _make_simple_polygons(
                 if p.is_valid and p.area > 0:
                     ext = list(p.exterior.coords)
                     result.append([(lat, lon) for (lon, lat) in ext])
-        except Exception:
+        except Exception:  # nosec B110 B112
             result.append(coords)
     return result
 
@@ -509,7 +509,7 @@ def _parse_area_entry(dep, idx: int) -> tuple:
     is_object_area = False
     try:
         is_object_area = float(dep_depth) == -1.0
-    except Exception:
+    except Exception:  # nosec B110 B112
         is_object_area = dep_depth.strip() == '-1'
     return dep_id, dep_depth, polygon, is_object_area
 
@@ -529,7 +529,7 @@ def _collect_coords_from_polygon(polygon) -> List[List[Tuple[float, float]]]:
             try:
                 a, b = float(pair[0]), float(pair[1])
                 coords.append((b, a))  # (lat, lon) from [lon, lat] input
-            except Exception:
+            except Exception:  # nosec B110 B112
                 continue
         return [coords] if coords else []
     return []
@@ -612,7 +612,7 @@ def parse_generic_polygon(s: str) -> list:
             lon, lat = float(nums[0]), float(nums[1])
             lat, lon = float(lat), float(lon)
             coords.append((lat, lon))
-    except Exception:
+    except Exception:  # nosec B110 B112
         return []
     return coords
 
@@ -649,7 +649,7 @@ def parse_wkt_multipolygon(s: str) -> list:
                 coords.append((lat, lon))
             if coords:
                 polygons.append(coords)
-    except Exception:
+    except Exception:  # nosec B110 B112
         return []
     return polygons
 
@@ -659,7 +659,7 @@ def parse_wkt_multipolygon(s: str) -> list:
 def _round2(v) -> str:
     try:
         return f"{float(v):.2f}"
-    except Exception:
+    except Exception:  # nosec B110 B112
         return "0"
 
 
@@ -667,7 +667,7 @@ def _sanitize_num(v) -> float:
     try:
         f = float(v.lower()) if isinstance(v, str) else float(v)
         return 0.0 if (f != f or f in (float('inf'), float('-inf'))) else f
-    except Exception:
+    except Exception:  # nosec B110 B112
         return 0.0
 
 
@@ -684,7 +684,7 @@ def _add_category_attr(categories_el: ET.Element, cat: dict):
     c_el.set('draught', _round2(cat.get('draft', cat.get('draught', 0))))
     try:
         freq_val = int(round(float(cat.get('freq', 0))))
-    except Exception:
+    except Exception:  # nosec B110 B112
         freq_val = 0
     c_el.set('freq', str(freq_val))
     c_el.set('height_1', _round2(cat.get('height', cat.get('height_1', 0))))
@@ -701,7 +701,7 @@ def _add_category_attr(categories_el: ET.Element, cat: dict):
             smin, smax = cat.get('speed_min'), cat.get('speed_max')
             try:
                 speed = (float(smin) + float(smax)) / 2.0 if smin is not None and smax is not None else 0
-            except Exception:
+            except Exception:  # nosec B110 B112
                 speed = 0
     c_el.set('speed', _round2(speed))
     c_el.set('width', _round2(cat.get('beam', cat.get('width', 0))))
@@ -1199,7 +1199,7 @@ def _haversine_m(start_point: str, end_point: str) -> float:
             lon1, lat1, lon2, lat2 = map(radians, [float(sp[0]), float(sp[1]), float(ep[0]), float(ep[1])])
             a = sin((lat2 - lat1) / 2)**2 + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2)**2
             return 2 * asin(sqrt(a)) * 6371000
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
     return 0.0
 

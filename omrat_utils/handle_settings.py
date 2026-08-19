@@ -156,7 +156,7 @@ class DriftSettings:
             txt = item.text().strip() if item is not None else ""
             try:
                 val = float(txt) if txt else 1.0
-            except Exception:
+            except Exception:  # nosec B110 B112
                 val = 1.0
             out[int(idx)] = max(0.0, val)
         return out
@@ -271,7 +271,7 @@ class DriftSettings:
             for k, v in stored_raw.items():
                 try:
                     stored[int(k)] = float(v)
-                except Exception:
+                except Exception:  # nosec B110 B112
                     continue
             defaults = default_blackout_by_ship_type()
             for row, idx in enumerate(sorted(SHIP_TYPE_NAMES)):

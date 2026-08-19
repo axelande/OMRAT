@@ -56,7 +56,7 @@ class DriftingReportMixin:
             total_base_hours += float(rec.get('base_hours', 0.0))
             try:
                 angle = key.split(':')[-1]
-            except Exception:
+            except Exception:  # nosec B110 B112
                 angle = '0'
             da = dir_agg.setdefault(angle, {
                 'allision': 0.0,
@@ -107,7 +107,7 @@ class DriftingReportMixin:
                     return int(str(seg)), '', int(str(ang))
                 else:
                     return 0, '', 0
-            except Exception:
+            except Exception:  # nosec B110 B112
                 return (0, '', 0)
         leg_rows_sorted = sorted(leg_rows, key=lambda r: _parse_key(r[0]))
 
@@ -183,7 +183,7 @@ class DriftingReportMixin:
                                 lon = float(parts[0])
                                 lat = float(parts[1])
                                 return f"({lon:.6f}, {lat:.6f})"
-                        except Exception:
+                        except Exception:  # nosec B110 B112
                             pass
                         return pt
                     start_txt = _fmt_point(sp)
@@ -215,7 +215,7 @@ class DriftingReportMixin:
                         md_lines.append(f"- Dir {label}: {comp_txt}")
                     md_lines.append("")
                 md_lines.append("")
-        except Exception:
+        except Exception:  # nosec B110 B112
             # Do not block report generation if segment details are malformed
             pass
 
@@ -275,7 +275,7 @@ class DriftingReportMixin:
                 if isinstance(sc, dict):
                     type_labels = list(sc.get('types', []) or [])
                     size_labels = [str(x.get('label', '')) for x in (sc.get('length_intervals', []) or [])]
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         # Emit by walking leg-direction keys to include granularity
         for legdir_key in sorted(bld.keys(), key=lambda x: _parse_key(x)):
@@ -291,7 +291,7 @@ class DriftingReportMixin:
                     tname = type_labels[ti] if 0 <= ti < len(type_labels) else s_type
                     sname = size_labels[si] if 0 <= si < len(size_labels) else s_size
                     disp = f"{tname} - {sname}"
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
                 md_lines.append(
                     f"| {legdir_key} | {disp} | {float(vals.get('freq', 0.0)):.0f}"
@@ -309,7 +309,7 @@ class DriftingReportMixin:
         for key, rec in bld.items():
             try:
                 leg = key.split(':')[0]
-            except Exception:
+            except Exception:  # nosec B110 B112
                 leg = key
             agg = leg_sums.setdefault(leg, {'allision': 0.0, 'grounding': 0.0})
             agg['allision'] += float(rec.get('contrib_allision', 0.0))

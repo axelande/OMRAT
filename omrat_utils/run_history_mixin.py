@@ -109,7 +109,7 @@ class RunHistoryMixin:
         gpkg_path = Path(out_dir) / filename
 
         QgsMessageLog.logMessage(
-            f"Writing per-run results to {gpkg_path}", 'OMRAT', Qgis.Info,
+            f"Writing per-run results to {gpkg_path}", 'OMRAT', Qgis.MessageLevel.Info,
         )
         try:
             written_layers = write_run_results(
@@ -125,7 +125,7 @@ class RunHistoryMixin:
             import traceback
             QgsMessageLog.logMessage(
                 f"GeoPackage write failed: {exc}\n{traceback.format_exc()}",
-                'OMRAT', Qgis.Critical,
+                'OMRAT', Qgis.MessageLevel.Critical,
             )
             written_layers = []
 
@@ -164,7 +164,7 @@ class RunHistoryMixin:
     def _auto_save_run_name(self) -> str:
         try:
             name = self.main_widget.LEModelName.text().strip()
-        except Exception:
+        except Exception:  # nosec B110 B112
             name = ''
         if not name:
             name = time.strftime('run_%Y%m%d_%H%M%S')
@@ -175,7 +175,7 @@ class RunHistoryMixin:
             start = getattr(self, '_run_started_at', None)
             if start is not None:
                 return float(time.monotonic() - start)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         return None
 
@@ -194,7 +194,7 @@ class RunHistoryMixin:
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f"Failed to write input snapshot '{omrat_path}': {exc}",
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
             return None
 
@@ -214,7 +214,7 @@ class RunHistoryMixin:
             import traceback
             QgsMessageLog.logMessage(
                 f"Markdown report write failed: {exc}\n{traceback.format_exc()}",
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
             return None
 
@@ -230,7 +230,7 @@ class RunHistoryMixin:
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f"Collision-report sidecar write failed: {exc}",
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
 
     def _safe_write_drifting_sidecar(
@@ -245,7 +245,7 @@ class RunHistoryMixin:
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f"Drifting-report sidecar write failed: {exc}",
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
 
     @staticmethod
@@ -265,7 +265,7 @@ class RunHistoryMixin:
             f"Run '{name}' saved (run_id={run_id}, "
             f"layers={len(written_layers)}, "
             f"{dur_text}{snap_text}{md_text}).  GeoPackage: {gpkg_path}",
-            'OMRAT', Qgis.Success,
+            'OMRAT', Qgis.MessageLevel.Success,
         )
 
     # ------------------------------------------------------------------
@@ -294,7 +294,7 @@ class RunHistoryMixin:
                 drifting_md = calc_object.generate_drifting_report_markdown(
                     snapshot,
                 )
-        except Exception:
+        except Exception:  # nosec B110 B112
             drifting_md = None
 
         powered_grounding_report = getattr(
@@ -382,7 +382,7 @@ class RunHistoryMixin:
             path.chmod(
                 mode & ~_stat.S_IWUSR & ~_stat.S_IWGRP & ~_stat.S_IWOTH,
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     # ------------------------------------------------------------------
@@ -392,7 +392,7 @@ class RunHistoryMixin:
         """Resolved + validated output folder, or ``None`` if not set."""
         try:
             text = (self.main_widget.LEReportPath.text() or '').strip()
-        except Exception:
+        except Exception:  # nosec B110 B112
             text = ''
         if not text:
             return None
@@ -406,7 +406,7 @@ class RunHistoryMixin:
         initial = ''
         try:
             initial = (self.main_widget.LEReportPath.text() or '').strip()
-        except Exception:
+        except Exception:  # nosec B110 B112
             initial = ''
         if not initial:
             initial = str(Path.home())
@@ -419,7 +419,7 @@ class RunHistoryMixin:
             self.main_widget.LEReportPath.setText(chosen)
             try:
                 QSettings().setValue('omrat/output_dir', chosen)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             self._update_run_model_enabled()
 
@@ -429,18 +429,18 @@ class RunHistoryMixin:
             value = QSettings().value('omrat/output_dir', '', type=str)
             if value:
                 self.main_widget.LEReportPath.setText(value)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _update_run_model_enabled(self) -> None:
         """Run Model button is gated on a writable output folder + name."""
         try:
             btn = self.main_widget.pbRunModel
-        except Exception:
+        except Exception:  # nosec B110 B112
             return
         try:
             run_name = (self.main_widget.LEModelName.text() or '').strip()
-        except Exception:
+        except Exception:  # nosec B110 B112
             run_name = ''
         has_dir = self._get_output_dir() is not None
         enabled = has_dir and bool(run_name)
@@ -456,7 +456,7 @@ class RunHistoryMixin:
                 btn.setToolTip('Pick an output folder first')
             else:
                 btn.setToolTip('Set a model name first')
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     # ------------------------------------------------------------------
@@ -517,14 +517,14 @@ class RunHistoryMixin:
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f'Could not add "Add to map" button: {exc}',
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
 
     def _select_latest_previous_run(self) -> None:
         """Select row 0 (most recent) so View buttons default to it."""
         try:
             tw = self.main_widget.TWPreviousRuns
-        except Exception:
+        except Exception:  # nosec B110 B112
             return
         if tw.rowCount() == 0:
             return
@@ -532,7 +532,7 @@ class RunHistoryMixin:
             tw.clearSelection()
             tw.selectRow(0)
             tw.setCurrentCell(0, 0)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def refresh_previous_runs_table(self) -> None:
@@ -547,7 +547,7 @@ class RunHistoryMixin:
             runs = RunHistory().list_runs()
         except Exception as exc:
             QgsMessageLog.logMessage(
-                f'Could not read run history: {exc}', 'OMRAT', Qgis.Warning,
+                f'Could not read run history: {exc}', 'OMRAT', Qgis.MessageLevel.Warning,
             )
             tw.setRowCount(0)
             return
@@ -591,7 +591,7 @@ class RunHistoryMixin:
         run_ids = self._selected_run_ids()
         try:
             self._pb_add_run_to_map.setEnabled(len(run_ids) == 1)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         if not run_ids:
             self._reset_accident_table_to_base()
@@ -601,7 +601,7 @@ class RunHistoryMixin:
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f'Could not load previous-run details: {exc}',
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
             self._reset_accident_table_to_base()
             return
@@ -626,7 +626,7 @@ class RunHistoryMixin:
         if not baseline_is_current and runs:
             try:
                 first_totals = runs[0].totals_dict()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 first_totals = {}
             current_baseline = [
                 first_totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS
@@ -640,11 +640,11 @@ class RunHistoryMixin:
         for run_idx, run in enumerate(runs):
             try:
                 totals = run.totals_dict()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 totals = {}
             try:
                 run_label = run.name
-            except Exception:
+            except Exception:  # nosec B110 B112
                 run_label = f'Run {run_idx + 1}'
 
             tw.insertColumn(view_col)
@@ -678,7 +678,7 @@ class RunHistoryMixin:
                 item = tw.item(row, 1)
                 if item is not None:
                     txt = item.text()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 txt = ''
             try:
                 baseline.append(float(txt))
@@ -748,7 +748,7 @@ class RunHistoryMixin:
             QgsMessageLog.logMessage(
                 f'Failed to load run on map: {exc}\n'
                 f'{traceback.format_exc()}',
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
             return
         for layer in new_layers:
@@ -776,7 +776,7 @@ class RunHistoryMixin:
             except Exception as exc:
                 QgsMessageLog.logMessage(
                     f'Failed to delete run {run_id}: {exc}',
-                    'OMRAT', Qgis.Warning,
+                    'OMRAT', Qgis.MessageLevel.Warning,
                 )
         self.refresh_previous_runs_table()
 
@@ -786,6 +786,6 @@ class RunHistoryMixin:
             self.main_widget.tabWidget.setCurrentWidget(
                 self.main_widget.tab_9,
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         self.refresh_previous_runs_table()

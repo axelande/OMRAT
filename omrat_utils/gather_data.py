@@ -122,7 +122,7 @@ class GatherData:
             return {}
         try:
             return handler.to_dict()
-        except Exception:
+        except Exception:  # nosec B110 B112
             return {}
 
     def get_consequence_for_save(self) -> dict[str, Any]:
@@ -225,11 +225,11 @@ class GatherData:
                         continue
                     try:
                         vmin = float(smin)
-                    except Exception:
+                    except Exception:  # nosec B110 B112
                         vmin = smin
                     try:
                         vmax = float(smax)
-                    except Exception:
+                    except Exception:  # nosec B110 B112
                         vmax = smax
                     label = f"{smin} - {smax}".strip()
                     intervals.append({'min': vmin, 'max': vmax, 'label': label})
@@ -243,11 +243,11 @@ class GatherData:
                         mode = 'simple_ais'
                     elif scw.radioButton_2.isChecked():
                         mode = 'manual'
-                except Exception:
+                except Exception:  # nosec B110 B112
                     mode = None
             if mode is not None:
                 result['selection_mode'] = mode
-        except Exception:
+        except Exception:  # nosec B110 B112
             # If widget not available, leave defaults (empty) to avoid breaking save
             pass
         return result
@@ -286,7 +286,7 @@ class GatherData:
             # Assume it's already a sequence like [id, depth, polygon]
             try:
                 rows.append([str(item[0]), str(item[1]), str(item[2])])
-            except Exception:
+            except Exception:  # nosec B110 B112
                 rows.append([str(item), '', ''])
         return rows
 
@@ -302,7 +302,7 @@ class GatherData:
         for item in objects:
             try:
                 rows.append([str(item[0]), str(item[1]), str(item[2])])
-            except Exception:
+            except Exception:  # nosec B110 B112
                 rows.append([str(item), '', ''])
         return rows
 

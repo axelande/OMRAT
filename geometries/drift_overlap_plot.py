@@ -59,7 +59,7 @@ def _distribution_x_max(
         try:
             mean_v = float(dist.mean())
             std_v = float(dist.std())
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         if not (np.isfinite(mean_v) and np.isfinite(std_v)):
             continue
@@ -84,7 +84,7 @@ def _combined_pdf(
     for dist, weight in zip(distributions, weights):
         try:
             pdf = pdf + float(weight) * np.asarray(dist.pdf(x))
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
     return pdf
 
@@ -110,7 +110,7 @@ def _clear_existing_insets(fig) -> None:
         if getattr(art, '_omrat_inset', False):
             try:
                 art.remove()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
 
@@ -199,7 +199,7 @@ def _draw_zoom_inset(
                 data['drift']['speed'],
                 span_lo,
             ))
-        except Exception:
+        except Exception:  # nosec B110 B112
             fail_at_span_lo = 1.0
         pdf_peak_zoom = float(pdf_zoom.max()) if pdf_zoom.size else 0.0
         y_top = max(fail_at_span_lo, pdf_peak_zoom) * 1.1

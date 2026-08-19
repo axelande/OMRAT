@@ -53,19 +53,19 @@ class _ViewProgress:
 
     def __enter__(self):
         try:
-            QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+            QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
             self._cursor_set = True
             self._dlg = QProgressDialog(
                 f"Building {self._label} visualization...",
                 None, 0, 0, self._parent,
             )
             self._dlg.setWindowTitle("OMRAT")
-            self._dlg.setWindowModality(Qt.WindowModal)
+            self._dlg.setWindowModality(Qt.WindowModality.WindowModal)
             self._dlg.setMinimumDuration(0)
             self._dlg.setCancelButton(None)
             self._dlg.show()
             QApplication.processEvents()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         return self
 
@@ -195,7 +195,7 @@ class AccidentResultsMixin:
             tw.horizontalHeader().setSectionResizeMode(0, mode_stretch)
             tw.horizontalHeader().setSectionResizeMode(1, mode_resize)
             tw.horizontalHeader().setSectionResizeMode(2, mode_resize)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         self._wire_clipboard_copy_shortcut(tw)
 
@@ -241,7 +241,7 @@ class AccidentResultsMixin:
                 name = str(lvl.get('name', ''))
                 qty = float(lvl.get('quantity', 0.0))
                 exceed = float(lvl.get('exceedance', 0.0))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 continue
             tw.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
             tw.setItem(r, 1, QtWidgets.QTableWidgetItem(f'{qty:.2f}'))
@@ -300,7 +300,7 @@ class AccidentResultsMixin:
             tw.horizontalHeader().setSectionResizeMode(0, mode_stretch)
             tw.horizontalHeader().setSectionResizeMode(1, mode_resize)
             tw.horizontalHeader().setSectionResizeMode(2, mode_resize)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _populate_accident_rows(self, tw) -> None:
@@ -326,7 +326,7 @@ class AccidentResultsMixin:
                     le.textChanged.connect(
                         lambda txt, r=row: self._on_lep_text_changed(r, txt),
                     )
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
 
     def _wire_clipboard_copy_shortcut(self, tw) -> None:
@@ -340,7 +340,7 @@ class AccidentResultsMixin:
                 sc.activated.connect(
                     lambda t=tw: self._copy_table_selection_to_clipboard(t),
                 )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     @staticmethod
@@ -355,7 +355,7 @@ class AccidentResultsMixin:
         """
         try:
             from qgis.PyQt.QtWidgets import QApplication
-        except Exception:
+        except Exception:  # nosec B110 B112
             return
         ranges = tw.selectedRanges()
         if not ranges:
@@ -388,7 +388,7 @@ class AccidentResultsMixin:
             from qgis.PyQt.QtWidgets import QTableWidgetItem
             tw = self.main_widget.TWAccidentResults
             tw.setItem(row, 1, QTableWidgetItem(text))
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     # ------------------------------------------------------------------
@@ -402,7 +402,7 @@ class AccidentResultsMixin:
         """
         try:
             run_ids = self._selected_run_ids()
-        except Exception:
+        except Exception:  # nosec B110 B112
             run_ids = []
         if len(run_ids) == 0:
             QMessageBox.information(
@@ -446,7 +446,7 @@ class AccidentResultsMixin:
             gpkg_path = (
                 run.gpkg_path() if hasattr(run, 'gpkg_path') else None
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             gpkg_path = None
         if gpkg_path is None:
             return data, collision_report, drifting_report
@@ -464,7 +464,7 @@ class AccidentResultsMixin:
             except Exception as exc:
                 QgsMessageLog.logMessage(
                     f"Could not read {path}: {exc}",
-                    'OMRAT', Qgis.Warning,
+                    'OMRAT', Qgis.MessageLevel.Warning,
                 )
                 continue
             if target == 'data':

@@ -181,7 +181,7 @@ class CompareMixin:
         else:
             QgsMessageLog.logMessage(
                 f"Compare layers added ({loaded_total} total):\n{msg_body}",
-                'OMRAT', Qgis.Success,
+                'OMRAT', Qgis.MessageLevel.Success,
             )
 
     @staticmethod
@@ -200,7 +200,7 @@ class CompareMixin:
                 QgsMarkerSymbol,
                 QgsSingleSymbolRenderer,
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             return
         try:
             geom_type = layer.geometryType()
@@ -221,5 +221,5 @@ class CompareMixin:
                 )
             layer.setRenderer(QgsSingleSymbolRenderer(sym))
             layer.triggerRepaint()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass

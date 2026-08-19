@@ -41,7 +41,7 @@ def _prepare_viz_dialog(dialog) -> None:
         dialog.resize(*_VIZ_DIALOG_DEFAULT_SIZE)
         dialog.setMinimumSize(*_VIZ_DIALOG_MIN_SIZE)
         dialog.setSizeGripEnabled(True)
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
 
 
@@ -69,7 +69,7 @@ class VisualizationMixin:
                     fixed = shp_make_valid(obj)
                 else:
                     fixed = obj.buffer(0)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 fixed = obj
             if fixed is not None:
                 fixed_objects.append(fixed)
@@ -164,7 +164,7 @@ class VisualizationMixin:
                 _did, val, wkt = entry
                 if float(val) <= max_draft:
                     hazards.append(sw.loads(wkt))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 continue
         if not hazards:
             return
@@ -178,7 +178,7 @@ class VisualizationMixin:
                     fixed = shp_make_valid(obj)
                 else:
                     fixed = obj.buffer(0)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 fixed = obj
             if fixed is not None:
                 fixed_objects.append(fixed)
@@ -290,12 +290,12 @@ class VisualizationMixin:
             tw.horizontalHeader().setSectionResizeMode(
                 0, QHeaderView.ResizeMode.Stretch,
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             try:
                 tw.horizontalHeader().setSectionResizeMode(
-                    0, QHeaderView.Stretch,
+                    0, QHeaderView.ResizeMode.Stretch,
                 )
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         layout.addWidget(tw)
         dialog.resize(560, 540)

@@ -81,7 +81,7 @@ def _enable_fid_labels(layer: QgsVectorLayer, field_name: str) -> None:
             QgsVectorLayerSimpleLabeling,
         )
         from qgis.PyQt.QtGui import QColor as _QColor
-    except Exception:
+    except Exception:  # nosec B110 B112
         return
 
     settings = QgsPalLayerSettings()
@@ -100,7 +100,7 @@ def _enable_fid_labels(layer: QgsVectorLayer, field_name: str) -> None:
         buffer.setSize(0.6)
         buffer.setColor(_QColor('white'))
         fmt.setBuffer(buffer)
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
     settings.setFormat(fmt)
 
@@ -112,7 +112,7 @@ def _enable_fid_labels(layer: QgsVectorLayer, field_name: str) -> None:
             settings.placement = QgsPalLayerSettings.Placement.Line
         else:
             settings.placement = QgsPalLayerSettings.Placement.OverPoint
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
 
     layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
@@ -672,7 +672,7 @@ def apply_graduated_symbology(
     values = [f[attribute] for f in layer.getFeatures() if f[attribute] is not None and f[attribute] > 0]
     if not values:
         renderer = QgsGraduatedSymbolRenderer(attribute, [not_hit_range])
-        renderer.setMode(QgsGraduatedSymbolRenderer.Custom)
+        renderer.setMode(QgsGraduatedSymbolRenderer.Mode.Custom)
         layer.setRenderer(renderer)
         layer.triggerRepaint()
         return
@@ -685,7 +685,7 @@ def apply_graduated_symbology(
         return
     ranges = [not_hit_range] + _make_graduated_ranges(min_val, max_val, num_classes)
     renderer = QgsGraduatedSymbolRenderer(attribute, ranges)
-    renderer.setMode(QgsGraduatedSymbolRenderer.Custom)
+    renderer.setMode(QgsGraduatedSymbolRenderer.Mode.Custom)
     layer.setRenderer(renderer)
     layer.triggerRepaint()
 
@@ -805,7 +805,7 @@ def _apply_graduated(
             lower, upper, symbol, f"{lower:.2e} - {upper:.2e}",
         ))
     renderer = QgsGraduatedSymbolRenderer(attribute, ranges)
-    renderer.setMode(QgsGraduatedSymbolRenderer.Custom)
+    renderer.setMode(QgsGraduatedSymbolRenderer.Mode.Custom)
     layer.setRenderer(renderer)
     layer.triggerRepaint()
 
@@ -888,7 +888,7 @@ def _build_collision_point_layer(by_waypoint: dict) -> QgsVectorLayer:
         try:
             lon_str, lat_str = wp_key.split()
             lon, lat = float(lon_str), float(lat_str)
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         crossing = float(rec.get('crossing', 0.0) or 0.0)
         bend = float(rec.get('bend', 0.0) or 0.0)
@@ -1063,7 +1063,7 @@ def _build_powered_layer_per_obstacle_segments(
         try:
             geom_str = geom_raw.wkt if hasattr(geom_raw, 'wkt') else str(geom_raw)
             shapely_geom = shapely_wkt.loads(geom_str)
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         segments = _extract_line_segments_with_normals(shapely_geom)
         if not segments:

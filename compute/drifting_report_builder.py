@@ -68,7 +68,7 @@ class DriftingReportBuilderMixin:
                 okey, {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0},
             )
             ob[event] = ob.get(event, 0.0) + contrib
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _accumulate_leg_dir_stats(
@@ -137,7 +137,7 @@ class DriftingReportBuilderMixin:
                     report, 'by_structure_segment_legdir', skey, leg_dir_key,
                     contrib, s['wkt'], drift_corridor, math_drift_angle, leg,
                 )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _accumulate_depth_legdir(
@@ -165,7 +165,7 @@ class DriftingReportBuilderMixin:
                     report, 'by_depth_segment_legdir', dkey, leg_dir_key,
                     contrib, d['wkt'], drift_corridor, math_drift_angle, leg,
                 )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _update_report(self,
@@ -220,13 +220,13 @@ class DriftingReportBuilderMixin:
             inter_len = 0.0
             try:
                 inter_len = float(seg_line.intersection(drift_corridor).length)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             dist_to_leg = None
             if leg is not None:
                 try:
                     dist_to_leg = float(seg_line.distance(leg))
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
             runtime_map = report.setdefault('runtime_segment_hits', {}).setdefault(obstacle_key, {})
             seg_meta = runtime_map.setdefault(seg_key, {
@@ -237,7 +237,7 @@ class DriftingReportBuilderMixin:
                 if conv is not None:
                     try:
                         seg_meta['segment_wkt_wgs84'] = conv(seg_line).wkt
-                    except Exception:
+                    except Exception:  # nosec B110 B112
                         pass
             hit = seg_meta['hits'].setdefault(leg_dir_key, {
                 'count': 0, 'max_intersection_len_m': 0.0, 'min_distance_to_leg_m': None, 'contrib_sum': 0.0,
@@ -250,7 +250,7 @@ class DriftingReportBuilderMixin:
                 cur = hit.get('min_distance_to_leg_m')
                 if cur is None or dist_to_leg < float(cur):
                     hit['min_distance_to_leg_m'] = dist_to_leg
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _update_segment_contributions(
@@ -299,7 +299,7 @@ class DriftingReportBuilderMixin:
                         seg_intersection_len[seg_idx] = float(
                             LineString([segment[0], segment[1]]).intersection(drift_corridor).length
                         )
-                    except Exception:
+                    except Exception:  # nosec B110 B112
                         seg_intersection_len[seg_idx] = 0.0
             if not intersecting_indices:
                 return
@@ -317,7 +317,7 @@ class DriftingReportBuilderMixin:
                 self._record_seg_debug_meta(
                     report, obstacle_key, seg_key, leg_dir_key, contrib_seg, seg_line, drift_corridor, leg,
                 )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _update_anchoring_report(
@@ -375,5 +375,5 @@ class DriftingReportBuilderMixin:
                         dkey, leg_dir_key, anchor_contrib, obs_geom, drift_corridor,
                         math_drift_angle, leg
                     )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass

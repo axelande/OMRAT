@@ -99,7 +99,7 @@ class IwrapIOMixin:
             try:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
     # ------------------------------------------------------------------

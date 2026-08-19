@@ -51,12 +51,12 @@ def _match_run_history(snapshot_path: Path) -> dict[str, Any] | None:
     """
     try:
         from .run_history import RunHistory
-    except Exception:
+    except Exception:  # nosec B110 B112
         return None
     try:
         history = RunHistory()
         runs = history.list_runs()
-    except Exception:
+    except Exception:  # nosec B110 B112
         return None
     target_gpkg = snapshot_path.stem + ".gpkg"
     for r in runs:
@@ -64,7 +64,7 @@ def _match_run_history(snapshot_path: Path) -> dict[str, Any] | None:
         try:
             if getattr(r, "output_filename", "") == target_gpkg:
                 return r.__dict__ if hasattr(r, "__dict__") else dict(r)
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
     return None
 

@@ -97,7 +97,7 @@ class HandleQGISIface:
         canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
         if canvas is None:
             return
-        rb = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+        rb = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
         rb.setColor(QColor(80, 80, 80, 180))
         rb.setWidth(1)
         rb.setLineStyle(getattr(Qt, 'DashLine', None) or Qt.PenStyle.DashLine)
@@ -109,7 +109,7 @@ class HandleQGISIface:
             return
         canvas = self.omrat.iface.mapCanvas()
         start = self._to_canvas_crs(self.current_start_point, canvas)
-        self._rubber_band.reset(QgsWkbTypes.LineGeometry)
+        self._rubber_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
         self._rubber_band.addPoint(start, False)
         self._rubber_band.addPoint(point, True)
 
@@ -122,18 +122,18 @@ class HandleQGISIface:
         try:
             tr = QgsCoordinateTransform(src_crs, canvas_crs, QgsProject.instance())
             return tr.transform(pt_4326)
-        except Exception:
+        except Exception:  # nosec B110 B112
             return pt_4326
 
     def _clear_rubber_band(self) -> None:
         """Remove the rubber-band line from the canvas."""
         if self._rubber_band is not None:
             try:
-                self._rubber_band.reset(QgsWkbTypes.LineGeometry)
+                self._rubber_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
                 canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
                 if canvas is not None:
                     canvas.scene().removeItem(self._rubber_band)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             self._rubber_band = None
 
@@ -347,7 +347,7 @@ class HandleQGISIface:
         for obj in self.buffer_edits:
             try:
                 obj.geometryChanged.disconnect()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.buffer_edits = []
 
@@ -361,7 +361,7 @@ class HandleQGISIface:
                     except TypeError:
                         pass
                 QgsProject.instance().removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.vector_layers = []
 
@@ -369,7 +369,7 @@ class HandleQGISIface:
         if self.tangent_layer is not None:
             try:
                 QgsProject.instance().removeMapLayer(self.tangent_layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             self.tangent_layer = None
 
@@ -396,7 +396,7 @@ class HandleQGISIface:
                 for feat in layer.getFeatures():
                     if feat["segmentId"] == seg_id:
                         return layer
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         return None
 
@@ -431,7 +431,7 @@ class HandleQGISIface:
                 self.vector_layers.remove(layer_to_remove)
                 try:
                     QgsProject.instance().removeMapLayer(layer_to_remove.id())
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
 
             # Remove tangent lines for this segment.
@@ -543,7 +543,7 @@ class HandleQGISIface:
         if orphan_layer is not None:
             try:
                 QgsProject.instance().removeMapLayer(orphan_layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
         self.reload_legs_from_segment_data()
@@ -557,7 +557,7 @@ class HandleQGISIface:
         if traffic is not None and hasattr(traffic, 'fill_cbTrafficSelectSeg'):
             try:
                 traffic.fill_cbTrafficSelectSeg()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
         # Rebuild junction registry so new crossing node gets a matrix.
@@ -591,7 +591,7 @@ class HandleQGISIface:
         for obj in list(self.buffer_edits):
             try:
                 obj.geometryChanged.disconnect()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.buffer_edits = []
         # Remove the existing leg layers from the QGIS project.
@@ -604,7 +604,7 @@ class HandleQGISIface:
                     except TypeError:
                         pass
                 QgsProject.instance().removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.vector_layers = []
         # Tear down the tangent layer too -- ``ensure_tangent_layer``
@@ -612,7 +612,7 @@ class HandleQGISIface:
         if self.tangent_layer is not None:
             try:
                 QgsProject.instance().removeMapLayer(self.tangent_layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             self.tangent_layer = None
 
@@ -683,7 +683,7 @@ class HandleQGISIface:
                     width / 2,
                     fid,
                 )
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
         # Bump the leg-id counter past the highest current id so future
@@ -704,7 +704,7 @@ class HandleQGISIface:
         """Handle geometry changes for a feature."""
         # Get the segment ID from the feature's attributes
         polyline: list[QgsGeometry] = geom.asPolyline()
-        assert isinstance(polyline, list)
+        assert isinstance(polyline, list)  # nosec B101
         start_point_: QgsGeometry = polyline[0]
         end_point_: QgsGeometry = polyline[-1]
         if isinstance(start_point_, QgsPointXY) and isinstance(end_point_, QgsPointXY):
@@ -720,10 +720,10 @@ class HandleQGISIface:
         else:
             raise TypeError("Unknown data point")
 
-        assert isinstance(start_point, QgsPoint)
-        assert isinstance(end_point, QgsPoint)
+        assert isinstance(start_point, QgsPoint)  # nosec B101
+        assert isinstance(end_point, QgsPoint)  # nosec B101
         # Update the start and end points in the table
-        assert (self.omrat.main_widget is not None)
+        assert (self.omrat.main_widget is not None)  # nosec B101
 
         # Capture the OLD endpoints of this leg before we overwrite them
         # so the shared-vertex propagation (below) can match siblings.
@@ -798,7 +798,7 @@ class HandleQGISIface:
         """Label the layer with the 'label' field."""
         settings = QgsPalLayerSettings()
         settings.fieldName = "label"  # Use the 'label' field for labeling
-        settings.placement = QgsPalLayerSettings.Line
+        settings.placement = QgsPalLayerSettings.Placement.Line
         settings.enabled = True
 
         labeling = QgsVectorLayerSimpleLabeling(settings)
@@ -818,7 +818,7 @@ class HandleQGISIface:
             layer.setRenderer(renderer)
 
         symbol = renderer.symbol()
-        assert (isinstance(symbol, QgsLineSymbol))
+        assert (isinstance(symbol, QgsLineSymbol))  # nosec B101
         symbol.setWidth(1.5)  # Set line thickness
         symbol.setColor(QColor("blue"))  # Optional: Set line color
 
@@ -827,7 +827,7 @@ class HandleQGISIface:
 
     def save_route(self, point1: QgsPoint, point2: QgsPoint):
         """Save route information to the twRouteList table."""
-        assert (self.omrat.main_widget is not None)
+        assert (self.omrat.main_widget is not None)  # nosec B101
         row_id = self.omrat.main_widget.twRouteList.rowCount()
         self.omrat.main_widget.twRouteList.setRowCount(row_id + 1)
 
@@ -867,7 +867,7 @@ class HandleQGISIface:
 
     def update_segment_data(self, point: QgsPoint) -> None:
         main_widget = self.omrat.main_widget
-        assert (self.current_start_point is not None)
+        assert (self.current_start_point is not None)  # nosec B101
         pointXY = QgsPointXY(point.x(), point.y())
         degrees: float = (self.current_start_point.azimuth(pointXY) + 360) % 360
         if degrees > 315 or degrees <= 45:
@@ -1059,7 +1059,7 @@ class HandleQGISIface:
     def point4326_from_wkt(self, wkt: str) -> QgsPoint:
         """Converts a WKT string to a QgsGeometry in EPSG:4326."""
         q_point_base: QgsGeometry = QgsGeometry.fromWkt(wkt)
-        assert isinstance(q_point_base, QgsGeometry)
+        assert isinstance(q_point_base, QgsGeometry)  # nosec B101
         pointXY = q_point_base.asPoint()
         q_point = QgsPoint(pointXY.x(), pointXY.y())
         crs = self.omrat.iface.mapCanvas().mapSettings().destinationCrs().authid()
@@ -1202,7 +1202,7 @@ class HandleQGISIface:
             try:
                 widget.twRouteList.item(row, 3).setText(seg['Start_Point'])
                 widget.twRouteList.item(row, 4).setText(seg['End_Point'])
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
             try:
@@ -1213,7 +1213,7 @@ class HandleQGISIface:
                 self.create_offset_lines(
                     new_start_xy, new_end_xy, width / 2 if width else 0.0, fid,
                 )
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
     def on_geometry_changed_wrapper(self, segment_id: int, fid: int, geom: QgsGeometry):

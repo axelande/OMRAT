@@ -29,7 +29,7 @@ def _extract_positive(array, row_i: int, col_j: int, default: float) -> float:
                 return float(val)
             if isinstance(val, str) and val != '':
                 return float(val)
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
     return default
 
@@ -41,7 +41,7 @@ def _extract_nonneg(array, row_i: int, col_j: int, default: float) -> float:
             val = array[row_i][col_j]
             if isinstance(val, (int, float)):
                 return float(val)
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
     return default
 
@@ -63,7 +63,7 @@ class PoweredModelMixin:
         }
         try:
             self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         return total
 
@@ -116,7 +116,7 @@ class PoweredModelMixin:
                 legs, all_obs, _, _, _ = _build_legs_and_obstacles(
                     data, proj, mode="grounding", max_draft=max_draft)
                 bin_results[bin_key] = _run_all_computations(legs, all_obs) if all_obs else []
-            except Exception:
+            except Exception:  # nosec B110 B112
                 bin_results[bin_key] = []
         return bin_results
 
@@ -193,7 +193,7 @@ class PoweredModelMixin:
             _logging.getLogger(__name__).warning(f"Failed to create powered-grounding layer: {e}")
         try:
             self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     # ------------------------------------------------------------------
@@ -206,7 +206,7 @@ class PoweredModelMixin:
         }
         try:
             self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         return total
 
@@ -292,7 +292,7 @@ class PoweredModelMixin:
             _logging.getLogger(__name__).warning(f"Failed to create powered-allision layer: {e}")
         try:
             self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     # ------------------------------------------------------------------
@@ -319,7 +319,7 @@ class PoweredModelMixin:
             first_seg = segment_data[list(segment_data.keys())[0]]
             lon0, lat0 = _parse_point(first_seg["Start_Point"])
             proj = _PoweredProjector(lon0, lat0)
-        except Exception:
+        except Exception:  # nosec B110 B112
             return self._emit_empty_grounding(total)
 
         draught_set = self._collect_draught_set(traffic_data)
@@ -354,7 +354,7 @@ class PoweredModelMixin:
             proj = _PoweredProjector(lon0, lat0)
             legs, all_obstacles, _, _, _ = _build_legs_and_obstacles(
                 data, proj, mode="allision", max_draft=0)
-        except Exception:
+        except Exception:  # nosec B110 B112
             return self._emit_empty_allision(total)
 
         if not all_obstacles:
@@ -364,7 +364,7 @@ class PoweredModelMixin:
         # (which splits MultiPolygons into sub-polygons with IDs like '1_0', '1_1').
         try:
             from shapely import wkt as _sw
-        except Exception:
+        except Exception:  # nosec B110 B112
             _sw = None
         obj_heights: dict[str, float] = {}
         structs_meta_for_layer: list[dict] = []
@@ -386,7 +386,7 @@ class PoweredModelMixin:
                 structs_meta_for_layer.append(
                     {'id': str(oid), 'height': height_f, 'wkt_wgs84': wkt_str}
                 )
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self._last_powered_allision_structs = structs_meta_for_layer
 

@@ -264,7 +264,7 @@ class OMRAT(
 
         Clears drift corridor layers and any cached data.
         """
-        QgsMessageLog.logMessage("Project cleared - cleaning up drift corridors", "OMRAT", Qgis.Info)
+        QgsMessageLog.logMessage("Project cleared - cleaning up drift corridors", "OMRAT", Qgis.MessageLevel.Info)
         self.drift_corridor_layers.clear()
         # The QGIS project drop also wipes any history-loaded layers,
         # so just drop our own references; no removeMapLayer needed.
@@ -285,7 +285,7 @@ class OMRAT(
                 project = QgsProject.instance()
                 if project is not None and layer is not None:
                     project.removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self._history_layers.clear()
 
@@ -296,7 +296,7 @@ class OMRAT(
                 project = QgsProject.instance()
                 if project is not None and layer is not None:
                     project.removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.drift_corridor_layers.clear()
 
@@ -307,7 +307,7 @@ class OMRAT(
             cp = configparser.ConfigParser()
             cp.read(os.path.join(self.plugin_dir, 'metadata.txt'), encoding='utf-8')
             return cp.get('general', 'tracker', fallback='')
-        except Exception:
+        except Exception:  # nosec B110 B112
             return ''
 
     def _restore_opentopo_api_key(self) -> None:
@@ -323,7 +323,7 @@ class OMRAT(
             return
         try:
             saved = QSettings().value('omrat/opentopo_api_key', '', type=str)
-        except Exception:
+        except Exception:  # nosec B110 B112
             saved = ''
         if saved:
             # Block textChanged while we restore so we don't trigger a
@@ -335,14 +335,14 @@ class OMRAT(
                 le.blockSignals(blocker)
         try:
             le.textChanged.connect(self._on_opentopo_api_key_changed)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _on_opentopo_api_key_changed(self, text: str) -> None:
         """Persist the API key to QSettings on every edit."""
         try:
             QSettings().setValue('omrat/opentopo_api_key', text or '')
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def show_error_popup(self, message: str, function_name: str) -> None:
@@ -470,7 +470,7 @@ class OMRAT(
         self.main_widget.LEModelName.setText('')
         try:
             self.refresh_previous_runs_table()
-        except Exception:
+        except Exception:  # nosec B110 B112
             self.main_widget.TWPreviousRuns.setRowCount(0)
         self.main_widget.laDir1.setText('')
         self.main_widget.laDir2.setText('')
@@ -483,19 +483,19 @@ class OMRAT(
                 self.main_widget.DistributionWidget.removeWidget(self.distributions.canvas)
                 self.distributions.canvas.deleteLater()
                 self.distributions.canvas = None
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
     def clear_model(self) -> None:
         """Reset all model state and UI to defaults."""
-        QgsMessageLog.logMessage("Clearing current model", "OMRAT", Qgis.Info)
+        QgsMessageLog.logMessage("Clearing current model", "OMRAT", Qgis.MessageLevel.Info)
         self._clear_layers()
         self._reset_data_structures()
         self._clear_ui_widgets()
         self._clear_distribution_canvas()
         self.traffic.run_update = True
         self.iface.mapCanvas().refresh()
-        QgsMessageLog.logMessage("Model cleared successfully", "OMRAT", Qgis.Info)
+        QgsMessageLog.logMessage("Model cleared successfully", "OMRAT", Qgis.MessageLevel.Info)
 
     def onClosePlugin(self):
         """Cleanup necessary items here when plugin main_widget is closed"""
@@ -534,7 +534,7 @@ class OMRAT(
                 project = QgsProject.instance()
                 if project is not None and layer is not None:
                     project.removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             setattr(self.calc, attr, None)
 
@@ -542,18 +542,18 @@ class OMRAT(
         for folder in ['omrat_utils', 'compute', 'geometries']:
             to_remove = [m for m in sys.modules if m.startswith(folder)]
             for m in to_remove:
-                QgsMessageLog.logMessage(f"{m} unloaded", "OMRAT", Qgis.Info)
+                QgsMessageLog.logMessage(f"{m} unloaded", "OMRAT", Qgis.MessageLevel.Info)
                 del sys.modules[m]
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         try:
             self.notifier.dismiss_all()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         try:
             QgsProject.instance().cleared.disconnect(self._on_project_cleared)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         self.traffic.unload()
         self.ais.unload()
@@ -579,7 +579,7 @@ class OMRAT(
             pass
         gc.collect()
         self._unload_modules()
-        QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.Info)
+        QgsMessageLog.logMessage("Plugin unloaded", "OMRAT", Qgis.MessageLevel.Info)
 
     def point4326_from_wkt(self, coord_str: str, crs: str) -> QgsPoint:
         if '(' in coord_str:
@@ -606,7 +606,7 @@ class OMRAT(
         vl.updateFields()
         try:
             fid = int(str(seg_id))
-        except Exception:
+        except Exception:  # nosec B110 B112
             fid = self.segment_id
         return vl, fields, provider, fid
 
@@ -632,12 +632,12 @@ class OMRAT(
             )
             print(msg)
             try:
-                QgsMessageLog.logMessage(msg, "OMRAT", Qgis.Warning)
-            except Exception:
+                QgsMessageLog.logMessage(msg, "OMRAT", Qgis.MessageLevel.Warning)
+            except Exception:  # nosec B110 B112
                 pass
             try:
                 QgsProject.instance().removeMapLayer(vl.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
             return False
         edit_buffer = vl.editBuffer()
@@ -667,11 +667,11 @@ class OMRAT(
             self.qgis_geoms.vector_layers.append(vl)
             try:
                 self.qgis_geoms.leg_dirs[str(seg_data["Segment_Id"])] = list(seg_data.get("Dirs", []))
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         try:
             max_id = max(int(str(v.get('Segment_Id'))) for v in data['segment_data'].values())
-        except Exception:
+        except Exception:  # nosec B110 B112
             max_id = self.segment_id
         self.qgis_geoms.segment_id = max_id
         self.segment_id = max_id
@@ -681,7 +681,7 @@ class OMRAT(
                 for v in data['segment_data'].values()
             )
             self.qgis_geoms.cur_route_id = max_route + 1
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
         self.qgis_geoms.sync_drawing_spinboxes()
         self.iface.mapCanvas().refresh()
@@ -733,7 +733,7 @@ class OMRAT(
         out_dir = self._get_output_dir()
         try:
             run_name = (self.main_widget.LEModelName.text() or '').strip()
-        except Exception:
+        except Exception:  # nosec B110 B112
             run_name = ''
         if out_dir is None or not run_name:
             missing: list[str] = []
@@ -786,7 +786,7 @@ class OMRAT(
         QgsMessageLog.logMessage(
             'Calculation started in background. Check task manager for progress.',
             'OMRAT',
-            Qgis.Info
+            Qgis.MessageLevel.Info
         )
 
     def _on_calculation_progress(self, completed: int, total: int, message: str) -> None:
@@ -795,7 +795,7 @@ class OMRAT(
         QgsMessageLog.logMessage(
             f"Progress: {completed}/{total} - {message}",
             'OMRAT',
-            Qgis.Info
+            Qgis.MessageLevel.Info
         )
 
     def _on_calculation_finished(self, calc_object: Any) -> None:
@@ -803,7 +803,7 @@ class OMRAT(
         QgsMessageLog.logMessage(
             'Calculation completed successfully!',
             'OMRAT',
-            Qgis.Success
+            Qgis.MessageLevel.Success
         )
         # Catastrophe-level exceedance table on the Run Analysis tab.
         try:
@@ -813,7 +813,7 @@ class OMRAT(
         except Exception as e:
             QgsMessageLog.logMessage(
                 f'Failed to populate catastrophe-results table: {e}',
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
         # Auto-save the run to the history GeoPackage so the user can
         # reload / compare it later.  Failures here are non-fatal --
@@ -824,7 +824,7 @@ class OMRAT(
             import traceback
             QgsMessageLog.logMessage(
                 f'Failed to save run history: {e}\n{traceback.format_exc()}',
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
         try:
             self.refresh_previous_runs_table()
@@ -838,7 +838,7 @@ class OMRAT(
             QgsMessageLog.logMessage(
                 f'Failed to refresh previous-runs table: {e}\n'
                 f'{traceback.format_exc()}',
-                'OMRAT', Qgis.Warning,
+                'OMRAT', Qgis.MessageLevel.Warning,
             )
         # Drop the strong reference now that the task has finished.
         self._current_task = None
@@ -851,7 +851,7 @@ class OMRAT(
         """
         QgsMessageLog.logMessage(
             f'Calculation failed: {error_msg}',
-            'OMRAT', Qgis.Critical,
+            'OMRAT', Qgis.MessageLevel.Critical,
         )
         QMessageBox.critical(
             None, 'Calculation Failed',
@@ -893,7 +893,7 @@ class OMRAT(
         try:
             if hasattr(self.main_widget, 'LEReportPath') and self.main_widget.LEReportPath is not None:
                 initial = self.main_widget.LEReportPath.text() or ''
-        except Exception:
+        except Exception:  # nosec B110 B112
             initial = ''
         filename, _ = QFileDialog.getSaveFileName(
             self.main_widget,
@@ -904,7 +904,7 @@ class OMRAT(
         if filename:
             try:
                 self.main_widget.LEReportPath.setText(filename)
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
     # IWRAP import / export slots are provided by ``IwrapIOMixin``;
@@ -994,7 +994,7 @@ class OMRAT(
                 )
         except Exception as exc:
             QgsMessageLog.logMessage(
-                f"Route validation skipped: {exc}", "OMRAT", Qgis.Warning,
+                f"Route validation skipped: {exc}", "OMRAT", Qgis.MessageLevel.Warning,
             )
 
         # Steps 2+3 (background task): fetch AIS traffic per leg, then
@@ -1077,7 +1077,7 @@ class OMRAT(
             if hasattr(self.main_widget, 'pbReportPath'):
                 try:
                     self.main_widget.pbReportPath.clicked.disconnect()
-                except Exception:
+                except Exception:  # nosec B110 B112
                     pass
                 self.main_widget.pbReportPath.clicked.connect(self.choose_output_folder)
             if hasattr(self.main_widget, 'LEReportPath'):
@@ -1088,13 +1088,13 @@ class OMRAT(
             self._update_run_model_enabled()
             self._restore_opentopo_api_key()
         except Exception as exc:
-            QgsMessageLog.logMessage(f'Could not wire output-folder picker: {exc}', 'OMRAT', Qgis.Warning)
+            QgsMessageLog.logMessage(f'Could not wire output-folder picker: {exc}', 'OMRAT', Qgis.MessageLevel.Warning)
 
     def _wire_drift_button(self) -> None:
         try:
             if hasattr(self.main_widget, 'pbRunDriftAnalysis'):
                 self.main_widget.pbRunDriftAnalysis.clicked.connect(self.run_drift_analysis)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _init_results_ui(self, fileMenu) -> None:
@@ -1102,17 +1102,19 @@ class OMRAT(
             self._setup_previous_runs_table()
             self.refresh_previous_runs_table()
         except Exception as e:
-            QgsMessageLog.logMessage(f'Could not initialise previous-runs table: {e}', 'OMRAT', Qgis.Warning)
+            QgsMessageLog.logMessage(
+                f'Could not initialise previous-runs table: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
         try:
             self._setup_accident_results_table()
         except Exception as e:
-            QgsMessageLog.logMessage(f'Could not initialise accident-results table: {e}', 'OMRAT', Qgis.Warning)
+            QgsMessageLog.logMessage(
+                f'Could not initialise accident-results table: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
         try:
             self._setup_compare_tab()
         except Exception as e:
-            QgsMessageLog.logMessage(f'Could not initialise Compare tab: {e}', 'OMRAT', Qgis.Warning)
+            QgsMessageLog.logMessage(f'Could not initialise Compare tab: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
         try:
             fileMenu.addSeparator()
             fileMenu.addAction('Manage previous runs...', self.open_previous_runs_dialog)
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass

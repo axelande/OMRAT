@@ -90,7 +90,7 @@ def extend_polygon_in_directions(
             c0 = polygon.representative_point()
             c1 = translated_polygon.representative_point()
             centre_lines.append(LineString([(c0.x, c0.y), (c1.x, c1.y)]))
-        except Exception:
+        except Exception:  # nosec B110 B112
             centre_lines.append(LineString())
     return extended_polygons, centre_lines
 
@@ -356,7 +356,7 @@ def compute_min_distance_by_object(
                                 prev = min_dists[flat_idx]
                                 if prev is None or md < prev:
                                     min_dists[flat_idx] = md
-                        except Exception:
+                        except Exception:  # nosec B110 B112
                             pass
                     flat_idx += 1
             per_dir.append(min_dists)

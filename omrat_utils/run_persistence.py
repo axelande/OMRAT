@@ -163,8 +163,8 @@ def write_run_results(
         opts.layerName = layer_name
         # Resolve enums in a Qt5/Qt6-compatible way.
         opts.actionOnExistingFile = (
-            QgsVectorFileWriter.CreateOrOverwriteFile if first_write
-            else QgsVectorFileWriter.CreateOrOverwriteLayer
+            QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile if first_write
+            else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
         )
         try:
             result = QgsVectorFileWriter.writeAsVectorFormatV3(
@@ -178,7 +178,7 @@ def write_run_results(
         # Different QGIS versions return tuples of varying length;
         # the first element is the error code regardless.
         err = result[0] if isinstance(result, (tuple, list)) else result
-        if err == QgsVectorFileWriter.NoError:
+        if err == QgsVectorFileWriter.WriterError.NoError:
             written.append(layer_name)
             first_write = False
         else:
@@ -216,7 +216,7 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
             _line_symbol_factory, _marker_symbol_factory,
             _apply_graduated,
         )
-    except Exception:
+    except Exception:  # nosec B110 B112
         return
     if layer_name in ('drifting_allision', 'drifting_grounding'):
         # Prefer the new field name; fall back to the old ``total_prob`` for
@@ -230,7 +230,7 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
         try:
             from geometries.result_layers import _enable_fid_labels
             _enable_fid_labels(qgis_layer, 'obstacle_id')
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
     elif layer_name in ('powered_grounding', 'powered_allision'):
         attr = (
@@ -243,7 +243,7 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
         try:
             from geometries.result_layers import _enable_fid_labels
             _enable_fid_labels(qgis_layer, 'obstacle_id')
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
     elif layer_name == 'collision_lines':
         _apply_graduated(qgis_layer, 'combined', _line_symbol_factory)
@@ -254,7 +254,7 @@ def _apply_default_styling(layer_name: str, qgis_layer) -> None:
     try:
         from geometries.result_layers import _set_result_field_aliases
         _set_result_field_aliases(qgis_layer)
-    except Exception:
+    except Exception:  # nosec B110 B112
         pass
 
 

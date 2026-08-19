@@ -110,7 +110,7 @@ class DriftAnalysisMixin:
             self.main_widget.label_drift_status.setText(f"Error: {exc}")
             self.main_widget.pbRunDriftAnalysis.setEnabled(True)
             QgsMessageLog.logMessage(
-                f"Drift analysis failed: {exc}", "OMRAT", Qgis.Critical,
+                f"Drift analysis failed: {exc}", "OMRAT", Qgis.MessageLevel.Critical,
             )
 
     # ------------------------------------------------------------------
@@ -145,7 +145,7 @@ class DriftAnalysisMixin:
         self.main_widget.pbRunDriftAnalysis.setEnabled(True)
         self.main_widget.label_drift_status.setText(f"Error: {error_msg}")
         QgsMessageLog.logMessage(
-            f"Drift analysis failed: {error_msg}", "OMRAT", Qgis.Critical,
+            f"Drift analysis failed: {error_msg}", "OMRAT", Qgis.MessageLevel.Critical,
         )
 
     # ------------------------------------------------------------------
@@ -159,7 +159,7 @@ class DriftAnalysisMixin:
                 project = QgsProject.instance()
                 if project is not None and layer is not None:
                     project.removeMapLayer(layer.id())
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
         self.drift_corridor_layers.clear()
 

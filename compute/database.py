@@ -24,7 +24,7 @@ class DB:
         Set the timeout (sec) for a connection, default 24 hours.
     """
 
-    def __init__(self, db_user: str = "", db_pass: str = "",
+    def __init__(self, db_user: str = "", db_pass: str = "",  # nosec B107 -- empty defaults, not secrets
                  db_name: str = "", db_host: str = "",
                  db_port: int | str = 5432, time_out: int = 86400):
         self.db_host = db_host

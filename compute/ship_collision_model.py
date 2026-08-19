@@ -1010,7 +1010,7 @@ class ShipCollisionModelMixin:
             self.p.main_widget.LEPOvertakingCollision.setText(f"{result['overtaking']:.3e}")
             self.p.main_widget.LEPCrossingCollision.setText(f"{result['crossing']:.3e}")
             self.p.main_widget.LEPMergingCollision.setText(f"{result['bend']:.3e}")
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
     def _finalize_collision_layers(

@@ -167,10 +167,10 @@ class _SplitPromptDialog(QDialog):
             "the crossing as a real four-leg junction?"
         ))
         bb = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        bb.button(QDialogButtonBox.Ok).setText("Split")
-        bb.button(QDialogButtonBox.Cancel).setText("Skip")
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Split")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setText("Skip")
         bb.accepted.connect(self._accept)
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
@@ -204,7 +204,7 @@ def _hide_dock_for_prompts(omrat: "OMRAT"):
     if was_visible:
         try:
             dock.hide()
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
     return was_visible
 
@@ -216,7 +216,7 @@ def _restore_dock(omrat: "OMRAT", was_visible) -> None:
             try:
                 dock.show()
                 dock.raise_()
-            except Exception:
+            except Exception:  # nosec B110 B112
                 pass
 
 
@@ -295,9 +295,9 @@ def _reload_legs_after_mutation(omrat: "OMRAT") -> None:
             from qgis.core import Qgis, QgsMessageLog
             QgsMessageLog.logMessage(
                 f"reload_legs_from_segment_data failed: {exc}\n{traceback.format_exc()}",
-                "OMRAT", Qgis.Critical,
+                "OMRAT", Qgis.MessageLevel.Critical,
             )
-        except Exception:
+        except Exception:  # nosec B110 B112
             pass
 
 

@@ -134,8 +134,8 @@ def populate_table(
         for c, out_leg in enumerate(leg_ids):
             if r == c:
                 cell = QTableWidgetItem("—")
-                cell.setFlags(Qt.ItemIsEnabled)
-                cell.setTextAlignment(int(Qt.AlignCenter))
+                cell.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                cell.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
                 table.setItem(r, c, cell)
                 continue
             spin = NoWheelDoubleSpinBox()
@@ -179,12 +179,12 @@ class JunctionMatrixDialog(QDialog):
         layout.addWidget(self.table)
 
         self.bb = QDialogButtonBox(
-            QDialogButtonBox.Save | QDialogButtonBox.Close
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close
         )
         layout.addWidget(self.bb)
-        self.bb.button(QDialogButtonBox.Save).setText("Save row")
-        self.bb.button(QDialogButtonBox.Close).clicked.connect(self.accept)
-        self.bb.button(QDialogButtonBox.Save).clicked.connect(self._save_current)
+        self.bb.button(QDialogButtonBox.StandardButton.Save).setText("Save row")
+        self.bb.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
+        self.bb.button(QDialogButtonBox.StandardButton.Save).clicked.connect(self._save_current)
 
         self._junction_ids: list[str] = []
         self._populate_combo()
@@ -284,7 +284,7 @@ def open_junction_dialog(omrat: "OMRAT") -> None:
         return
     parent = getattr(omrat, 'main_widget', None)
     dlg = JunctionMatrixDialog(omrat, parent)
-    dlg.setWindowModality(Qt.NonModal)
+    dlg.setWindowModality(Qt.WindowModality.NonModal)
     # Store on omrat so Python doesn't GC the dialog while it's open.
     omrat._junction_matrix_dialog = dlg
     dlg.show()

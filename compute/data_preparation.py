@@ -76,7 +76,7 @@ def _is_qgis_available() -> bool:
     try:
         crs = QgsCoordinateReferenceSystem("EPSG:4326")
         return isinstance(crs.isValid(), bool)
-    except Exception:
+    except Exception:  # nosec B110 B112
         return False
 
 
@@ -125,7 +125,7 @@ def clean_traffic(data: dict[str, Any]) -> list[tuple[LineString, list[Any], lis
                     f'LineString({data["segment_data"][segment]["End_Point"]},'
                     f' {data["segment_data"][segment]["Start_Point"]})'
                 )
-            assert (isinstance(geom_base, LineString))
+            assert (isinstance(geom_base, LineString))  # nosec B101
             geom: LineString = geom_base
             leg_traffic: list[dict[str, float]] = []
             name = f"Leg {segment}-{data['segment_data'][segment]['Dirs'][k]}"
@@ -169,7 +169,7 @@ def load_areas(data: dict[str, Any]) -> list[dict[str, Any]]:
     for obj in data.get('objects', []):
         try:
             oid, height, wkt = obj
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         geom = safe_load_wkt(wkt)
         if geom is None:
@@ -178,7 +178,7 @@ def load_areas(data: dict[str, Any]) -> list[dict[str, Any]]:
     for dep in data.get('depths', []):
         try:
             did, depth, wkt = dep
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         geom = safe_load_wkt(wkt)
         if geom is None:
@@ -192,14 +192,14 @@ def _expand_geom_entries(items: list, value_key: str) -> list[dict[str, Any]]:
     for entry in items:
         try:
             eid, val, wkt = entry
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         geom = safe_load_wkt(wkt)
         if geom is None:
             continue
         try:
             fval = float(val)
-        except Exception:
+        except Exception:  # nosec B110 B112
             continue
         if geom.geom_type == 'MultiPolygon':
             for i, poly in enumerate(geom.geoms):

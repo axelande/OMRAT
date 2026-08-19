@@ -61,7 +61,7 @@ def _notify(host: Any, exc: Exception, function_name: str) -> None:
         try:
             notifier.display_exception(exc)
             return
-        except Exception:  # noqa: BLE001 -- never let the notifier itself crash
+        except Exception:  # noqa: BLE001 -- never let the notifier itself crash  # nosec B110 B112
             pass
 
     # Legacy fallback so partially-initialised plugins (or test doubles
@@ -71,7 +71,7 @@ def _notify(host: Any, exc: Exception, function_name: str) -> None:
         try:
             popup(str(exc), function_name)
             return
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # nosec B110 B112
             pass
 
     # Last-ditch: let Qt's default unhandled-exception path see it.

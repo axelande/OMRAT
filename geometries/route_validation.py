@@ -448,7 +448,7 @@ def _split_one_leg(
         _si = 0
         while len(_avail) < 2:
             if _si < 26:
-                s = _string.ascii_lowercase[_si]  
+                s = _string.ascii_lowercase[_si]
             else:
                 s = _string.ascii_lowercase[_si // 26 - 1] + _string.ascii_lowercase[_si % 26]
             if f"{base}_{s}" not in _taken:

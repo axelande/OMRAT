@@ -37,6 +37,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# LOW-severity test IDs that are intentional in a QGIS plugin context and
+# suppressed both locally (via --skip) and in the shipped zip (via setup.cfg
+# which the portal's bandit run picks up automatically).
+#   B101 assert_used        -- internal type-guard asserts, not user-facing
+#   B110 try_except_pass    -- intentional swallow in QGIS UI/cleanup paths
+#   B112 try_except_continue -- intentional skip on malformed data rows
+ACCEPTED_LOW: list[str] = ["B101", "B110", "B112"]
+
 SHIPPED_TARGETS: list[str] = [
     "__init__.py",
     "omrat.py",
