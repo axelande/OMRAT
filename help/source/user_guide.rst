@@ -273,7 +273,7 @@ Three ways:
 * **Load Depth** -- pick a shapefile; OMRAT imports every polygon and
   uses the ``depth`` attribute (or the first numeric attribute) as the
   depth value.
-* **Get GEBCO Depths** -- requires an OpenTopography API key in
+* **Fetch GEBCO Depths** -- requires an OpenTopography API key in
   Settings.  The plugin downloads GEBCO bathymetry for the project
   bbox + padding and vectorises it into depth polygons at the depths
   you specify.

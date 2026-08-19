@@ -1074,21 +1074,27 @@ def _build_powered_layer_per_obstacle_segments(
             value = 0.0
         obs_leg_contribs = (by_obstacle_leg or {}).get(str(obs_id), {})
 
-        # Pre-compute leg bearings so we look them up once per obstacle
-        # rather than once per segment.
+        # Pre-compute bearings for each leg-direction key ("seg_id:dir_idx").
+        # dir_idx 0 = forward (Start→End); dir_idx 1 = reverse (+180°).
         leg_bearings: dict[str, float | None] = {}
         if segment_data and obs_leg_contribs:
-            for leg_id in obs_leg_contribs:
-                seg = segment_data.get(leg_id) or segment_data.get(str(leg_id))
-                leg_bearings[leg_id] = _seg_bearing(seg) if seg is not None else None
+            for leg_dir_key in obs_leg_contribs:
+                parts = leg_dir_key.rsplit(':', 1)
+                seg_key = parts[0]
+                dir_idx_val = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
+                seg = segment_data.get(seg_key) or segment_data.get(str(seg_key))
+                bearing = _seg_bearing(seg) if seg is not None else None
+                if bearing is not None and dir_idx_val == 1:
+                    bearing = (bearing + 180.0) % 360.0
+                leg_bearings[leg_dir_key] = bearing
 
         for seg_idx, (x1, y1, x2, y2, seg_normal) in enumerate(segments):
             # Per-segment probability: sum each leg's contribution weighted by
             # how directly the leg bearing faces this segment edge.
             if segment_data and obs_leg_contribs:
                 seg_prob = 0.0
-                for leg_id, leg_contrib in obs_leg_contribs.items():
-                    bearing = leg_bearings.get(leg_id)
+                for leg_dir_key, leg_contrib in obs_leg_contribs.items():
+                    bearing = leg_bearings.get(leg_dir_key)
                     if bearing is None:
                         seg_prob += leg_contrib  # unknown bearing: add uniformly
                     else:
@@ -1131,7 +1137,7 @@ def _collect_leg_fields(
                     all_leg_ids.append(str(leg_id))
         all_leg_ids.sort()
         for leg_id in all_leg_ids:
-            leg_to_field[leg_id] = f'leg_{leg_id}'
+            leg_to_field[leg_id] = f'leg_{leg_id.replace(":", "_")}'
     return all_leg_ids, leg_to_field
 
 

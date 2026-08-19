@@ -132,7 +132,7 @@ it to depth polygons in one click, without leaving QGIS.  You need a
 
 **Step 1 — Create an OpenTopography account**
 
-   Go to https://portal.opentopography.org and click **Sign Up** (top
+   Go to https://portal.opentopography.org and click **Create new account** (top
    right).  Fill in a username, e-mail address, and password, then
    confirm your e-mail.
 
@@ -165,9 +165,9 @@ it to depth polygons in one click, without leaving QGIS.  You need a
 **Step 5 — Set depth intervals and fetch**
 
    Enter the maximum depth of interest in **Max depth (m)** and a
-   contour step in **Depth interval (m)**.  Click **Update depth
-   intervals** to preview the contour levels, then click
-   **Get GEBCO data**.  OMRAT downloads the GeoTIFF, vectorizes it,
+   contour step in **Depth interval (m)**.  Click **Update depth**
+   to preview the contour levels, then click
+   **Fetch GEBCO depth**.  OMRAT downloads the GeoTIFF, vectorizes it,
    and adds one row per depth interval to the table automatically.
 
 .. note::

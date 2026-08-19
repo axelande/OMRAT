@@ -21,7 +21,7 @@ Build a project from scratch (no AIS)
 #. **Traffic tab** -- for every segment, select direction and enter
    the Frequency / Speed / Draught / Height / Beam matrix manually.
    A single busy ship type row is enough for a first pass.
-#. **Depths tab** -- load a shapefile or use **Get GEBCO Depths**
+#. **Depths tab** -- load a shapefile or use **Fetch GEBCO Depths**
    with your OpenTopography key.
 #. **Objects tab** -- load a shapefile with a ``height`` attribute or
    draw polygons manually.

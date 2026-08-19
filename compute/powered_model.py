@@ -161,7 +161,8 @@ class PoweredModelMixin:
                                 k = str(obs_id)
                                 by_obstacle[k] = by_obstacle.get(k, 0.0) + c
                                 _leg_map = by_obstacle_leg.setdefault(k, {})
-                                _leg_map[str(leg_key)] = _leg_map.get(str(leg_key), 0.0) + c
+                                dir_key = f"{leg_key}:{dir_idx}"
+                                _leg_map[dir_key] = _leg_map.get(dir_key, 0.0) + c
                                 ck = f"{loa_i}_{type_j}"
                                 by_cell[ck] = by_cell.get(ck, 0.0) + c
         return total, by_obstacle, by_obstacle_leg, by_cell
@@ -262,7 +263,8 @@ class PoweredModelMixin:
                         k = str(obs_id)
                         by_obstacle[k] = by_obstacle.get(k, 0.0) + c
                         _seg_map = by_obstacle_leg.setdefault(k, {})
-                        _seg_map[str(seg_id)] = _seg_map.get(str(seg_id), 0.0) + c
+                        dir_key = f"{seg_id}:{dir_idx}"
+                        _seg_map[dir_key] = _seg_map.get(dir_key, 0.0) + c
                         ck = f"{loa_i}_{type_j}"
                         by_cell[ck] = by_cell.get(ck, 0.0) + c
         return total, by_obstacle, by_obstacle_leg, by_cell

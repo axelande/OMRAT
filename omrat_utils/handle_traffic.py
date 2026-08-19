@@ -6,7 +6,8 @@ if TYPE_CHECKING:
 import matplotlib as mpl
 mpl.use('Qt5Agg')
 import numpy as np  # noqa: E402
-from qgis.PyQt.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox  # noqa: E402
+from qgis.PyQt.QtCore import Qt  # noqa: E402
+from qgis.PyQt.QtWidgets import QCheckBox, QDoubleSpinBox, QLabel, QLineEdit, QSpinBox  # noqa: E402
 
 from geometries import isint  # noqa: E402
 from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox  # noqa: E402
@@ -50,6 +51,9 @@ class Traffic:
             'Frequency (ships/year)': 0,
             SCALING_VAR: SCALING_DEFAULT,
         }
+        # Data dimensions (excluding the summary row/column added to twTrafficData).
+        self._data_rows = 0
+        self._data_cols = 0
         # Checkboxes (one per ship-type row) are populated in
         # ``populate_scaling_checkboxes``.  We hold strong references here so
         # GC + Qt's parent-chain don't drop them prematurely.
@@ -89,10 +93,13 @@ class Traffic:
             it2 = self.omrat.ship_cat.scw.twLengths.item(i, 1)
             text2 = it2.text() if it2 is not None else ""
             sizes.append(f'{text1} - {text2}')
-        self.dw.twTrafficData.setColumnCount(len(sizes))
-        self.dw.twTrafficData.setHorizontalHeaderLabels(sizes)
-        self.dw.twTrafficData.setRowCount(len(types))
-        self.dw.twTrafficData.setVerticalHeaderLabels(types)
+        self._data_rows = len(types)
+        self._data_cols = len(sizes)
+        # Table gets one extra row and one extra column for the summary.
+        self.dw.twTrafficData.setColumnCount(len(sizes) + 1)
+        self.dw.twTrafficData.setHorizontalHeaderLabels(sizes + ['Total'])
+        self.dw.twTrafficData.setRowCount(len(types) + 1)
+        self.dw.twTrafficData.setVerticalHeaderLabels(types + ['Total'])
         # Ensure the vertical header is visible and wide enough to display
         # the ship-type labels.  The main-widget styling hides vertical
         # headers on other tables; this force-shows it specifically for the
@@ -117,6 +124,9 @@ class Traffic:
                 item = NoWheelSpinBox()
                 item.setMaximum(100000)
                 self.dw.twTrafficData.setCellWidget(row, col, item)
+            self.dw.twTrafficData.setCellWidget(row, len(sizes), self._make_summary_label())
+        for col in range(len(sizes) + 1):
+            self.dw.twTrafficData.setCellWidget(len(types), col, self._make_summary_label())
         # Keep the per-type "follow global" checkboxes + the follow_global
         # bool list in sync with the current ship-type count.
         self.populate_scaling_checkboxes()
@@ -124,8 +134,8 @@ class Traffic:
     def create_empty_dict(self, s_key: str, dirs: list[str]):
         """Creates an empty dict for the segment with all types"""
         self.traffic_data[s_key] = {}
-        rows = self.dw.twTrafficData.rowCount()
-        cols = self.dw.twTrafficData.columnCount()
+        rows = self._data_rows
+        cols = self._data_cols
 
         for di in dirs:
             self.traffic_data[s_key][di] = {}
@@ -149,8 +159,8 @@ class Traffic:
         if caller == 'segment':
             self.c_seg = self.dw.cbTrafficSelectSeg.currentData() or ''
             self.update_direction_select()
-        rows = self.dw.twTrafficData.rowCount()
-        cols = self.dw.twTrafficData.columnCount()
+        rows = self._data_rows
+        cols = self._data_cols
         self.last_var: str = self.dw.cbSelectType.currentText()
         self.c_di = self.dw.cbTrafficDirectionSelect.currentText()
         if any([self.c_seg == "", self.c_di == "", self.last_var == ""]):
@@ -160,6 +170,7 @@ class Traffic:
         # files may not have it yet.
         self.ensure_scaling_present()
         is_scaling_view = self.last_var == SCALING_VAR
+        is_freq_view = self.last_var == 'Frequency (ships/year)'
         # Drop any cellChanged-style signals from the previous render so
         # they don't fire while we rebuild widgets below.
         self._disconnect_scaling_cell_signals()
@@ -206,7 +217,10 @@ class Traffic:
                     item = NoWheelDoubleSpinBox()
                     val = float(val)
                     item.setValue(val)
+                if is_freq_view:
+                    item.valueChanged.connect(self._refresh_summary)
                 self.dw.twTrafficData.setCellWidget(row, col, item)
+        self._refresh_summary()
 
     def update_direction_select(self):
         self.run_update = False
@@ -233,8 +247,8 @@ class Traffic:
             return
         if self.last_var not in di:
             return
-        rows = self.dw.twTrafficData.rowCount()
-        cols = self.dw.twTrafficData.columnCount()
+        rows = self._data_rows
+        cols = self._data_cols
         typ = self.last_var
         for row in range(rows):
             for col in range(cols):
@@ -327,8 +341,8 @@ class Traffic:
         td = self.traffic_data if traffic_data is None else traffic_data
         if not isinstance(td, dict):
             return
-        rows = self.dw.twTrafficData.rowCount()
-        cols = self.dw.twTrafficData.columnCount()
+        rows = self._data_rows
+        cols = self._data_cols
         for _seg, dirs in td.items():
             if not isinstance(dirs, dict):
                 continue
@@ -369,7 +383,7 @@ class Traffic:
         scaling = self._project_scaling()
         if n_types is None:
             try:
-                n_types = self.dw.twTrafficData.rowCount()
+                n_types = int(self._data_rows)
             except (TypeError, AttributeError):
                 n_types = 0
         try:
@@ -407,7 +421,7 @@ class Traffic:
         if layout is None:
             return
         try:
-            n_types = int(self.dw.twTrafficData.rowCount())
+            n_types = int(self._data_rows)
         except (TypeError, ValueError, AttributeError):
             return  # Mocked widget -- skip checkbox build.
         self.ensure_follow_global(n_types)
@@ -547,6 +561,61 @@ class Traffic:
                 cb.setChecked(False)
             finally:
                 cb.blockSignals(False)
+
+    def _make_summary_label(self, text: str = '-') -> QLabel:
+        """Return a non-editable, styled label for summary row/column cells."""
+        lbl = QLabel(text)
+        align = getattr(Qt, 'AlignCenter', None) or Qt.AlignmentFlag.AlignCenter
+        lbl.setAlignment(align)
+        lbl.setStyleSheet('background: #dde; color: #333; font-weight: bold; padding: 1px;')
+        return lbl
+
+    def _refresh_summary(self) -> None:
+        """Recompute and display row/column totals in the non-editable summary cells.
+
+        Only meaningful for Frequency (ships/year); all other variables show '-'.
+        Called after every table render and on every Frequency spinbox edit.
+        """
+        rows = self._data_rows
+        cols = self._data_cols
+        if rows == 0 or cols == 0:
+            return
+        is_freq = self.last_var == 'Frequency (ships/year)'
+        if not is_freq:
+            for row in range(rows):
+                lbl = self.dw.twTrafficData.cellWidget(row, cols)
+                if isinstance(lbl, QLabel):
+                    lbl.setText('-')
+            for col in range(cols):
+                lbl = self.dw.twTrafficData.cellWidget(rows, col)
+                if isinstance(lbl, QLabel):
+                    lbl.setText('-')
+            corner = self.dw.twTrafficData.cellWidget(rows, cols)
+            if isinstance(corner, QLabel):
+                corner.setText('-')
+            return
+        col_totals = [0.0] * cols
+        for row in range(rows):
+            row_total = 0.0
+            for col in range(cols):
+                w = self.dw.twTrafficData.cellWidget(row, col)
+                if w is not None:
+                    try:
+                        v = float(w.value())
+                        row_total += v
+                        col_totals[col] += v
+                    except (TypeError, ValueError, AttributeError):
+                        pass
+            lbl = self.dw.twTrafficData.cellWidget(row, cols)
+            if isinstance(lbl, QLabel):
+                lbl.setText(f'{row_total:.0f}')
+        for col in range(cols):
+            lbl = self.dw.twTrafficData.cellWidget(rows, col)
+            if isinstance(lbl, QLabel):
+                lbl.setText(f'{col_totals[col]:.0f}')
+        corner = self.dw.twTrafficData.cellWidget(rows, cols)
+        if isinstance(corner, QLabel):
+            corner.setText(f'{sum(col_totals):.0f}')
 
     def unload(self):
         """Cleanup resources and disconnect signals."""
