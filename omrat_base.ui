@@ -306,7 +306,7 @@ QToolTip {
                    <string>Route ID assigned to newly drawn legs</string>
                   </property>
                   <property name="alignment">
-                   <set>Qt::AlignHCenter</set>
+                   <set>Qt::AlignCenter</set>
                   </property>
                   <property name="minimum">
                    <number>1</number>
@@ -332,7 +332,7 @@ QToolTip {
                    <string>ID that will be assigned to the next drawn leg</string>
                   </property>
                   <property name="alignment">
-                   <set>Qt::AlignHCenter</set>
+                   <set>Qt::AlignCenter</set>
                   </property>
                   <property name="minimum">
                    <number>1</number>

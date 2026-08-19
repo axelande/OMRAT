@@ -270,6 +270,14 @@ def _build_hit_matrix(
     hit_matrix = np.full((n_rays, len(obstacles)), np.inf, dtype=float)
     ray_ys = offsets[:, None]
     for obs_idx, (obs, _kind) in enumerate(obstacles):
+        # Bounding-box pre-filter: skip obstacles entirely behind turning point
+        # or beyond MAX_RANGE to keep performance with many split sub-polygons.
+        geom_b = obs["geom"]
+        bx0, by0, bx1, by1 = geom_b.bounds
+        corners = np.array([[bx0, by0], [bx0, by1], [bx1, by0], [bx1, by1]])
+        alongs = (corners - turn_pt) @ ext_dir
+        if alongs.max() <= 0 or alongs.min() >= MAX_RANGE:
+            continue
         edges = _extract_edges_local(obs["geom"], turn_pt, ext_dir, perp)
         if edges is None or edges.shape[0] == 0:
             continue
@@ -413,26 +421,48 @@ def find_closest_computation_index(
 
 
 def _load_depth_obstacles(data: dict, proj: "SimpleProjector") -> list[dict]:
+    """Load depth obstacles, splitting MultiPolygons into individual Polygons.
+
+    Each sub-polygon becomes its own obstacle with ID ``'<did>_<i>'``
+    so the ray caster assigns separate mass/d_mean to each patch.
+    """
     result: list[dict] = []
     for dep in data.get("depths", []):
         try:
             did, depth_val, wkt_str = dep
             geom = sw.loads(wkt_str)
-            result.append({"id": did, "depth": float(depth_val), "geom": _project_wkt_geom(geom, proj)})
+            proj_geom = _project_wkt_geom(geom, proj)
+            depth_f = float(depth_val)
         except Exception:
             continue
+        if proj_geom.geom_type == 'MultiPolygon':
+            for i, poly in enumerate(proj_geom.geoms):
+                result.append({"id": f"{did}_{i}", "depth": depth_f, "geom": poly})
+        else:
+            result.append({"id": str(did), "depth": depth_f, "geom": proj_geom})
     return result
 
 
 def _load_object_obstacles(data: dict, proj: "SimpleProjector") -> list[dict]:
+    """Load structure obstacles, splitting MultiPolygons into individual Polygons.
+
+    Each sub-polygon becomes its own obstacle with ID ``'<oid>_<i>'``
+    so the ray caster assigns separate mass/d_mean to each structure patch.
+    """
     result: list[dict] = []
     for obj in data.get("objects", []):
         try:
             oid, height, wkt_str = obj
             geom = sw.loads(wkt_str)
-            result.append({"id": oid, "height": height, "geom": _project_wkt_geom(geom, proj)})
+            proj_geom = _project_wkt_geom(geom, proj)
+            height_f = float(height) if height else 0.0
         except Exception:
             continue
+        if proj_geom.geom_type == 'MultiPolygon':
+            for i, poly in enumerate(proj_geom.geoms):
+                result.append({"id": f"{oid}_{i}", "height": height_f, "geom": poly})
+        else:
+            result.append({"id": str(oid), "height": height_f, "geom": proj_geom})
     return result
 
 

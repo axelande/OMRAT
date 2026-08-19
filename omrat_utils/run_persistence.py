@@ -104,8 +104,9 @@ def _build_memory_layers(
     pa_report = getattr(calc, 'powered_allision_report', None)
     if pa_report is not None:
         try:
+            pa_structs = getattr(calc, '_last_powered_allision_structs', None) or structures or []
             layers['powered_allision'] = create_powered_allision_layer(
-                pa_report, structures or [], add_to_project=False,
+                pa_report, pa_structs, add_to_project=False,
                 segment_data=segment_data,
             )
         except Exception as exc:

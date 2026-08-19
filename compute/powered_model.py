@@ -282,7 +282,7 @@ class PoweredModelMixin:
         }
         try:
             from geometries.result_layers import create_powered_allision_layer
-            structs_meta = getattr(self, '_last_structures', None) or []
+            structs_meta = getattr(self, '_last_powered_allision_structs', None) or []
             self.powered_allision_layer = create_powered_allision_layer(
                 self.powered_allision_report, structs_meta,
                 add_to_project=False, segment_data=segment_data,
@@ -348,7 +348,6 @@ class PoweredModelMixin:
             return self._emit_empty_allision(total)
 
         pc_allision = float(pc_vals.get('allision', 1.9e-4))
-        obj_heights = self._build_obj_heights(objects_list)
         try:
             first_seg = segment_data[list(segment_data.keys())[0]]
             lon0, lat0 = _parse_point(first_seg["Start_Point"])
@@ -360,6 +359,36 @@ class PoweredModelMixin:
 
         if not all_obstacles:
             return self._emit_empty_allision(total)
+
+        # obj_heights and structs_meta must use the same split IDs as all_obstacles
+        # (which splits MultiPolygons into sub-polygons with IDs like '1_0', '1_1').
+        try:
+            from shapely import wkt as _sw
+        except Exception:
+            _sw = None
+        obj_heights: dict[str, float] = {}
+        structs_meta_for_layer: list[dict] = []
+        for obj in objects_list:
+            try:
+                oid, height, wkt_str = obj
+                height_f = float(height) if height else 0.0
+                if _sw is not None:
+                    geom_wgs84 = _sw.loads(wkt_str)
+                    if geom_wgs84.geom_type == 'MultiPolygon':
+                        for i, poly in enumerate(geom_wgs84.geoms):
+                            sub_id = f"{oid}_{i}"
+                            obj_heights[sub_id] = height_f
+                            structs_meta_for_layer.append(
+                                {'id': sub_id, 'height': height_f, 'wkt_wgs84': poly.wkt}
+                            )
+                        continue
+                obj_heights[str(oid)] = height_f
+                structs_meta_for_layer.append(
+                    {'id': str(oid), 'height': height_f, 'wkt_wgs84': wkt_str}
+                )
+            except Exception:
+                pass
+        self._last_powered_allision_structs = structs_meta_for_layer
 
         computations = _run_all_computations(legs, all_obstacles)
         total, by_obs, by_obs_leg, by_cell = self._sum_allision_contribs(

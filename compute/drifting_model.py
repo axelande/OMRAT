@@ -1757,8 +1757,14 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     geom = _sw.loads(wkt_str) if isinstance(wkt_str, str) else wkt_str
                 except Exception:
                     continue
-                original.append({'id': str(did), 'depth': float(depth_val) if depth_val else 0.0,
-                                 'wkt': geom, 'wkt_wgs84': geom})
+                depth_f = float(depth_val) if depth_val else 0.0
+                if geom.geom_type == 'MultiPolygon':
+                    for i, poly in enumerate(geom.geoms):
+                        original.append({'id': f"{did}_{i}", 'depth': depth_f,
+                                         'wkt': poly, 'wkt_wgs84': poly})
+                else:
+                    original.append({'id': str(did), 'depth': depth_f,
+                                     'wkt': geom, 'wkt_wgs84': geom})
             self._last_depths_original = original
         except Exception:
             self._last_depths_original = []
