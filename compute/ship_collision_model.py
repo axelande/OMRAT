@@ -54,6 +54,11 @@ class ShipCollisionModelMixin:
             return default_midpoints[loa_idx]
         return 150.0
 
+    # Leg pairs meeting at or below this angle are treated as *merging*
+    # rather than *crossing*: two streams converging onto nearly the same
+    # course.  They get their own causation factor (``pc['merging']``).
+    MERGING_ANGLE_DEG: float = 30.0
+
     @staticmethod
     def estimate_beam(loa: float) -> float:
         """Estimate beam from LOA using typical ship ratios (L/B ~ 6-7)."""
@@ -480,11 +485,11 @@ class ShipCollisionModelMixin:
         cells contributing traffic on this leg in proportion to their share
         of total frequency.
         """
-        avg_freq, avg_length, avg_beam, cell_freqs = self._aggregate_bend_flows(
-            leg_dirs, length_intervals,
+        avg_freq, avg_length, avg_beam, avg_speed_ms, cell_freqs = (
+            self._aggregate_bend_flows(leg_dirs, length_intervals)
         )
 
-        if avg_freq <= 0:
+        if avg_freq <= 0 or avg_speed_ms <= 0:
             return 0.0
 
         p_no_turn = 0.01
@@ -499,7 +504,8 @@ class ShipCollisionModelMixin:
         ):
             leg_bend = self._bend_junction_path(
                 junction, leg_id, segment_data,
-                avg_freq, avg_length, avg_beam, p_no_turn, pc_bend,
+                avg_freq, avg_length, avg_beam, avg_speed_ms,
+                p_no_turn, pc_bend,
             )
             if by_cell is not None and leg_bend > 0.0:
                 for cell_key, cf in cell_freqs.items():
@@ -508,23 +514,33 @@ class ShipCollisionModelMixin:
             return leg_bend
 
         return self._bend_legacy_path(
-            seg_info, avg_freq, avg_length, avg_beam, p_no_turn,
-            pc_bend, cell_freqs, by_cell,
+            seg_info, avg_freq, avg_length, avg_beam, avg_speed_ms,
+            p_no_turn, pc_bend, cell_freqs, by_cell,
         )
 
     def _aggregate_bend_flows(
         self,
         leg_dirs: dict[str, Any],
         length_intervals: list[dict],
-    ) -> tuple[float, float, float, dict[str, float]]:
-        """Aggregate per-leg traffic into scalar avg_freq, avg_length, avg_beam and per-cell freqs."""
+    ) -> tuple[float, float, float, float, dict[str, float]]:
+        """Aggregate per-leg traffic into scalars plus per-cell freqs.
+
+        Returns ``(avg_freq, avg_length, avg_beam, avg_speed_ms,
+        cell_freqs)``.  ``avg_speed_ms`` is traffic-weighted -- the bend
+        formula is speed-dependent, so a plain arithmetic mean over
+        near-empty cells would let a rare slow category drag the whole
+        leg's bend frequency up.
+        """
         avg_freq = 0.0
         avg_length = 150.0
         avg_beam = 25.0
         count = 0
+        speed_weighted = 0.0
+        speed_weight = 0.0
         cell_freqs: dict[str, float] = {}
         for dir_key in leg_dirs:
-            freq, _, _ = self._dir_arrays(leg_dirs.get(dir_key, {}))
+            dir_data = leg_dirs.get(dir_key, {})
+            freq, speed, beam = self._dir_arrays(dir_data)
             for loa_i in range(len(freq) if hasattr(freq, '__len__') else 0):
                 for type_j in range(len(freq[loa_i]) if loa_i < len(freq) and hasattr(freq[loa_i], '__len__') else 0):
                     q = float(freq[loa_i][type_j]) if loa_i < len(freq) and type_j < len(freq[loa_i]) else 0.0
@@ -532,11 +548,21 @@ class ShipCollisionModelMixin:
                         avg_freq += q
                         loa_mid = self.get_loa_midpoint(loa_i, length_intervals)
                         avg_length = (avg_length * count + loa_mid) / (count + 1)
-                        avg_beam = (avg_beam * count + self.estimate_beam(loa_mid)) / (count + 1)
+                        beam_cell = self._extract_beam(
+                            beam, loa_i, type_j, self.estimate_beam(loa_mid),
+                        )
+                        avg_beam = (avg_beam * count + beam_cell) / (count + 1)
                         count += 1
+                        v_ms = self._extract_speed_ms(speed, loa_i, type_j)
+                        if v_ms > 0:
+                            speed_weighted += v_ms * q
+                            speed_weight += q
                         cell_key = f"{loa_i}_{type_j}"
                         cell_freqs[cell_key] = cell_freqs.get(cell_key, 0.0) + q
-        return avg_freq, avg_length, avg_beam, cell_freqs
+        avg_speed_ms = (
+            speed_weighted / speed_weight if speed_weight > 0 else 0.0
+        )
+        return avg_freq, avg_length, avg_beam, avg_speed_ms, cell_freqs
 
     def _bend_junction_path(
         self,
@@ -546,6 +572,7 @@ class ShipCollisionModelMixin:
         avg_freq: float,
         avg_length: float,
         avg_beam: float,
+        avg_speed_ms: float,
         p_no_turn: float,
         pc_bend: float,
     ) -> float:
@@ -569,6 +596,7 @@ class ShipCollisionModelMixin:
             n_g_bend = get_bend_collision_candidates(
                 Q=q_pair, P_no_turn=p_no_turn,
                 L=avg_length, B=avg_beam, theta=bend_angle_rad,
+                V=avg_speed_ms,
             )
             leg_bend += n_g_bend * pc_bend
         return leg_bend
@@ -579,6 +607,7 @@ class ShipCollisionModelMixin:
         avg_freq: float,
         avg_length: float,
         avg_beam: float,
+        avg_speed_ms: float,
         p_no_turn: float,
         pc_bend: float,
         cell_freqs: dict[str, float],
@@ -592,6 +621,7 @@ class ShipCollisionModelMixin:
         n_g_bend = get_bend_collision_candidates(
             Q=avg_freq, P_no_turn=p_no_turn,
             L=avg_length, B=avg_beam, theta=bend_angle_rad,
+            V=avg_speed_ms,
         )
         leg_bend = n_g_bend * pc_bend
         if by_cell is not None and leg_bend > 0.0 and avg_freq > 0.0:
@@ -606,26 +636,31 @@ class ShipCollisionModelMixin:
         segment_data: dict[str, Any],
         leg_keys: list[str],
         pc_crossing: float,
+        pc_merging: float,
         length_intervals: list[dict],
-        by_waypoint: dict[tuple[float, float], float] | None = None,
+        by_waypoint: dict[tuple[float, float], dict[str, float]] | None = None,
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None = None,
         by_cell_crossing: dict[str, float] | None = None,
         by_cell_merging: dict[str, float] | None = None,
         junctions: dict[str, Junction] | None = None,
-    ) -> float:
-        """Calculate crossing collision frequency between all leg pairs.
+    ) -> dict[str, float]:
+        """Calculate crossing + merging frequency between all leg pairs.
 
-        Crossing collisions occur where two different legs share a waypoint
-        and meet at a non-trivial angle.
+        Two different legs sharing a waypoint are classified once, from
+        their meeting angle: at or below 30 degrees the encounter is
+        **merging** (two streams converging onto nearly the same course),
+        above it **crossing**.  Each kind carries its own causation
+        factor, and the two are returned separately::
 
-        Returns the total crossing collision frequency.
+            {'crossing': float, 'merging': float}
 
         If ``by_waypoint`` is provided, per-waypoint contributions are
-        accumulated into it (key = ``(lon, lat)``).  This lets the result
-        layer place a point at each shared waypoint with the summed
-        crossing probability for legs meeting there.
+        accumulated into it (key = ``(lon, lat)``, value = a dict with
+        ``crossing`` / ``merging`` keys).  This lets the result layer
+        place a point at each shared waypoint with the summed probability
+        for legs meeting there.
         """
-        total_crossing = 0.0
+        totals: dict[str, float] = {'crossing': 0.0, 'merging': 0.0}
         total_legs = len(leg_keys)
         crossing_pairs_processed = 0
         total_pairs = total_legs * (total_legs - 1) // 2
@@ -637,15 +672,16 @@ class ShipCollisionModelMixin:
                 if j <= i:
                     continue
 
-                contrib = self._crossing_pair_contribution(
+                kind, contrib = self._crossing_pair_contribution(
                     leg1_key, leg2_key,
                     traffic_data, segment_data,
-                    pc_crossing, length_intervals,
+                    pc_crossing, pc_merging, length_intervals,
                     by_waypoint, by_leg_pair,
                     by_cell_crossing, by_cell_merging,
                     junctions,
                 )
-                total_crossing += contrib
+                if kind is not None:
+                    totals[kind] += contrib
 
                 crossing_pairs_processed += 1
                 if total_pairs > 0:
@@ -655,7 +691,7 @@ class ShipCollisionModelMixin:
                         f"Processing crossing pair {leg1_key}-{leg2_key}..."
                     )
 
-        return total_crossing
+        return totals
 
     def _crossing_pair_contribution(
         self,
@@ -664,14 +700,19 @@ class ShipCollisionModelMixin:
         traffic_data: dict[str, Any],
         segment_data: dict[str, Any],
         pc_crossing: float,
+        pc_merging: float,
         length_intervals: list[dict],
-        by_waypoint: dict[tuple[float, float], float] | None,
+        by_waypoint: dict[tuple[float, float], dict[str, float]] | None,
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None,
         by_cell_crossing: dict[str, float] | None,
         by_cell_merging: dict[str, float] | None,
         junctions: dict[str, Junction] | None,
-    ) -> float:
-        """Compute crossing contribution for one leg pair; returns 0.0 when not applicable."""
+    ) -> tuple[str | None, float]:
+        """Compute one leg pair's contribution.
+
+        Returns ``(kind, frequency)`` where ``kind`` is ``'crossing'`` or
+        ``'merging'``, or ``(None, 0.0)`` when the pair does not meet.
+        """
         seg1 = segment_data.get(leg1_key, {})
         seg2 = segment_data.get(leg2_key, {})
 
@@ -679,23 +720,24 @@ class ShipCollisionModelMixin:
             leg1_key, leg2_key, seg1, seg2, junctions,
         )
         if shared_pt is None or crossing_angle_rad is None:
-            return 0.0
+            return None, 0.0
 
         crossing_angle = crossing_angle_rad * 180.0 / np.pi
-        kind = 'merging' if crossing_angle <= 30.0 else 'crossing'
+        kind = 'merging' if crossing_angle <= self.MERGING_ANGLE_DEG else 'crossing'
+        pc_kind = pc_merging if kind == 'merging' else pc_crossing
 
         leg1_dirs = traffic_data.get(leg1_key, {})
         leg2_dirs = traffic_data.get(leg2_key, {})
 
         pair_total = self._sum_crossing_pair_traffic(
             leg1_dirs, leg2_dirs,
-            crossing_angle_rad, conflict_factor, pc_crossing, length_intervals,
+            crossing_angle_rad, conflict_factor, pc_kind, length_intervals,
             shared_pt, kind,
             by_waypoint, by_leg_pair,
             by_cell_crossing, by_cell_merging,
             leg1_key, leg2_key,
         )
-        return pair_total
+        return kind, pair_total
 
     def _crossing_geometry(
         self,
@@ -766,7 +808,7 @@ class ShipCollisionModelMixin:
         length_intervals: list[dict],
         shared_pt: tuple[float, float],
         kind: str,
-        by_waypoint: dict[tuple[float, float], float] | None,
+        by_waypoint: dict[tuple[float, float], dict[str, float]] | None,
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None,
         by_cell_crossing: dict[str, float] | None,
         by_cell_merging: dict[str, float] | None,
@@ -811,7 +853,7 @@ class ShipCollisionModelMixin:
         length_intervals: list[dict],
         shared_pt: tuple[float, float],
         kind: str,
-        by_waypoint: dict[tuple[float, float], float] | None,
+        by_waypoint: dict[tuple[float, float], dict[str, float]] | None,
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None,
         by_cell_crossing: dict[str, float] | None,
         by_cell_merging: dict[str, float] | None,
@@ -864,7 +906,7 @@ class ShipCollisionModelMixin:
         loa_i: int, type_j: int,
         loa_k: int, type_l: int,
         crossing_angle: float,
-        by_waypoint: dict[tuple[float, float], float] | None,
+        by_waypoint: dict[tuple[float, float], dict[str, float]] | None,
         by_leg_pair: dict[tuple[str, str], dict[str, Any]] | None,
         by_cell_crossing: dict[str, float] | None,
         by_cell_merging: dict[str, float] | None,
@@ -873,7 +915,10 @@ class ShipCollisionModelMixin:
     ) -> None:
         """Update all accumulator dicts for one crossing cell-pair contribution."""
         if by_waypoint is not None:
-            by_waypoint[shared_pt] = by_waypoint.get(shared_pt, 0.0) + contrib
+            rec_wp = by_waypoint.setdefault(
+                shared_pt, {'crossing': 0.0, 'merging': 0.0},
+            )
+            rec_wp[kind] = rec_wp.get(kind, 0.0) + contrib
         if by_leg_pair is not None:
             pair_key = (str(leg1_key), str(leg2_key))
             rec = by_leg_pair.setdefault(
@@ -896,7 +941,7 @@ class ShipCollisionModelMixin:
         """Build the skeleton collision report and by-cell accumulators."""
         result: dict[str, float] = {
             'head_on': 0.0, 'overtaking': 0.0,
-            'crossing': 0.0, 'bend': 0.0, 'total': 0.0,
+            'crossing': 0.0, 'merging': 0.0, 'bend': 0.0, 'total': 0.0,
         }
         by_cell: dict[str, dict[str, float]] = {
             'head_on': {}, 'overtaking': {}, 'bend': {},
@@ -941,7 +986,9 @@ class ShipCollisionModelMixin:
         if leg_bend > 0.0:
             end_pt = self._parse_point(seg_info.get('End_Point', ''))
             if end_pt is not None:
-                rec = by_waypoint.setdefault(end_pt, {'crossing': 0.0, 'bend': 0.0})
+                rec = by_waypoint.setdefault(
+                    end_pt, {'crossing': 0.0, 'merging': 0.0, 'bend': 0.0},
+                )
                 rec['bend'] += leg_bend
 
         return {'head_on': leg_head_on, 'overtaking': leg_overtaking, 'bend': leg_bend}
@@ -1004,14 +1051,27 @@ class ShipCollisionModelMixin:
         }
 
     def _update_collision_ui(self, result: dict[str, float]) -> None:
-        """Push collision totals into the UI line-edit widgets."""
-        try:
-            self.p.main_widget.LEPHeadOnCollision.setText(f"{result['head_on']:.3e}")
-            self.p.main_widget.LEPOvertakingCollision.setText(f"{result['overtaking']:.3e}")
-            self.p.main_widget.LEPCrossingCollision.setText(f"{result['crossing']:.3e}")
-            self.p.main_widget.LEPMergingCollision.setText(f"{result['bend']:.3e}")
-        except Exception:  # nosec B110 B112
-            pass
+        """Push collision totals into the UI line-edit widgets.
+
+        One widget per accident type.  ``LEPMergingCollision`` used to be
+        fed ``result['bend']``; merging and bend are separate accident
+        types since v0.14.0 and each has its own widget.
+        """
+        mw = self.p.main_widget
+        for attr, key in (
+            ('LEPHeadOnCollision', 'head_on'),
+            ('LEPOvertakingCollision', 'overtaking'),
+            ('LEPCrossingCollision', 'crossing'),
+            ('LEPMergingCollision', 'merging'),
+            ('LEPBendCollision', 'bend'),
+        ):
+            widget = getattr(mw, attr, None)
+            if widget is None:
+                continue
+            try:
+                widget.setText(f"{result.get(key, 0.0):.3e}")
+            except Exception:  # nosec B110 B112
+                pass
 
     def _finalize_collision_layers(
         self,
@@ -1034,14 +1094,21 @@ class ShipCollisionModelMixin:
     @staticmethod
     def _extract_pc_and_intervals(
         data: dict[str, Any], pc_vals: dict[str, Any],
-    ) -> tuple[float, float, float, float, list[dict]]:
-        """Return (pc_headon, pc_overtaking, pc_crossing, pc_bend, length_intervals)."""
+    ) -> tuple[float, float, float, float, float, list[dict]]:
+        """Return the five causation factors plus ``length_intervals``.
+
+        Order: ``(headon, overtaking, crossing, merging, bend)``.
+        """
         pc_headon = float(pc_vals.get('headon', 4.9e-5))
         pc_overtaking = float(pc_vals.get('overtaking', 1.1e-4))
         pc_crossing = float(pc_vals.get('crossing', 1.3e-4))
+        pc_merging = float(pc_vals.get('merging', 1.3e-4))
         pc_bend = float(pc_vals.get('bend', 1.3e-4))
         length_intervals = data.get('ship_categories', {}).get('length_intervals', [])
-        return pc_headon, pc_overtaking, pc_crossing, pc_bend, length_intervals
+        return (
+            pc_headon, pc_overtaking, pc_crossing, pc_merging, pc_bend,
+            length_intervals,
+        )
 
     def _run_per_leg_loop(
         self,
@@ -1082,30 +1149,35 @@ class ShipCollisionModelMixin:
         segment_data: dict[str, Any],
         leg_keys: list[str],
         pc_crossing: float,
+        pc_merging: float,
         length_intervals: list[dict],
         junctions: dict[str, Junction] | None,
         by_waypoint: dict[tuple[float, float], dict[str, float]],
     ) -> tuple[
-        float,
+        dict[str, float],
         dict[tuple[str, str], dict[str, Any]],
         dict[str, float],
         dict[str, float],
     ]:
-        """Run crossing collisions and merge results into by_waypoint."""
+        """Run crossing + merging collisions and fold into by_waypoint."""
         by_cell_cr: dict[str, float] = {}
         by_cell_mg: dict[str, float] = {}
-        crossing_by_wp: dict[tuple[float, float], float] = {}
+        crossing_by_wp: dict[tuple[float, float], dict[str, float]] = {}
         crossing_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
-        total_crossing = self._calc_crossing_collisions(
-            traffic_data, segment_data, leg_keys, pc_crossing, length_intervals,
+        totals = self._calc_crossing_collisions(
+            traffic_data, segment_data, leg_keys,
+            pc_crossing, pc_merging, length_intervals,
             by_waypoint=crossing_by_wp, by_leg_pair=crossing_by_pair,
             by_cell_crossing=by_cell_cr, by_cell_merging=by_cell_mg,
             junctions=junctions,
         )
-        for pt, contrib in crossing_by_wp.items():
-            rec = by_waypoint.setdefault(pt, {'crossing': 0.0, 'bend': 0.0})
-            rec['crossing'] += contrib
-        return total_crossing, crossing_by_pair, by_cell_cr, by_cell_mg
+        for pt, rec_wp in crossing_by_wp.items():
+            rec = by_waypoint.setdefault(
+                pt, {'crossing': 0.0, 'merging': 0.0, 'bend': 0.0},
+            )
+            rec['crossing'] += float(rec_wp.get('crossing', 0.0) or 0.0)
+            rec['merging'] += float(rec_wp.get('merging', 0.0) or 0.0)
+        return totals, crossing_by_pair, by_cell_cr, by_cell_mg
 
     def _assemble_collision_report(
         self,
@@ -1119,7 +1191,7 @@ class ShipCollisionModelMixin:
         by_cell_crossing: dict[str, float],
         by_cell_merging: dict[str, float],
         pc_headon: float, pc_overtaking: float,
-        pc_crossing: float, pc_bend: float,
+        pc_crossing: float, pc_merging: float, pc_bend: float,
         segment_data: dict[str, Any],
         leg_keys: list[str],
     ) -> None:
@@ -1140,7 +1212,8 @@ class ShipCollisionModelMixin:
             },
             'causation_factors': {
                 'headon': pc_headon, 'overtaking': pc_overtaking,
-                'crossing': pc_crossing, 'bend': pc_bend,
+                'crossing': pc_crossing, 'merging': pc_merging,
+                'bend': pc_bend,
             },
         }
 
@@ -1160,7 +1233,8 @@ class ShipCollisionModelMixin:
                   and ship_categories
 
         Returns:
-            dict with keys: 'head_on', 'overtaking', 'crossing', 'bend', 'total'
+            dict with keys: 'head_on', 'overtaking', 'crossing',
+            'merging', 'bend', 'total'
         """
         result, by_cell_init = self._init_collision_report()
         traffic_data = data.get('traffic_data', {})
@@ -1173,9 +1247,9 @@ class ShipCollisionModelMixin:
             self.collision_report = {'totals': result, 'by_leg': {}, 'by_cell': by_cell_init}
             return result
 
-        pc_ho, pc_ot, pc_cr, pc_be, length_intervals = self._extract_pc_and_intervals(
-            data, pc_vals,
-        )
+        (
+            pc_ho, pc_ot, pc_cr, pc_mg, pc_be, length_intervals,
+        ) = self._extract_pc_and_intervals(data, pc_vals)
         leg_keys = list(traffic_data.keys())
         self._report_progress('spatial', 0.0, "Starting ship collision calculations...")
 
@@ -1183,34 +1257,41 @@ class ShipCollisionModelMixin:
             leg_keys, traffic_data, segment_data,
             pc_ho, pc_ot, pc_be, length_intervals, junctions,
         )
-        total_crossing, crossing_by_pair, by_cell_cr, by_cell_mg = (
+        crossing_totals, crossing_by_pair, by_cell_cr, by_cell_mg = (
             self._run_crossing_and_merge_waypoints(
-                traffic_data, segment_data, leg_keys, pc_cr,
+                traffic_data, segment_data, leg_keys, pc_cr, pc_mg,
                 length_intervals, junctions, by_waypoint,
             )
         )
 
-        self._fill_result_totals(result, by_leg, total_crossing)
+        self._fill_result_totals(result, by_leg, crossing_totals)
         self.ship_collision_prob = result['total']
         self._assemble_collision_report(
             result, by_leg, by_waypoint, crossing_by_pair,
             by_cell_ho, by_cell_ot, by_cell_be, by_cell_cr, by_cell_mg,
-            pc_ho, pc_ot, pc_cr, pc_be, segment_data, leg_keys,
+            pc_ho, pc_ot, pc_cr, pc_mg, pc_be, segment_data, leg_keys,
         )
         self._report_progress('layers', 1.0, "Ship collision calculation complete")
         self._finalize_collision_layers(segment_data)
         self._update_collision_ui(result)
         return result
 
-    @staticmethod
+    #: Accident types summed into ``result['total']``.
+    TOTAL_KEYS: tuple[str, ...] = (
+        'head_on', 'overtaking', 'crossing', 'merging', 'bend',
+    )
+
+    @classmethod
     def _fill_result_totals(
+        cls,
         result: dict[str, float],
         by_leg: dict[str, dict[str, float]],
-        total_crossing: float,
+        crossing_totals: dict[str, float],
     ) -> None:
         """Write summed per-type frequencies into the result dict in-place."""
         result['head_on'] = sum(v['head_on'] for v in by_leg.values())
         result['overtaking'] = sum(v['overtaking'] for v in by_leg.values())
-        result['crossing'] = total_crossing
+        result['crossing'] = float(crossing_totals.get('crossing', 0.0) or 0.0)
+        result['merging'] = float(crossing_totals.get('merging', 0.0) or 0.0)
         result['bend'] = sum(v['bend'] for v in by_leg.values())
-        result['total'] = sum(result[k] for k in ('head_on', 'overtaking', 'crossing', 'bend'))
+        result['total'] = sum(result[k] for k in cls.TOTAL_KEYS)

@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from omrat_utils.causation_factors import CausationFactors
+from omrat_utils.causation_factors import (  # noqa: E402
+    CausationFactors,
+)
 
 
 @pytest.fixture
@@ -28,18 +30,45 @@ class TestCausationFactorDefaults:
         assert d['headon'] == pytest.approx(4.9e-5)
         assert d['overtaking'] == pytest.approx(1.1e-4)
         assert d['crossing'] == pytest.approx(1.3e-4)
+        assert d['merging'] == pytest.approx(1.3e-4)
         assert d['bend'] == pytest.approx(1.3e-4)
         assert d['grounding'] == pytest.approx(1.6e-4)
         assert d['allision'] == pytest.approx(1.9e-4)
 
 
+class TestFieldCoverage:
+    """Every key in the defaults must have a widget, and vice versa.
+
+    ``set_values`` indexes ``self.data`` directly, so a factor added to
+    the defaults without a matching field (or the reverse) raises
+    KeyError / AttributeError at runtime rather than being caught here.
+    """
+
+    # Keys in ``default_pc_values()`` that are not edited in this dialog.
+    _NON_WIDGET_KEYS = {
+        'allision_drifting_rf', 'grounding_drifting_rf',
+        'allision_pc', 'allision_no_turn_pc', 'grounding_no_turn_pc',
+        'mean_time_between_checks',
+    }
+
+    def test_set_values_then_commit_covers_every_default_key(self, cf):
+        """Round-tripping the untouched defaults must be an identity."""
+        original = dict(cf.data)
+        cf.set_values()
+        cf.commit_changes()
+        for key, value in original.items():
+            if key in self._NON_WIDGET_KEYS:
+                continue
+            assert cf.data[key] == pytest.approx(value), key
+
+
 class TestSetValuesAndCommitChanges:
     def test_set_values_writes_to_widgets(self, cf):
-        """set_values pushes the 8 values to the corresponding widgets."""
+        """set_values pushes the 9 values to the corresponding widgets."""
         cf.data = dict(
             p_pc=0.1, d_pc=0.2,
             headon=0.3, overtaking=0.4, crossing=0.5,
-            bend=0.6, grounding=0.7, allision=0.8,
+            merging=0.55, bend=0.6, grounding=0.7, allision=0.8,
         )
         cf.set_values()
         assert cf.cfw.lePoweredPc.text() == '0.1'
@@ -47,6 +76,7 @@ class TestSetValuesAndCommitChanges:
         assert cf.cfw.leHeadOnCf.text() == '0.3'
         assert cf.cfw.leOvertakingCf.text() == '0.4'
         assert cf.cfw.leCrossingCf.text() == '0.5'
+        assert cf.cfw.leMergingCf.text() == '0.55'
         assert cf.cfw.leBendCf.text() == '0.6'
         assert cf.cfw.leGroundingCf.text() == '0.7'
         assert cf.cfw.leAllisionCf.text() == '0.8'
@@ -58,6 +88,7 @@ class TestSetValuesAndCommitChanges:
         cf.cfw.leHeadOnCf.setText('0.33')
         cf.cfw.leOvertakingCf.setText('0.44')
         cf.cfw.leCrossingCf.setText('0.55')
+        cf.cfw.leMergingCf.setText('0.555')
         cf.cfw.leBendCf.setText('0.66')
         cf.cfw.leGroundingCf.setText('0.77')
         cf.cfw.leAllisionCf.setText('0.88')
@@ -66,7 +97,7 @@ class TestSetValuesAndCommitChanges:
         assert cf.data == {
             'p_pc': 0.11, 'd_pc': 0.22,
             'headon': 0.33, 'overtaking': 0.44,
-            'crossing': 0.55, 'bend': 0.66,
+            'crossing': 0.55, 'merging': 0.555, 'bend': 0.66,
             'grounding': 0.77, 'allision': 0.88,
         }
 
@@ -75,7 +106,8 @@ class TestSetValuesAndCommitChanges:
         original = dict(
             p_pc=0.00016, d_pc=1.0,
             headon=4.9e-5, overtaking=1.1e-4, crossing=1.3e-4,
-            bend=1.3e-4, grounding=1.6e-4, allision=1.9e-4,
+            merging=1.3e-4, bend=1.3e-4, grounding=1.6e-4,
+            allision=1.9e-4,
         )
         cf.data = dict(original)
         cf.set_values()

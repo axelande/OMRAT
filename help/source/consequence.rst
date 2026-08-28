@@ -11,7 +11,7 @@ larger than a user-defined size is expected to happen.
 
 The module is reached via the **Consequence** menu in the plugin
 toolbar.  Four dialogs configure the inputs; the actual calculation
-runs as the last phase of **Run Model** and writes its result into the
+runs as the last phase of **Run model** and writes its result into the
 "Catastrophe results" table on the Run Analysis tab.
 
 
@@ -55,7 +55,7 @@ Override any cell directly; the dialog uses spinboxes ranged 0 to
 Spill probability per accident
 ------------------------------
 
-8 rows (one per accident category) x 4 columns (no spill / small /
+9 rows (one per accident category) x 4 columns (no spill / small /
 medium / catastrophic) in percent.  **Each row must sum to 100% +/-
 0.05%** -- the dialog refuses to save until it does.
 

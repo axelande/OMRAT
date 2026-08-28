@@ -20,8 +20,9 @@ The dock widget
 =================
 
 OMRAT's entire UI lives in one dockable widget.  The top of the widget
-has a **menu bar** (File, Settings, View) and the main area has a
-stack of **tabs**:
+has a **menu bar** (File, Settings, Consequence, Help) and the main
+area has a stack of seven **tabs** -- Routes, Traffic Data, Depths,
+Objects, Run Analysis, Drift Analysis and Compare:
 
 .. figure:: _static/screenshots/ui_dock_tabs_annotated.png
    :width: 100%
@@ -30,18 +31,21 @@ stack of **tabs**:
    The dock widget.  Menu at top, tabs in the middle, progress and
    messages at the bottom.
 
-The workflow is to fill tabs left-to-right, then press **Run Model**
-on the Results tab.  You can come back and tweak any tab and rerun.
+The workflow is to fill tabs left-to-right, then press **Run model**
+on the Run Analysis tab.  You can come back and tweak any tab and
+rerun.
 
 
-Route tab
-=========
+Routes tab
+==========
 
 .. figure:: _static/screenshots/ui_tab_route.png
    :width: 90%
-   :alt: The Route tab showing the segment table
+   :alt: The Routes tab showing the segment table
 
-   The Route tab lists every leg of the shipping route.
+   The Routes tab lists every leg of the shipping route.  The
+   lateral distribution panel (see :ref:`lateral-distributions`)
+   lives on the same tab, underneath the table.
 
 A **route** is a polyline split into one or more **segments** (legs).
 Each segment has:
@@ -49,7 +53,8 @@ Each segment has:
 * **Start_Point** / **End_Point** -- lon/lat of the two endpoints.
 * **Width** -- the lateral extent (metres) used to draw the corridor
   marker on the map.  This is *visualisation only*; the actual lateral
-  spread used in the calculation comes from the Distributions tab.
+  spread used in the calculation comes from the distribution panel
+  lower down the same tab.
 * **Dirs** -- the two direction labels auto-derived from the segment's
   compass bearing (``"North going"`` / ``"South going"``, etc.).
 * **bearing** -- stored compass bearing in degrees.
@@ -137,19 +142,35 @@ What flows downstream
        waypoint.
 
 
-Traffic tab
-============
+Traffic Data tab
+================
 
 .. figure:: _static/screenshots/ui_tab_traffic.png
    :width: 90%
-   :alt: The Traffic tab showing the traffic matrix
+   :alt: The Traffic Data tab showing the traffic matrix
 
-   The Traffic tab.  Matrix rows are ship types, columns are LOA
-   (length) bins.
+   The Traffic Data tab.  Matrix rows are ship types, columns are
+   LOA (length) bins.
 
 Every segment, in every direction, has its own traffic matrix.  Select
-a segment and direction using the dropdowns at the top, then pick a
-variable (Frequency, Speed, Draught, Height, Beam) to edit.
+a segment and direction using the first two dropdowns at the top,
+then use the third to pick which variable to edit:
+**Frequency (ships/year)**, **Speed (knots)**, **Draught (meters)**,
+**Ship heights (meters)** or **Scaling (%)**.
+
+.. note::
+
+   ``Ship Beam (meters)`` is a sixth variable that is stored per cell
+   and populated by the AIS refresh, but it is deliberately **not**
+   offered in the dropdown -- there is no way to edit it by hand.  It
+   *is* consumed by the ship-ship collision model, which uses it for
+   the collision width :math:`B_{ij}` in the head-on / overtaking
+   geometric probability and for the collision diameter
+   :math:`D_{ij}` in the
+   crossing and bend formulas.  When a cell has no AIS observation,
+   the model falls back to an L/B ratio estimate from the LOA bin
+   midpoint (``ShipCollisionModel.estimate_beam``), so a hand-entered
+   project still gets sensible beams.
 
 Matrix shape
 ------------
@@ -195,7 +216,7 @@ Variables
 Scaling traffic up or down
 --------------------------
 
-The Traffic tab has an **easy option** for bumping all (or some) of
+The Traffic Data tab has an **easy option** for bumping all (or some) of
 the traffic up or down by a percentage -- useful for "what if the
 forecast goes up 30 %?" sensitivities without editing every cell.
 
@@ -268,15 +289,17 @@ Adding depths
 
 Three ways:
 
-* **Add Simple Depth** -- enter a depth value, draw a polygon on the
-  map.
-* **Load Depth** -- pick a shapefile; OMRAT imports every polygon and
+* **Add manually** -- enter a depth value, draw a polygon on the map.
+* **Load** -- pick a polygon layer; OMRAT imports every polygon and
   uses the ``depth`` attribute (or the first numeric attribute) as the
   depth value.
-* **Fetch GEBCO Depths** -- requires an OpenTopography API key in
-  Settings.  The plugin downloads GEBCO bathymetry for the project
-  bbox + padding and vectorises it into depth polygons at the depths
-  you specify.
+* **Remove** -- delete the selected row.
+* **Fetch GEBCO depth** -- requires an OpenTopography API key, pasted
+  into the **API Key** field on this same tab (not in Settings).
+  Enter the bounding box (**Lower-left** / **Upper-right** lat/lon),
+  a **Max depth** and a **Depth interval**, click **Update list** to
+  preview the contour levels, then fetch.  The plugin downloads GEBCO
+  bathymetry and vectorises it into depth polygons at those depths.
 
 How depths drive the calculation
 --------------------------------
@@ -312,8 +335,9 @@ Each row has:
 Adding structures
 -----------------
 
-* **Add Simple Object** -- enter a height, draw a polygon on the map.
-* **Load Object** -- pick a shapefile with a ``height`` attribute.
+* **Add manually** -- enter a height, draw a polygon on the map.
+* **Load** -- pick a polygon layer with a ``height`` attribute.
+* **Remove** -- delete the selected row.
 
 How objects drive the calculation
 ---------------------------------
@@ -334,15 +358,22 @@ How objects drive the calculation
   wind farms and full-height piers).
 
 
-Distributions tab
-=================
+.. _lateral-distributions:
+
+Lateral distributions
+=====================
+
+.. note::
+
+   These controls are **not** a separate tab -- they sit in the
+   scrollable panel underneath the route table on the **Routes** tab.
 
 .. figure:: _static/screenshots/ui_tab_distributions.png
    :width: 90%
-   :alt: The Distributions tab showing the combined PDF plot
+   :alt: The distribution panel showing the combined PDF plot
 
-   The Distributions tab.  Two directions per segment; each direction
-   can have up to three Gaussians plus a uniform component.
+   The lateral distribution panel.  Two directions per segment; each
+   direction can have up to three Gaussians plus a uniform component.
 
 Per segment, per direction, you can define the **lateral traffic
 distribution** -- the PDF of where ships are positioned relative to
@@ -408,7 +439,7 @@ Fields
 * **Depth threshold** -- hide depth polygons shallower than this (so
   the corridor isn't cluttered by the near-shore bathymetry).
 * **Height threshold** -- same for structures.
-* **Run Drift Analysis** -- kicks off
+* **Run analysis** -- kicks off
   :class:`~geometries.drift_corridor_task_v2.DriftCorridorTask` in a
   background thread.
 
@@ -429,26 +460,34 @@ or collide on.
    polygon closer to the leg.
 
 
-Run Analysis tab (Results)
-==========================
+Run Analysis tab
+================
 
 .. note::
 
-   This is the tab labelled **Run Analysis** in the dock widget.  The
-   heading "Results" is the historic name and is still used in some
-   reference material -- they are the same tab.
+   Older reference material calls this the "Results" tab.  It is the
+   same tab; the widget label is **Run Analysis**.
 
 
 .. figure:: _static/screenshots/ui_tab_results.png
    :width: 90%
-   :alt: The Results tab with Run Model button and result fields
+   :alt: The Run Analysis tab with Run model button and result tables
 
-   The Results tab.
+   The Run Analysis tab.
 
-Clicking **Run Model** kicks off a
-:class:`~compute.calculation_task.CalculationTask` that runs all four
-risk models in sequence.  The task runs in the background so QGIS
-stays responsive.
+Fill in **Name of the model** and **File path** (the ``...`` button
+opens a folder picker), then click **Run model**.  The button stays
+disabled until both are set.  It kicks off a
+:class:`~compute.calculation_task.CalculationTask` that runs the
+drifting, ship-ship collision, powered grounding and powered allision
+models in sequence, followed by the oil-spill consequence step.  The
+task runs in the background so QGIS stays responsive.
+
+Results land in two tables: **Accident probabilities** (one row per
+accident type, with a **View** drill-down button) and
+**Catastrophe-level exceedance (events/year)**.  **Previous runs**
+above them lists every run in the history; select one and click
+**Add selected run results to map** to load its GeoPackage.
 
 Result fields
 -------------
@@ -476,20 +515,37 @@ events/year or roughly one event every 9 years).
    * - **LEPOvertakingCollision**
      - Same leg, same direction, different speeds.
    * - **LEPCrossingCollision**
-     - Two legs that share a waypoint at a non-trivial angle.
+     - Two legs sharing a waypoint and meeting at more than 30
+       degrees.
    * - **LEPMergingCollision**
-     - Ship fails to turn at a bend on the same leg.
+     - Two legs sharing a waypoint and meeting at 30 degrees or
+       less -- streams converging onto nearly the same course.  Same
+       equations as crossing, its own causation factor.
+   * - **LEPBendCollision**
+     - One leg changing direction at a waypoint: a ship fails to
+       turn and hits traffic that did.
 
-The **View** button next to each field opens a drill-down dialog with
-per-segment and per-obstacle contributions.  These are useful for
-locating the single obstacle that dominates the total risk.
+.. note:: Changed in v0.14.0
+
+   ``LEPMergingCollision`` used to be fed the *bend* total, and
+   merging itself was summed into crossing.  They are now three
+   distinct rows.  See :ref:`merging-collisions` and the
+   crossing-formula warning in :ref:`collisions`.
+
+The **View** button next to each row opens a drill-down dialog with
+per-segment and per-obstacle contributions for the run selected in
+**Previous runs**.  These are useful for locating the single obstacle
+that dominates the total risk.
 
 
 Settings menu
 =============
 
-Settings are split across four sub-dialogs accessed from the
-**Settings** menu.
+Settings are split across six sub-dialogs accessed from the
+**Settings** menu: **Drift settings**, **Ship Categories**,
+**Causation Factors**, **AIS connection settings**,
+**Database setup wizard...** and **Junction transition matrix...**
+(the last one is documented in :ref:`junctions`).
 
 Drift settings
 --------------
@@ -535,6 +591,11 @@ Causation factors
    Default values come from Fujii (1974), Pedersen (1995), and the
    IALA IWRAP manual.  See :ref:`theory` for the reference table.
 
+Eight fields: powered, drifting, head-on, overtaking, crossing,
+**merging**, bend, grounding and allision.  The merging factor was
+added in v0.14.0 and defaults to the crossing value -- IWRAP
+publishes no separate figure for it (see :ref:`merging-collisions`).
+
 Ship Categories
 ---------------
 
@@ -543,7 +604,7 @@ Ship Categories
    :alt: Ship Categories dialog
 
    Edit the type names (rows of the traffic matrix) and the LOA bins
-   (columns).  Changing these rebuilds the Traffic tab matrix.
+   (columns).  Changing these rebuilds the Traffic Data matrix.
 
 AIS connection
 --------------
@@ -557,8 +618,10 @@ AIS connection
    plain text, so treat ``.omrat`` files as sensitive if you fill
    this in.
 
-This dialog only stores credentials.  To stand up the database itself,
-ingest raw AIS files, and verify that segments are queryable, see
+This dialog only stores credentials.  **Database setup wizard...** on
+the same menu walks you through creating the database and ingesting
+data.  To stand up the database itself, ingest raw AIS files, and
+verify that segments are queryable, see
 :ref:`database-setup`.
 
 
@@ -571,12 +634,18 @@ File menu
 * **Export to IWRAP XML** / **Import from IWRAP XML** -- exchange with
   the IALA IWRAP reference tool.  Useful for cross-validating OMRAT
   results against IWRAP on the same project.
+* **Manage previous runs...** -- browse, re-load and delete entries
+  in the run history.
+
+Two further menus sit alongside it: **Consequence** (the four
+oil-spill inputs described in :ref:`consequence`) and **Help**, which
+opens this documentation in a browser.
 
 
 Run history (Previous runs)
 ============================
 
-OMRAT keeps a history of every Run Model invocation in two places:
+OMRAT keeps a history of every **Run model** invocation in two places:
 
 * one **per-run GeoPackage** in the output folder you select, named
   ``<model_name>_<YYYYMMDD_HHMMSS>.gpkg``, holding the actual
@@ -596,21 +665,28 @@ The master database location:
 * **Linux**: ``~/.local/share/OMRAT/omrat_history.sqlite``.
 * **macOS**: ``~/Library/Application Support/OMRAT/omrat_history.sqlite``.
 
-Output folder + Run Model gating
+Output folder + Run model gating
 --------------------------------
 
-Run Model is **disabled** until you select an output folder.  Use the
-**File path** ``...`` button on the Run Analysis tab to pick one --
-the chosen path is remembered between sessions.  Once a valid folder
-is selected, Run Model becomes available.
+**Run model** is **disabled** until *both* **Name of the model** and
+**File path** are filled in.  Use the **File path** ``...`` button on
+the Run Analysis tab to pick a folder -- the chosen path is
+remembered between sessions.  If you trigger the run some other way
+with either field empty, a popup names the missing one and nothing
+runs.
 
 Naming a run
 ------------
 
 The **Name of the model** field on the Run Analysis tab becomes the
-run's name AND the per-run GeoPackage's filename prefix.  Leave it
-blank and OMRAT auto-names the run ``run_<YYYYMMDD>_<HHMMSS>`` based
-on the start time.
+run's name AND the filename prefix for all three artefacts written to
+the output folder:
+
+* ``<name>_<YYYYMMDD_HHMMSS>.gpkg`` -- the result layers.
+* ``<name>_<YYYYMMDD_HHMMSS>.omrat`` -- a read-only snapshot of the
+  inputs the calculation actually consumed.
+* ``<name>_results_<YYYYMMDD_HHMMSS>.md`` -- a Markdown report
+  covering every accident type.
 
 Note: result layers are no longer auto-added to the QGIS canvas at
 the end of a run.  Use **Add selected run results to map** (see
@@ -621,17 +697,18 @@ The Previous runs table
 
 The **Previous runs** table on the Run Analysis tab shows three
 columns: **Name**, **Date**, **Duration** -- enough to pick a run
-without scrolling.  Click a row (or several rows) and the result
-fields below the table fill in:
+without scrolling.  The newest run is selected automatically after a
+calculation finishes.  Selecting rows adds columns to the
+**Accident probabilities** table below:
 
-* **Single selection** -- each result LineEdit shows that run's
-  total probability, e.g. ``1.140e-01``.
-* **Multi-selection** -- the LineEdits become side-by-side
-  comparisons of the form
-  ``1.140e-01 | 1.252e-01 (Δ+9.8%) | 0.992e-01 (Δ-13.0%)``.
-  The first selected run is the baseline; each subsequent run
-  carries its relative difference (``Δ`` percentage) to that
-  baseline.
+* **Single selection** -- one probability column for that run plus a
+  ``Δ %`` column against the baseline.
+* **Multi-selection** -- one probability + ``Δ %`` column pair per
+  selected run, side by side.
+
+The baseline is the currently displayed run if there is one;
+otherwise it is the first selected run, and the header says which
+(``Δ vs current %`` or ``Δ vs <run name> %``).
 
 Below the table is an **Add selected run results to map** button.
 Click it with a single row selected to load that run's per-run
@@ -656,8 +733,8 @@ which switches to the Run Analysis tab and refreshes the table.
 Result-layer attributes
 -----------------------
 
-After a run finishes, six new layers (when applicable) appear on the
-canvas:
+Loading a run onto the canvas adds up to six layers (any layer whose
+total is zero is skipped):
 
 .. list-table::
    :header-rows: 1
@@ -666,37 +743,64 @@ canvas:
    * - Layer
      - Geometry
      - Key attributes
-   * - Drifting Allision Results
-     - Polygon
-     - ``obstacle_id``, ``total_edge_probability`` (alias *Total edge
-       probability*), ``object_probability`` (alias *Object probability*),
-       plus per-segment columns and a ``leg_<id>`` column per leg that
-       contributed.
-   * - Drifting Grounding Results
-     - Polygon
-     - same shape as Allision.
+   * - Allision Results (drifting)
+     - Line
+     - One feature per boundary edge of each structure.
+       ``obstacle_id``, ``segment_idx``, ``total_edge_probability``
+       (alias *Total edge probability*), ``object_probability``
+       (alias *Object probability*), ``value`` (the structure's
+       height), the drift diagnostics ``normal_deg``,
+       ``edge_dist_m``, ``reach_width_m``, ``edge_p_nr``,
+       ``edge_h_eff``, and a ``leg_<id>`` column per contributing
+       leg.
+   * - Grounding Results (drifting)
+     - Line
+     - Same shape as Allision Results, with ``value`` holding the
+       contour's depth.
    * - Powered Allision Results
-     - Line (per leg)
-     - ``segment_id``, ``total_edge_probability`` (powered-allision
-       probability summed across every contributing structure for this
-       leg), ``value_max`` (max structure height on this leg), one
-       ``obs_<id>`` column per contributing structure.
+     - Line
+     - Structure boundary edges again, but coloured by the powered
+       Cat II total.  ``obstacle_id``, ``segment_idx``,
+       ``total_edge_probability``, ``object_probability``, ``value``,
+       plus a ``leg_<id>`` column per contributing leg.
    * - Powered Grounding Results
-     - Line (per leg)
-     - ``segment_id``, ``total_edge_probability`` (powered-grounding
-       probability summed across every contributing depth contour for
-       this leg), ``value_max`` (max depth on this leg), one
-       ``obs_<id>`` column per contributing depth.
+     - Line
+     - Same shape, over depth-contour edges.
    * - Ship-Ship Collision (per leg)
      - Line
      - ``leg_id``, ``head_on``, ``overtaking``, ``combined``.
    * - Ship-Ship Collision (waypoints)
      - Point
-     - ``waypoint``, ``crossing``, ``bend``, ``combined``.
+     - ``waypoint``, ``crossing``, ``merging``, ``bend``,
+       ``combined`` (the sum of the three).
 
-All layers are graduated red->green by ``total_edge_probability`` /
-``combined``.  The line layer is rendered semi-transparent and ~3 mm
-wide so the underlying route stays visible.
+All layers use the same five-class graduated ramp on
+``total_edge_probability`` / ``combined``: **green = lowest
+contributor, yellow = middle, red = the hotspots that dominate the
+total**.  Line layers are rendered semi-transparent so the
+underlying route stays visible.
+
+
+Compare tab
+===========
+
+The **Compare** tab diffs two finished runs without re-calculating
+either.  Pick **Run A (.omrat)** and **Run B (.omrat)** with the two
+``...`` browse buttons -- these are the input snapshots each run
+writes next to its GeoPackage -- then click **Compare**.
+
+Three tables fill in:
+
+* **Accident probabilities** -- A, B and the relative difference per
+  accident type.
+* **Settings differences** -- which inputs actually changed between
+  the two snapshots (causation factors, drift settings, ship
+  categories, ...).
+* **Route distance per leg** -- leg-by-leg lengths, so a geometry
+  change shows up immediately.
+
+**Add both runs as map layers (red + blue)** overlays the two runs'
+geometries on the canvas in contrasting colours.
 
 
 Tips and best practices
@@ -707,7 +811,7 @@ Tips and best practices
 * **Check the distribution plot** on every segment before you trust
   a result.  A zero-weight distribution silently zeroes that
   segment's contribution for some accident types.
-* **Use Drift Analysis** before Run Model on a new project -- if
+* **Use Drift Analysis** before Run model on a new project -- if
   corridors don't reach the obstacles you care about, your result
   will be near zero and you'll waste time investigating why.
 * **Result layers colour-code by contribution.**  Red polygons are

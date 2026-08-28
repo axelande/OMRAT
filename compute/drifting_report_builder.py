@@ -44,6 +44,69 @@ class DriftingReportBuilderMixin:
         seg_data = obs_seg_map.setdefault(seg_key, {})
         seg_data[leg_dir_key] = seg_data.get(leg_dir_key, 0.0) + contrib
 
+    def _record_edge_meta(
+        self,
+        *,
+        report: dict[str, Any],
+        obs_key: str,
+        seg_idx: int | None,
+        leg_dir_key: str,
+        obs_type: str,
+        hole_pct: float,
+        h_eff: float,
+        reachable_width: float,
+        edge_h_eff: float,
+        len_frac: float,
+        edge_dist: float,
+        edge_p_nr: float,
+        edge_hole: float,
+        base: float,
+        rp: float,
+        contrib: float,
+    ) -> None:
+        """Store per-edge calculation trace for backtracing.
+
+        For a given ``(obstacle, edge, leg_direction)`` the *static* inputs
+        (``hole_pct``, ``h_eff``, ``reachable_width``, ``edge_h_eff``,
+        ``len_frac``, ``edge_dist``, ``edge_p_nr``, ``edge_hole``) are
+        fixed -- only ``base`` and the number of ship cells contributing
+        vary.  Users back-trace the contribution via
+        ``contrib = base * rp * (h_eff * len_frac) * edge_p_nr``
+        where
+        ``len_frac = reachable_width / Σ reachable_widths`` (1D shadow-carved
+        share of the polygon) and ``edge_h_eff = reachable_width /
+        leg_drift_width`` is the pure-geometric per-edge share (kept for
+        backtracing only -- multiplying by it directly would ignore the
+        AIS ship-density profile embedded in the analytical h_eff).
+        """
+        if seg_idx is None:
+            return
+        meta_root = report.setdefault('edge_calc_meta', {})
+        obs_map = meta_root.setdefault(obs_key, {})
+        seg_key = f"seg_{seg_idx}"
+        seg_map = obs_map.setdefault(seg_key, {})
+        entry = seg_map.setdefault(leg_dir_key, {
+            'obs_type': obs_type,
+            'hole_pct': float(hole_pct),
+            'h_eff': float(h_eff),
+            'reachable_width_m': float(reachable_width),
+            'edge_h_eff': float(edge_h_eff),
+            'len_frac': float(len_frac),
+            'edge_dist_m': float(edge_dist),
+            'edge_p_nr': float(edge_p_nr),
+            'edge_hole': float(edge_hole),
+            'exposure_sum': 0.0,   # sum of (base * rp) across ship cells
+            'contrib_sum': 0.0,    # sum of contributions across ship cells
+            'cell_count': 0,
+        })
+        # h_eff / edge_hole may vary marginally across cells if anchor logic
+        # differs; refresh so the stored value reflects the last observed one.
+        entry['h_eff'] = float(h_eff)
+        entry['edge_hole'] = float(edge_hole)
+        entry['exposure_sum'] += float(base) * float(rp)
+        entry['contrib_sum'] += float(contrib)
+        entry['cell_count'] += 1
+
     def _accumulate_object_prob(
         self,
         report: dict[str, Any],

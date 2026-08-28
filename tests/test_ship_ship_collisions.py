@@ -11,8 +11,7 @@ Based on Hansen 2008 (IWRAP Theory) and PLAN.md specifications.
 """
 
 import pytest
-from numpy import pi, sqrt, isclose
-from scipy.stats import norm
+from numpy import pi, sqrt, cos, isclose
 from compute.basic_equations import (
     get_head_on_collision_candidates,
     get_overtaking_collision_candidates,
@@ -31,7 +30,7 @@ class TestHeadOnCollisions:
             Q1=100, Q2=100,           # 100 ships/year each direction
             V1=5.0, V2=5.0,           # 5 m/s each
             mu1=0.0, mu2=0.0,         # Centered on lane
-            sigma1=50.0, sigma2=50.0, # 50m std dev
+            sigma1=50.0, sigma2=50.0,  # 50m std dev
             B1=20.0, B2=20.0,         # 20m beam
             L_w=1000.0                # 1km leg
         )
@@ -96,7 +95,7 @@ class TestHeadOnCollisions:
             Q1=100, Q2=100,
             V1=5.0, V2=5.0,
             mu1=0.0, mu2=0.0,         # Centered
-            sigma1=100.0, sigma2=100.0, # Large std dev
+            sigma1=100.0, sigma2=100.0,  # Large std dev
             B1=20.0, B2=20.0,
             L_w=1000.0
         )
@@ -641,7 +640,8 @@ class TestBendCollisions:
             P_no_turn=0.01,  # 1% don't turn
             L=100.0,
             B=20.0,
-            theta=pi/4  # 45 degree bend
+            theta=pi/4,  # 45 degree bend
+            V=6.0,
         )
         assert result > 0
 
@@ -652,7 +652,8 @@ class TestBendCollisions:
             P_no_turn=0.0,  # Everyone turns
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         assert result == 0.0
 
@@ -663,7 +664,8 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=0.0  # No bend
+            theta=0.0,  # No bend
+            V=6.0,
         )
         assert result == 0.0
 
@@ -674,7 +676,8 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=1e-11  # Tiny angle
+            theta=1e-11,  # Tiny angle
+            V=6.0,
         )
         assert result == 0.0
 
@@ -686,14 +689,16 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         result_q200 = get_bend_collision_candidates(
             Q=200,
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         # Should scale as Q^2 because N_G involves Q_no_turn * Q_turn
         # Q_no_turn = Q * P_no_turn, Q_turn = Q * (1 - P_no_turn)
@@ -707,14 +712,16 @@ class TestBendCollisions:
             P_no_turn=0.01,  # 1%
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         result_high_p = get_bend_collision_candidates(
             Q=1000,
             P_no_turn=0.05,  # 5%
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         # Higher P_no_turn should give more collisions
         # Ratio should be approximately (0.05 * 0.95) / (0.01 * 0.99) = 4.79...
@@ -727,14 +734,16 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=50.0,
             B=10.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         result_large = get_bend_collision_candidates(
             Q=1000,
             P_no_turn=0.01,
             L=200.0,
             B=40.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         assert result_large > result_small
 
@@ -745,14 +754,16 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=pi/4  # 45 degrees
+            theta=pi/4,  # 45 degrees
+            V=6.0,
         )
         result_90deg = get_bend_collision_candidates(
             Q=1000,
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=pi/2  # 90 degrees
+            theta=pi/2,  # 90 degrees
+            V=6.0,
         )
         # Both should be positive
         assert result_45deg > 0
@@ -765,7 +776,8 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=150.0,
             B=25.0,
-            theta=pi/3  # 60 degree bend
+            theta=pi/3,  # 60 degree bend
+            V=6.0,
         )
         Pc = 1.3e-4  # Bend causation factor (IALA default)
         N_collision = N_g * Pc
@@ -779,7 +791,8 @@ class TestBendCollisions:
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=pi  # 180 degree turn
+            theta=pi,  # 180 degree turn
+            V=6.0,
         )
         # At 180 degrees, sin(theta) = 0, so crossing formula returns 0
         assert result == 0.0
@@ -791,7 +804,8 @@ class TestBendCollisions:
             P_no_turn=1.0,  # No one turns
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         # Q_turn = 0, so product Q_no_turn * Q_turn = 0
         assert result == 0.0
@@ -802,7 +816,6 @@ class TestCausationFactors:
 
     def test_default_iala_values(self):
         """Verify IALA default causation factors."""
-        from omrat_utils.causation_factors import CausationFactors
 
         # CausationFactors requires a parent, but we can check the expected values
         expected = {
@@ -884,7 +897,8 @@ class TestCausationFactors:
             P_no_turn=0.01,
             L=150.0,
             B=25.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         Pc_bend = 1.3e-4
         N_actual = N_g * Pc_bend
@@ -947,7 +961,8 @@ class TestEdgeCases:
             P_no_turn=0.01,
             L=100.0,
             B=20.0,
-            theta=pi/4
+            theta=pi/4,
+            V=6.0,
         )
         assert result == 0.0
 
@@ -1092,7 +1107,8 @@ class TestRealisticScenarios:
             P_no_turn=0.005,  # 0.5% fail to turn (good visibility)
             L=180.0,  # Average ship length
             B=28.0,
-            theta=pi/6  # 30 degree course change
+            theta=pi/6,  # 30 degree course change
+            V=6.5,       # ~12.6 knots
         )
         Pc = 1.3e-4
         annual_collisions = result * Pc
@@ -1107,7 +1123,6 @@ class TestRealisticScenarios:
         V = 6.17  # 12 knots
         sigma = 75.0
         B = 30.0
-        L = 150.0
 
         # Head-on
         head_on = get_head_on_collision_candidates(
@@ -1161,41 +1176,115 @@ class TestMathematicalProperties:
                 assert 0 <= P_G_approx <= 1
 
     def test_crossing_collision_diameter_formula(self):
-        """Verify the crossing collision diameter D_ij and the full
-        candidate formula match the production implementation.
+        """Pin the Pedersen crossing formula, term by term.
 
-        Production formula (Hansen Eq. 4.6 with dimensional closure):
+            V_ij = sqrt(V1**2 + V2**2 - 2*V1*V2*cos(theta))
+            D_ij = (L1*V2 + L2*V1) * |sin th| / V_ij
+                 + B1 * sqrt(1 - (V2*sin th / V_ij)**2)
+                 + B2 * sqrt(1 - (V1*sin th / V_ij)**2)
+            N_G  = Q1*Q2 * V_ij * D_ij
+                   / (V1 * V2 * |sin th| * seconds_per_year)
 
-            D_ij = (L1 + L2) * |sin(theta)| + (B1 + B2) * |cos(theta)|
-            N_G  = Q1 * Q2 * D_ij / (V1 * V2 * |sin(theta)| * seconds_per_year)
-
-        An earlier version of this test compared against
-        `Q*Q * D_ij / (V_ij * sin(theta))`, which matches the literal
-        form of the Hansen equation but omits the time-conversion the
-        production code applies (and substitutes V_ij for V1*V2).  The
-        test below checks the actual production formula.
+        Before v0.14.0 the implementation used the unweighted
+        ``D_ij = (L1+L2)|sin th| + (B1+B2)|cos th|`` and omitted ``V_ij``
+        from the numerator, which made the result scale as 1/V**2.  This
+        test would fail against that version.
         """
         theta = pi / 4
-        L1, L2 = 100.0, 100.0
-        B1, B2 = 20.0, 20.0
-        V = 5.0
-        Q = 100
+        L1, L2 = 100.0, 120.0
+        B1, B2 = 20.0, 24.0
+        V1, V2 = 5.0, 7.0
+        Q1, Q2 = 100.0, 250.0
 
         result = get_crossing_collision_candidates(
-            Q1=Q, Q2=Q,
-            V1=V, V2=V,
+            Q1=Q1, Q2=Q2,
+            V1=V1, V2=V2,
             L1=L1, L2=L2,
             B1=B1, B2=B2,
             theta=theta,
         )
 
         sin_theta = sqrt(2) / 2
-        cos_theta = sqrt(2) / 2
-        D_ij_expected = (L1 + L2) * sin_theta + (B1 + B2) * cos_theta
+        V_ij = sqrt(V1 ** 2 + V2 ** 2 - 2 * V1 * V2 * cos(theta))
+        D_ij_expected = (
+            (L1 * V2 + L2 * V1) * sin_theta / V_ij
+            + B1 * sqrt(1.0 - (V2 * sin_theta / V_ij) ** 2)
+            + B2 * sqrt(1.0 - (V1 * sin_theta / V_ij) ** 2)
+        )
         seconds_per_year = 365.25 * 24 * 3600
-        expected = Q * Q * D_ij_expected / (V * V * sin_theta * seconds_per_year)
+        expected = (
+            Q1 * Q2 * V_ij * D_ij_expected
+            / (V1 * V2 * sin_theta * seconds_per_year)
+        )
 
         assert isclose(result, expected, rtol=1e-10)
+
+    def test_crossing_diameter_equals_projected_hull_width(self):
+        """``D_ij`` is the projected width of both hulls onto the normal
+        of the relative-velocity vector.
+
+        At equal speeds and a right-angle crossing that projection is
+        ``(L1 + L2 + B1 + B2) / sqrt(2)`` -- both rectangles seen at 45
+        degrees.  This is an independent geometric check on ``D_ij``: it
+        never mentions the formula, only the geometry it must reproduce.
+        """
+        L1, L2 = 150.0, 180.0
+        B1, B2 = 25.0, 30.0
+        V = 6.0
+        theta = pi / 2
+        Q1, Q2 = 1000.0, 2000.0
+
+        result = get_crossing_collision_candidates(
+            Q1=Q1, Q2=Q2, V1=V, V2=V,
+            L1=L1, L2=L2, B1=B1, B2=B2, theta=theta,
+        )
+
+        V_ij = V * sqrt(2)
+        D_ij_geometric = (L1 + L2 + B1 + B2) / sqrt(2)
+        seconds_per_year = 365.25 * 24 * 3600
+        expected = (
+            Q1 * Q2 * V_ij * D_ij_geometric
+            / (V * V * 1.0 * seconds_per_year)
+        )
+        assert isclose(result, expected, rtol=1e-10)
+
+    def test_crossing_scales_inversely_with_speed(self):
+        """Doubling both speeds must halve the candidate count.
+
+        Head-on and overtaking have always scaled as 1/V; before v0.14.0
+        crossing scaled as 1/V**2 because ``V_ij`` was missing from the
+        numerator.  This test locks all three to the same law.
+        """
+        kw = dict(Q1=5000.0, Q2=5000.0, L1=150.0, L2=150.0,
+                  B1=25.0, B2=25.0, theta=pi / 2)
+        slow = get_crossing_collision_candidates(V1=6.0, V2=6.0, **kw)
+        fast = get_crossing_collision_candidates(V1=12.0, V2=12.0, **kw)
+        assert isclose(fast / slow, 0.5, rtol=1e-12)
+
+    def test_bend_scales_inversely_with_speed(self):
+        """The bend inherits the crossing formula, so it inherits 1/V.
+
+        Passing a placeholder speed (as the implementation did before
+        v0.14.0) makes this ratio 1.0 instead of 0.5.
+        """
+        kw = dict(Q=5000.0, P_no_turn=0.01, L=150.0, B=25.0, theta=pi / 4)
+        slow = get_bend_collision_candidates(V=6.0, **kw)
+        fast = get_bend_collision_candidates(V=12.0, **kw)
+        assert isclose(fast / slow, 0.5, rtol=1e-12)
+
+    def test_bend_equals_crossing_of_its_two_substreams(self):
+        """A bend is the crossing encounter between the traffic that
+        turned and the traffic that did not, at the same speed."""
+        Q, p, L, B, V = 5000.0, 0.01, 150.0, 25.0, 6.0
+        theta = pi / 3
+        bend = get_bend_collision_candidates(
+            Q=Q, P_no_turn=p, L=L, B=B, theta=theta, V=V,
+        )
+        crossing = get_crossing_collision_candidates(
+            Q1=Q * p, Q2=Q * (1 - p), V1=V, V2=V,
+            L1=L, L2=L, B1=B, B2=B, theta=theta,
+        )
+        assert isclose(bend, crossing, rtol=1e-12)
 
     def test_overtaking_mu_subtraction(self):
         """Verify overtaking uses subtraction for lateral distance (same direction)."""

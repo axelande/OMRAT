@@ -142,6 +142,7 @@ _SCHEMA = [
         head_on             REAL,
         overtaking          REAL,
         crossing            REAL,
+        merging             REAL,
         bend                REAL,
         ship_collision_total REAL,
         output_dir          TEXT,
@@ -173,6 +174,7 @@ class RunMeta:
     head_on: float | None = None
     overtaking: float | None = None
     crossing: float | None = None
+    merging: float | None = None
     bend: float | None = None
     ship_collision_total: float | None = None
     output_dir: str | None = None
@@ -190,6 +192,7 @@ class RunMeta:
             'head_on': self.head_on,
             'overtaking': self.overtaking,
             'crossing': self.crossing,
+            'merging': self.merging,
             'bend': self.bend,
             'ship_collision_total': self.ship_collision_total,
         }
@@ -219,6 +222,14 @@ class RunHistory:
         return conn
 
     def _ensure_schema(self) -> None:
+        """Create ``omrat_runs`` if absent.
+
+        There is no column-migration step: ``_SCHEMA`` is the schema.  A
+        history database written by an OMRAT older than the current
+        ``_SCHEMA`` must be deleted (or the column added by hand) --
+        adding an accident type means adding it to ``_SCHEMA`` and
+        accepting that older databases are incompatible.
+        """
         with self._connect() as conn:
             for stmt in _SCHEMA:
                 conn.execute(stmt)
@@ -252,6 +263,7 @@ class RunHistory:
             'head_on': _f(totals.get('head_on')),
             'overtaking': _f(totals.get('overtaking')),
             'crossing': _f(totals.get('crossing')),
+            'merging': _f(totals.get('merging')),
             'bend': _f(totals.get('bend')),
             'ship_collision_total': _f(totals.get('ship_collision_total')),
             'output_dir': str(output_dir) if output_dir is not None else None,
@@ -264,13 +276,15 @@ class RunHistory:
                     name, timestamp, duration_seconds,
                     drift_allision, drift_grounding, drift_anchoring,
                     powered_grounding, powered_allision,
-                    head_on, overtaking, crossing, bend, ship_collision_total,
+                    head_on, overtaking, crossing, merging, bend,
+                    ship_collision_total,
                     output_dir, output_filename, notes
                 ) VALUES (
                     :name, :timestamp, :duration_seconds,
                     :drift_allision, :drift_grounding, :drift_anchoring,
                     :powered_grounding, :powered_allision,
-                    :head_on, :overtaking, :crossing, :bend, :ship_collision_total,
+                    :head_on, :overtaking, :crossing, :merging, :bend,
+                    :ship_collision_total,
                     :output_dir, :output_filename, :notes
                 )""",
                 row,
@@ -369,6 +383,7 @@ def totals_from_calc(calc) -> dict[str, float]:
         'head_on': float(coll.get('head_on', 0.0) or 0.0),
         'overtaking': float(coll.get('overtaking', 0.0) or 0.0),
         'crossing': float(coll.get('crossing', 0.0) or 0.0),
+        'merging': float(coll.get('merging', 0.0) or 0.0),
         'bend': float(coll.get('bend', 0.0) or 0.0),
         'ship_collision_total': float(coll.get('total', 0.0) or 0.0),
     }

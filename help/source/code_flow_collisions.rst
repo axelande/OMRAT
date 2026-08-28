@@ -5,7 +5,7 @@ Code Flow: Ship-Ship Collision Model
 ===================================================
 
 This chapter walks the ship-ship collision model one function at a
-time, in the order the calls fire when a user presses **Run Model**.
+time, in the order the calls fire when a user presses **Run model**.
 Pair it with :ref:`collisions`, which derives the four collision
 formulas (head-on, overtaking, crossing, bend).
 
@@ -29,7 +29,7 @@ phases and writes
 
 .. container:: source-code-ref pipeline
 
-   **Entry:** ``compute/ship_collision_model.py:526`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L526>`__
+   **Entry:** ``compute/ship_collision_model.py:1224`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L1224>`__
 
 
 Top-level call tree
@@ -85,7 +85,7 @@ Data pulled from ``data``
        drifting model uses.  Values are read **after**
        :func:`compute.data_preparation.apply_traffic_scaling` has
        multiplied each cell by its ``Scaling (%) / 100`` -- so the
-       "easy option" global / per-row scaling on the Traffic tab is
+       "easy option" global / per-row scaling on the Traffic Data tab is
        inherited transparently.
    * - ``traffic_data[leg][dir]['Speed (knots)']``
      - Per-cell speed.  A cell can hold a scalar or a list; the code
@@ -118,7 +118,7 @@ Data pulled from ``data``
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/ship_collision_model.py:526`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L526>`__
+   **Source:** ``compute/ship_collision_model.py:1224`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L1224>`__
 
 Step by step:
 
@@ -167,7 +167,7 @@ Three static helpers are used by every per-leg routine.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/ship_collision_model.py:58`` -- `_get_weighted_mu_sigma() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L58>`__
+   **Source:** ``compute/ship_collision_model.py:68`` -- `_get_weighted_mu_sigma() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L68>`__
 
 Reads the per-direction lateral distributions (up to three superposed
 Gaussians) via :func:`compute.data_preparation.get_distribution`,
@@ -200,7 +200,7 @@ fallback.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/ship_collision_model.py:138`` -- `_calc_head_on_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L138>`__
+   **Source:** ``compute/ship_collision_model.py:266`` -- `_calc_head_on_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L266>`__
 
 Structure:
 
@@ -239,7 +239,7 @@ The core formula is in
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/ship_collision_model.py:239`` -- `_calc_overtaking_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L239>`__
+   **Source:** ``compute/ship_collision_model.py:385`` -- `_calc_overtaking_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L385>`__
 
 Iterates each direction independently (overtaking is same-direction
 by definition).  For each direction:
@@ -260,7 +260,7 @@ by definition).  For each direction:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/ship_collision_model.py:313`` -- `_calc_bend_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L313>`__
+   **Source:** ``compute/ship_collision_model.py:458`` -- `_calc_bend_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L458>`__
 
 Bend collisions model a ship that fails to turn at the leg's
 downstream waypoint and continues straight.
@@ -290,7 +290,7 @@ downstream waypoint and continues straight.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/ship_collision_model.py:367`` -- `_calc_crossing_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L367>`__
+   **Source:** ``compute/ship_collision_model.py:633`` -- `_calc_crossing_collisions() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L633>`__
 
 This is the only function that does cross-leg geometry.
 

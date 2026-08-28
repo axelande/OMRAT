@@ -19,6 +19,33 @@
     "reportUnknownMemberType": "none"
 },
 	"python.analysis.inlayHints.variableTypes": true,
-    "python.languageServer": "Ty"
+    "python.languageServer": "Ty",
+    "peacock.color": "db981b",
+    "workbench.colorCustomizations": {
+        "activityBar.activeBackground": "#e8ae41",
+        "activityBar.background": "#e8ae41",
+        "activityBar.foreground": "#15202b",
+        "activityBar.inactiveForeground": "#15202b99",
+        "activityBarBadge.background": "#118e63",
+        "activityBarBadge.foreground": "#e7e7e7",
+        "activityBarTop.activeBackground": "#e8ae41",
+        "activityBarTop.background": "#e8ae41",
+        "activityBarTop.foreground": "#15202b",
+        "activityBarTop.inactiveForeground": "#15202b99",
+        "commandCenter.border": "#15202b99",
+        "commandCenter.foreground": "#15202b",
+        "sash.hoverBorder": "#e8ae41",
+        "statusBar.background": "#db981b",
+        "statusBar.debuggingBackground": "#db981b",
+        "statusBar.debuggingForeground": "#15202b",
+        "statusBar.foreground": "#15202b",
+        "statusBarItem.hoverBackground": "#ae7815",
+        "statusBarItem.remoteBackground": "#c6f8e7",
+        "statusBarItem.remoteForeground": "#15202b",
+        "titleBar.activeBackground": "#db981b",
+        "titleBar.activeForeground": "#15202b",
+        "titleBar.inactiveBackground": "#db981b99",
+        "titleBar.inactiveForeground": "#15202b99"
+    }
 
 }

@@ -238,10 +238,36 @@ _DEFAULT_BLACKOUT_BY_SHIP_TYPE: dict[int, float] = {i: 1.0 for i in SHIP_TYPE_NA
 for _i in (8, 9, 10, 11):  # Passenger ferry, Ro-pax, Ro-ro, Passenger cruise
     _DEFAULT_BLACKOUT_BY_SHIP_TYPE[_i] = 0.1
 
+# Name tokens that identify the low-blackout "roro_passenger" IWRAP class.
+# Matched case-insensitively as substrings of the ship-type name so the
+# defaults follow the PROJECT's actual taxonomy (e.g. the AIS type list has
+# "Passenger, all ships of this type" at index 17, not 8-11).
+_LOW_BLACKOUT_NAME_TOKENS: tuple[str, ...] = (
+    'passenger', 'ferry', 'ro-pax', 'ropax', 'ro-ro', 'roro', 'cruise',
+)
 
-def default_blackout_by_ship_type() -> dict[int, float]:
-    """Return a fresh copy of the default per-ship-type blackout rate map."""
-    return dict(_DEFAULT_BLACKOUT_BY_SHIP_TYPE)
+
+def default_blackout_by_ship_type(
+    type_names: 'list[str] | None' = None,
+) -> dict[int, float]:
+    """Return the default per-ship-type blackout rate map (events/ship-year).
+
+    Without arguments, returns the map for OMRAT's internal taxonomy
+    (``SHIP_TYPE_NAMES``: indices 8-11 are the passenger/ro-ro classes).
+
+    When ``type_names`` is given (the project's actual ship-type list, e.g.
+    ``data['ship_categories']['types']`` -- often the AIS taxonomy where
+    "Passenger" sits at index 17), the map is built by NAME matching so the
+    0.1 roro_passenger rate lands on the right rows regardless of index.
+    """
+    if type_names is None:
+        return dict(_DEFAULT_BLACKOUT_BY_SHIP_TYPE)
+    out: dict[int, float] = {}
+    for i, name in enumerate(type_names):
+        n = str(name).lower()
+        low = any(tok in n for tok in _LOW_BLACKOUT_NAME_TOKENS)
+        out[i] = 0.1 if low else 1.0
+    return out
 
 
 # Block-coefficient defaults per OMRAT ship-type index (0-based row in traffic matrix).
@@ -509,15 +535,50 @@ def get_crossing_collision_candidates(
     """
     Calculate geometric number of crossing collision candidates.
 
-    Uses Hansen Eq. 4.6:
-    N_G = Q1 × Q2 × D_ij / (V_ij × sin(θ))
+    Pedersen (1995) / Friis-Hansen (2008), crossing encounters:
 
-    Where:
-    - D_ij = collision diameter based on ship dimensions and crossing angle
-    - V_ij = √(V1² + V2² - 2×V1×V2×cos(θ)) (relative speed)
+    .. code-block:: text
 
-    The collision diameter D_ij represents the effective collision zone
-    based on the geometry of the vessels and the crossing angle.
+        N_G = (Q1/V1) * (Q2/V2) * V_ij * D_ij / |sin(theta)|
+
+    with the relative speed from the law of cosines
+
+    .. code-block:: text
+
+        V_ij = sqrt(V1**2 + V2**2 - 2*V1*V2*cos(theta))
+
+    and the geometric collision diameter
+
+    .. code-block:: text
+
+        D_ij = (L1*V2 + L2*V1) * |sin(theta)| / V_ij
+             + B1 * sqrt(1 - (V2*sin(theta)/V_ij)**2)
+             + B2 * sqrt(1 - (V1*sin(theta)/V_ij)**2)
+
+    ``D_ij`` is the width of the Minkowski sum of the two hulls
+    projected onto the direction perpendicular to the *relative*
+    velocity -- i.e. the swept collision cross-section seen by ship 2 in
+    ship 1's frame.  Modelling each hull as an ``L x B`` rectangle, the
+    projection of ship 1 onto that normal is
+    ``(L1*V2*|sin th| + B1*|V1 - V2*cos th|) / V_ij``, and the identity
+    ``sqrt(V_ij**2 - V2**2*sin(th)**2) == |V1 - V2*cos th|`` turns the
+    beam term into the square-root form above.  Note the pairing: ``B1``
+    carries ``V2`` inside the root, and vice versa.
+
+    Sanity check -- equal speeds, ``theta = 90 deg``: every term picks up
+    ``1/sqrt(2)`` and ``D_ij = (L1 + L2 + B1 + B2)/sqrt(2)``, which is
+    exactly the projected width of both rectangles onto the 45-degree
+    normal.
+
+    .. note::
+
+       Before v0.14.0 this function omitted ``V_ij`` from the numerator
+       and used the unweighted ``D_ij = (L1+L2)|sin th| + (B1+B2)|cos th|``.
+       That made the result scale as ``1/V**2`` instead of ``1/V`` (unlike
+       head-on and overtaking, which were always correct) and dropped the
+       beam contribution entirely at right-angle crossings.  Crossing and
+       bend numbers from older runs are therefore not comparable with
+       current ones -- they were low by roughly a factor of ``V_ij``.
 
     Parameters
     ----------
@@ -547,43 +608,39 @@ def get_crossing_collision_candidates(
     """
     # Handle edge cases for crossing angle
     sin_theta = sin(theta)
-    if np_abs(sin_theta) < 1e-10:
+    abs_sin = np_abs(sin_theta)
+    if abs_sin < 1e-10:
         # Parallel or anti-parallel courses - use head-on or overtaking instead
         return 0.0
 
-    # Relative speed using law of cosines
-    # V_ij = √(V1² + V2² - 2×V1×V2×cos(θ))
-    V_ij = sqrt(V1**2 + V2**2 - 2 * V1 * V2 * cos(theta))
-
-    if V_ij < 1e-10:
-        return 0.0
-
-    # Collision diameter based on ship dimensions and crossing angle
-    # D_ij accounts for the projected area of both vessels
-    # D_ij = (L1 + L2) × |sin(θ)| + (B1 + B2) × |cos(θ)|
-    D_ij = (L1 + L2) * np_abs(sin_theta) + (B1 + B2) * np_abs(cos(theta))
-
-    # Number of geometric collision candidates
-    # Hansen Eq. 4.6: N_G = Q1 × Q2 × D_ij / (V1 × V2 × sin(θ))
-    # Note: The formula divides by V1 × V2 to convert frequencies to densities
-    # and includes sin(θ) to account for the crossing geometry
-
-    # Avoid division by zero
     if V1 <= 0 or V2 <= 0:
         return 0.0
 
-    # Convert frequency to "ships per year passing through intersection"
-    # For crossing, the formula is different from head-on/overtaking
-    # N_G = Q1 × Q2 × D_ij / (V1 × V2 × sin(θ)) × conversion_factor
-    # The conversion factor accounts for time: ships/year squared needs to become
-    # collision candidates/year
+    # Relative speed using law of cosines.
+    V_ij = sqrt(V1**2 + V2**2 - 2 * V1 * V2 * cos(theta))
+    if V_ij < 1e-10:
+        return 0.0
 
-    # Using dimensional analysis:
-    # Q1, Q2 in ships/year; D_ij in meters; V1, V2 in m/s
-    # Q1 × Q2 × D_ij / (V1 × V2) = ships²/year² × m / (m²/s²) = ships² × s² / (year² × m)
-    # We need to multiply by (1/seconds_per_year) to get ships/year
+    # Geometric collision diameter (Pedersen 1995): the width of the two
+    # hulls projected onto the normal of the relative-velocity vector.
+    # The lengths are weighted by the *other* ship's speed; each beam term
+    # carries the other ship's speed inside the root.  ``max(0.0, ...)``
+    # guards the root against round-off at theta near 0 / pi.
+    d_len = (L1 * V2 + L2 * V1) * abs_sin / V_ij
+    d_b1 = B1 * sqrt(max(0.0, 1.0 - (V2 * sin_theta / V_ij) ** 2))
+    d_b2 = B2 * sqrt(max(0.0, 1.0 - (V1 * sin_theta / V_ij) ** 2))
+    D_ij = d_len + d_b1 + d_b2
+
+    # N_G = (Q1/V1) * (Q2/V2) * V_ij * D_ij / |sin(theta)|
+    #
+    # Q is ships/year and V is m/s, so ``Q / (V * seconds_per_year)`` is
+    # the linear ship density in ships/m and ``V_ij * seconds_per_year``
+    # is the relative speed in m/year.  The two conversions leave a single
+    # ``/ seconds_per_year`` in the combined expression:
+    #
+    #   (ships/m) * (ships/m) * (m/year) * m  ->  ships**2/year
     seconds_per_year = 365.25 * 24 * 3600
-    N_G = Q1 * Q2 * D_ij / (V1 * V2 * np_abs(sin_theta) * seconds_per_year)
+    N_G = Q1 * Q2 * V_ij * D_ij / (V1 * V2 * abs_sin * seconds_per_year)
 
     return N_G
 
@@ -593,20 +650,26 @@ def get_bend_collision_candidates(
     P_no_turn: float,    # Probability of not changing course at bend (≈0.01)
     L: float,            # Ship length (m)
     B: float,            # Ship beam (m)
-    theta: float         # Bend angle (radians)
+    theta: float,        # Bend angle (radians)
+    V: float,            # Ship speed (m/s)
 ) -> float:
     """
     Calculate bend collision candidates at waypoints.
 
-    At bends/waypoints, there is a probability that a vessel fails to
-    turn and continues on the original course. This can lead to collision
-    with vessels that do make the turn.
+    At bends / waypoints there is a probability that a vessel fails to
+    turn and continues on the original course.  It then crosses the path
+    of the traffic that did turn, at the bend's deflection angle.  This is
+    the crossing encounter of two sub-streams of the *same* traffic:
 
-    N_bend = P_0 × Q × N_G^crossing(self-interaction)
+    .. code-block:: text
 
-    Where P_0 is the probability of failing to turn, and the crossing
-    collision is calculated for the vessel interacting with itself
-    (same ship type on both legs).
+        Q_no_turn = Q * P_no_turn          (continued straight)
+        Q_turn    = Q * (1 - P_no_turn)    (made the turn)
+
+    both at speed ``V``, crossing at ``theta``.  The result is
+    :func:`get_crossing_collision_candidates` evaluated on that pair, so
+    the bend inherits the Pedersen collision diameter and the ``1/V``
+    scaling of the crossing formula.
 
     Parameters
     ----------
@@ -620,6 +683,12 @@ def get_bend_collision_candidates(
         Ship beam (m)
     theta : float
         Bend angle (radians) - the angle change at the waypoint
+    V : float
+        Ship speed (m/s).  Required: with two equal speeds the relative
+        speed is ``V_ij = 2*V*|sin(theta/2)|``, which does **not** cancel
+        out of the crossing formula.  Passing a placeholder ``1.0`` (as
+        this function did before v0.14.0) silently drops the bend's speed
+        dependence.
 
     Returns
     -------
@@ -630,27 +699,20 @@ def get_bend_collision_candidates(
     if np_abs(theta) < 1e-10:
         return 0.0
 
-    # Calculate crossing collision for self-interaction
-    # Ships that fail to turn interact with ships that do turn
-    # Use same ship type for both (self-interaction)
-    # The crossing angle is the bend angle theta
+    if V <= 0:
+        return 0.0
 
-    # Traffic that fails to turn
+    # Traffic that fails to turn vs traffic that turns normally.
     Q_no_turn = Q * P_no_turn
-
-    # Traffic that turns normally
     Q_turn = Q * (1 - P_no_turn)
 
-    # Calculate crossing collision between non-turning and turning traffic
-    # Assuming same speed for simplicity (use average speed V)
-    # For self-interaction, V1 = V2 = V (speeds cancel partially in the formula)
-
-    # Using crossing collision formula for self-interaction
+    # Both sub-streams are the same ship category at the same speed, so
+    # the crossing formula is evaluated with L1 == L2, B1 == B2, V1 == V2.
     N_G_crossing = get_crossing_collision_candidates(
         Q1=Q_no_turn,
         Q2=Q_turn,
-        V1=1.0,  # Normalized speed (actual speed cancels in ratio)
-        V2=1.0,
+        V1=V,
+        V2=V,
         L1=L,
         L2=L,
         B1=B,

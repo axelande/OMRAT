@@ -339,3 +339,116 @@ def segment_corridor_overlap_length(
             return 0.0
 
     return float(getattr(intersection, 'length', 0.0))
+
+
+def compute_edge_reachable_widths_1d(
+    edges_info: list[dict],
+    drift_angle: float,
+    leg_perp_lo: float | None = None,
+    leg_perp_hi: float | None = None,
+) -> list[dict]:
+    """1D shadow-carve facing edges within a polygon (or set of polygons).
+
+    Each input dict must have keys ``p1`` and ``p2`` (two ``(x, y)`` tuples in
+    UTM), and optionally ``dist`` (along-drift distance from the leg -- if
+    absent, computed here from the segment midpoint's dot product with the
+    drift direction, minus a zero reference).  The function projects each
+    segment's endpoints onto the perpendicular-to-drift axis (u_perp),
+    sorts edges by along-drift distance ascending, and for each edge
+    subtracts the perpendicular ranges already claimed by closer edges.
+    The remaining ranges are the edge's *reachable* perpendicular
+    intervals -- their combined length is stored as ``reachable_width``.
+
+    If ``leg_perp_lo`` / ``leg_perp_hi`` are provided, every edge's perp
+    interval is first clipped to that range.  This is essential when
+    ships are assumed uniform along the leg (IWRAP model): a polygon
+    edge whose perp-drift projection falls outside the leg's own
+    projection cannot be reached by any ship on the leg, so it must
+    contribute zero.  Without the clip a polygon that overhangs the leg
+    can produce sum(edge_h_eff) > 1, which is unphysical.
+
+    Ships drifting from the leg first encounter the closest facing edge
+    at any given perpendicular position, and the perpendicular width of
+    ships that can still reach a farther edge is *(edge's perp range) -
+    (union of all closer edges' perp ranges)*.  This mirrors the
+    "a ship grounds once" physics without needing shadow polygons.
+    """
+    if not edges_info:
+        return []
+    drift_rad = np.radians(drift_angle)
+    drift_ux = float(np.cos(drift_rad))
+    drift_uy = float(np.sin(drift_rad))
+    # Perpendicular direction (90° CCW from drift)
+    perp_ux = -drift_uy
+    perp_uy = drift_ux
+
+    have_leg_clip = leg_perp_lo is not None and leg_perp_hi is not None
+    if have_leg_clip and leg_perp_lo > leg_perp_hi:
+        leg_perp_lo, leg_perp_hi = leg_perp_hi, leg_perp_lo
+
+    prepared: list[dict] = []
+    for e in edges_info:
+        p1 = e['p1']
+        p2 = e['p2']
+        x1 = p1[0] * perp_ux + p1[1] * perp_uy
+        x2 = p2[0] * perp_ux + p2[1] * perp_uy
+        x_lo = min(x1, x2)
+        x_hi = max(x1, x2)
+        if have_leg_clip:
+            # Ships uniform along the leg only exist in [leg_perp_lo, leg_perp_hi].
+            # Portions of the edge outside that range get zero ships.
+            x_lo = max(x_lo, float(leg_perp_lo))
+            x_hi = min(x_hi, float(leg_perp_hi))
+            if x_hi <= x_lo:
+                continue
+        if 'dist' in e and e['dist'] is not None:
+            dist = float(e['dist'])
+        else:
+            mx = 0.5 * (p1[0] + p2[0])
+            my = 0.5 * (p1[1] + p2[1])
+            dist = mx * drift_ux + my * drift_uy
+        prepared.append({**e, 'x_lo': x_lo, 'x_hi': x_hi, 'dist_sort': dist})
+
+    order = sorted(range(len(prepared)), key=lambda i: prepared[i]['dist_sort'])
+
+    covered: list[tuple[float, float]] = []
+    result: list[dict] = [dict(prepared[i]) for i in range(len(prepared))]
+
+    def _subtract(interval, cov):
+        lo, hi = interval
+        remaining = [(lo, hi)]
+        for c_lo, c_hi in cov:
+            new_r = []
+            for r_lo, r_hi in remaining:
+                if c_hi <= r_lo or c_lo >= r_hi:
+                    new_r.append((r_lo, r_hi))
+                elif c_lo <= r_lo and c_hi >= r_hi:
+                    pass  # fully covered
+                elif c_lo <= r_lo:
+                    new_r.append((c_hi, r_hi))
+                elif c_hi >= r_hi:
+                    new_r.append((r_lo, c_lo))
+                else:
+                    new_r.append((r_lo, c_lo))
+                    new_r.append((c_hi, r_hi))
+            remaining = new_r
+        return remaining
+
+    def _merge(cov, new_iv):
+        all_iv = sorted(cov + [new_iv])
+        merged = [all_iv[0]]
+        for lo, hi in all_iv[1:]:
+            m_lo, m_hi = merged[-1]
+            if lo <= m_hi:
+                merged[-1] = (m_lo, max(m_hi, hi))
+            else:
+                merged.append((lo, hi))
+        return merged
+
+    for i in order:
+        prep = prepared[i]
+        reach = _subtract((prep['x_lo'], prep['x_hi']), covered)
+        result[i]['reachable_intervals'] = reach
+        result[i]['reachable_width'] = sum(hi - lo for lo, hi in reach)
+        covered = _merge(covered, (prep['x_lo'], prep['x_hi']))
+    return result

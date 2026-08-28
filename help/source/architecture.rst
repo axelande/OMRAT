@@ -168,12 +168,16 @@ OMRATMainWidget (omrat_widget.py)
 The Qt dock widget that provides the user interface. It is built from
 ``omrat_base.ui`` (Qt Designer file) and contains:
 
-- **Route tab**: Route table, digitisation buttons
-- **Traffic tab**: Ship frequency/speed/dimension tables
+- **Routes tab**: Route table, digitisation buttons, and the
+  lateral-distribution panel
+- **Traffic Data tab**: Ship frequency/speed/dimension/scaling
+  tables
 - **Depths tab**: Depth polygon management, GEBCO download
 - **Objects tab**: Structure polygon management
-- **Distributions tab**: Lateral distribution configuration and plots
-- **Results tab**: Calculation results display
+- **Run Analysis tab**: Run gating, previous-run history,
+  accident-probability and catastrophe-exceedance tables
+- **Drift Analysis tab**: Drift-corridor visualisation
+- **Compare tab**: Side-by-side diff of two ``.omrat`` snapshots
 - **Drift Analysis tab**: Corridor generation controls
 
 Calculation (compute/run_calculations.py)
@@ -213,10 +217,10 @@ Orchestrates drift corridor generation for all legs and directions:
 
 .. container:: source-code-ref
 
-   ``geometries/drift/generator.py:25`` -- `DriftCorridorGenerator <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L25>`__ |
-   ``geometries/drift/generator.py:65`` -- `precollect_data() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L65>`__ |
-   ``geometries/drift/generator.py:360`` -- `generate_corridors() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L360>`__ |
-   ``geometries/drift/generator.py:516`` -- `_create_single_corridor() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L516>`__
+   ``geometries/drift/generator.py:77`` -- `DriftCorridorGenerator <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L77>`__ |
+   ``geometries/drift/generator.py:117`` -- `precollect_data() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L117>`__ |
+   ``geometries/drift/generator.py:364`` -- `generate_corridors() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L364>`__ |
+   ``geometries/drift/generator.py:459`` -- `_create_single_corridor() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L459>`__
 
 HandleQGISIface (geometries/handle_qgis_iface.py)
 ---------------------------------------------------
@@ -260,7 +264,7 @@ via ``compute.data_preparation.apply_traffic_scaling`` -- it
 multiplies every ``Frequency (ships/year)`` cell by
 ``Scaling / 100`` (in place on the deep-copied compute data dict).
 Every downstream model reads the post-scaling Frequency, so the
-per-row "follow global" / global-spinbox UI on the Traffic tab is
+per-row "follow global" / global-spinbox UI on the Traffic Data tab is
 inherited by ship-ship, powered, drifting and consequence without
 any per-model code change.
 

@@ -32,7 +32,7 @@ Every segment has its own:
 * Lateral distribution (per direction).
 * Width (display only).
 
-**Where:** Route tab.  **Why it matters:** every accident type is
+**Where:** Routes tab.  **Why it matters:** every accident type is
 computed per segment and summed.
 
 
@@ -49,7 +49,8 @@ directions.  Overtaking happens within one direction.  Powered
 calculations consider each direction independently (they define
 different "bend turning points").
 
-**Where:** Route tab (``Dirs``), Traffic tab (per-direction matrix).
+**Where:** Routes tab (``Dirs``), Traffic Data tab
+(per-direction matrix).
 
 
 Traffic cell
@@ -64,7 +65,7 @@ is skipped in the inner loops.  There are typically 21 types x 15 LOA
 bins = 315 cells per direction, of which 10-30 are non-zero for a
 real project.
 
-**Where:** Traffic tab.
+**Where:** Traffic Data tab.
 
 
 Wind rose
@@ -223,8 +224,9 @@ the leg.  In OMRAT this is a mixture of up to three Gaussian
 components and one uniform component.  Practical projects mostly use
 a single Gaussian (mean 0, sigma derived from AIS track spread).
 
-**Where:** Distributions tab.  **Why:** drifting corridor width,
-Cat II ray spread, ship-ship collision overlap.
+**Where:** the distribution panel underneath the route table on
+the Routes tab.  **Why:** drifting corridor width, Cat II ray
+spread, ship-ship collision overlap.
 
 
 Standard nautical compass convention
@@ -251,17 +253,17 @@ documents every key.  The same dict is serialised to ``.omrat`` JSON
 files.
 
 
-Run Model vs Run Analysis
+Run model vs Run analysis
 ==========================
 
-Two buttons, different things:
+Two buttons on two different tabs, doing different things:
 
-* **Run Model** (Results tab) -- the risk calculation.  Returns
-  numbers.  This is what
+* **Run model** (Run Analysis tab) -- the risk calculation.
+  Returns numbers.  This is what
   :class:`~compute.calculation_task.CalculationTask` orchestrates
   (:ref:`code-flow`).
-* **Run Drift Analysis** (Drift Analysis tab) -- visual corridor
+* **Run analysis** (Drift Analysis tab) -- visual drift-corridor
   generation only.  Does not return risk numbers.
 
-Don't mix them up -- running the analysis doesn't produce the numbers
-you see in the result line-edits.
+Don't mix them up -- running the drift analysis doesn't produce
+the numbers in the Accident probabilities table.

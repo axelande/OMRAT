@@ -150,14 +150,12 @@ def _by_cell_for_accident(
         if accident_key == 'crossing':
             return dict(bc.get('crossing', {}) or {})
         if accident_key == 'merging':
-            # Merging is the small-angle subset of crossing in the
-            # collision model.  When the user wants pure bend (waypoint
-            # turn-failure), it's tracked separately under 'bend'.
-            merging = dict(bc.get('merging', {}) or {})
-            bend = bc.get('bend', {}) or {}
-            for k, v in bend.items():
-                merging[k] = merging.get(k, 0.0) + float(v)
-            return merging
+            # Merging = leg pairs meeting at a shallow angle.  Since
+            # v0.14.0 it is its own accident type; before that, bend
+            # was folded in here.
+            return dict(bc.get('merging', {}) or {})
+        if accident_key == 'bend':
+            return dict(bc.get('bend', {}) or {})
     return {}
 
 

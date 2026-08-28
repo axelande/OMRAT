@@ -23,8 +23,8 @@ year** for each of the main accident types:
   successfully.
 * **Powered grounding / allision** -- ships under power that fail to
   turn at a bend and continue straight into an obstacle.
-* **Ship-ship collisions** -- head-on, overtaking, crossing, and bend
-  collisions.
+* **Ship-ship collisions** -- head-on, overtaking, crossing, merging
+  and bend collisions.
 
 
 Three ways to read this documentation
@@ -38,7 +38,7 @@ Pick the path that fits what you're trying to do.
 
    * - I want to...
      - Read
-   * - run OMRAT for the first time on the supplied example project
+   * - go from a blank QGIS project to a first risk number
      - :ref:`quickstart`
    * - set up an AIS database so OMRAT can pull traffic for legs
      - :ref:`database-setup`
@@ -68,7 +68,7 @@ Every accident type has **two chapters**:
   IWRAP.
 
 * A **code-flow chapter** (Track 2) walking the actual function calls
-  that happen when **Run Model** is pressed.  Read this if you're a
+  that happen when **Run model** is pressed.  Read this if you're a
   developer tracing an output back to the code that produced it, or
   extending / reviewing the calculation.
 
@@ -87,7 +87,6 @@ Contents
    installation
    database_setup
    quickstart
-   quickstart_from_scratch
 
 .. toctree::
    :maxdepth: 2

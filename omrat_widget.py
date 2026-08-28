@@ -142,6 +142,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.LEPCrossingCollision: QtWidgets.QLineEdit
         self.pbViewMergingCollision: QtWidgets.QPushButton
         self.LEPMergingCollision: QtWidgets.QLineEdit
+        self.LEPBendCollision: QtWidgets.QLineEdit
 
         # Analyse drift tab
         self.leDepthThreshold: QtWidgets.QLineEdit

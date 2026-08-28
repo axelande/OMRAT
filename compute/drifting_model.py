@@ -36,6 +36,7 @@ from compute.drift_corridor_geometry import (  # noqa: E402
     _extract_obstacle_segments,
     _create_drift_corridor,
     segment_corridor_overlap_length,
+    compute_edge_reachable_widths_1d,
 )
 from compute.data_preparation import (  # noqa: E402
     clean_traffic,
@@ -47,7 +48,6 @@ from geometries.get_drifting_overlap import (  # noqa: E402
     compute_min_distance_by_object,
     directional_distances_to_points,
 )
-from geometries.calculate_probability_holes import compute_probability_holes  # noqa: E402
 from geometries.analytical_probability import (  # noqa: E402
     compute_probability_holes_analytical,
     compute_probability_analytical,
@@ -90,11 +90,29 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 wb_loc = float(rep.get('wb_loc', 0.0))
                 wb_scale = float(rep.get('wb_scale', 1.0))
                 t99_h = float(stats.weibull_min(c=wb_shape, loc=wb_loc, scale=wb_scale).ppf(0.99))
+            elif dist_type == 'normal':
+                n_mean = float(rep.get('norm_mean', 0.0))
+                n_std = float(rep.get('norm_std', 1.0))
+                t99_h = float(stats.norm(loc=n_mean, scale=n_std).ppf(0.99))
             elif use_ln:
                 s = float(rep.get('std', 0.0))
                 loc = float(rep.get('loc', 0.0))
                 scale = float(rep.get('scale', 1.0))
                 t99_h = float(stats.lognorm(s, loc=loc, scale=scale).ppf(0.99))
+            elif rep.get('func'):
+                # User-defined repair CDF: find t99 numerically by bisection
+                # on the compiled expression (t such that cdf(t) >= 0.99).
+                from compute.basic_equations import _safe_compile, _safe_eval
+                code = _safe_compile(str(rep['func']))
+                lo, hi = 0.0, 200.0
+                if _safe_eval(code, hi) >= 0.99:
+                    for _ in range(60):
+                        mid = 0.5 * (lo + hi)
+                        if _safe_eval(code, mid) >= 0.99:
+                            hi = mid
+                        else:
+                            lo = mid
+                    t99_h = hi
 
             if t99_h is not None and t99_h > 0:
                 drift_speed_kts = float(data.get('drift', {}).get('speed', 0.0))
@@ -105,43 +123,6 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         except Exception:  # nosec B110 B112
             pass
         return reach_distance
-
-    def _distribution_centerline_stats(
-        self,
-        leg_distributions: list[Any],
-        leg_weights: list[float],
-    ) -> tuple[float, float]:
-        """Approximate a mixed lateral distribution by mean offset and sigma."""
-        if not leg_distributions or not leg_weights:
-            return 0.0, 1.0
-
-        weighted_entries: list[tuple[float, float, float]] = []
-        for dist, weight in zip(leg_distributions, leg_weights):
-            try:
-                w = float(weight)
-                if w <= 0:
-                    continue
-                mean_val = float(dist.mean())
-                std_val = float(dist.std())
-                if not np.isfinite(mean_val) or not np.isfinite(std_val):
-                    continue
-                weighted_entries.append((w, mean_val, max(0.0, std_val)))
-            except Exception:  # nosec B110 B112
-                continue
-
-        if not weighted_entries:
-            return 0.0, 1.0
-
-        total_weight = sum(w for w, _, _ in weighted_entries)
-        if total_weight <= 0:
-            return 0.0, 1.0
-
-        mean_offset = sum(w * mean_val for w, mean_val, _ in weighted_entries) / total_weight
-        variance = sum(
-            w * (std_val ** 2 + (mean_val - mean_offset) ** 2)
-            for w, mean_val, std_val in weighted_entries
-        ) / total_weight
-        return float(mean_offset), float(np.sqrt(max(variance, 1.0)))
 
     # ------------------------------------------------------------------
     # Shadow-coverage helpers (used by the cascade)
@@ -274,98 +255,6 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         except Exception:  # nosec B110 B112
             return 0.0
 
-    def _edge_weighted_holes(
-        self,
-        obs_geom: BaseGeometry | None,
-        drift_corridor: Polygon | None,
-        drift_angle: float,
-        leg: LineString | None,
-        hole_pct: float,
-        width_m: float | None = None,
-    ) -> list[tuple[int | None, float]]:
-        """Split obstacle hole percentage into edge-level fractions by overlap length.
-
-        Distributes the analytically-computed *hole_pct* across individual
-        edges in proportion to each edge's overlap length with the drift
-        corridor.  The sum of all edge fractions equals *hole_pct*, which
-        preserves the correct total probability while allowing per-edge
-        distance weighting downstream.
-        """
-        if obs_geom is None or drift_corridor is None:
-            return [(None, hole_pct)]
-
-        try:
-            segments = _extract_obstacle_segments(obs_geom)
-            if not segments:
-                return [(None, hole_pct)]
-
-            leg_centroid = None
-            if leg is not None:
-                c = leg.centroid
-                leg_centroid = (c.x, c.y)
-
-            # Batched drift-direction pre-filter.  ``segment_corridor_overlap_length``
-            # runs this same test per-call, but at ~1.9M total calls for
-            # proj.omrat the per-call ``np.radians``/``cos``/``sin`` and
-            # vector allocations cost real time.  Here we do it once per
-            # polygon in numpy and pass the surviving segment indices to
-            # the shapely-heavy helper.
-            skip = [False] * len(segments)
-            if drift_angle is not None and leg_centroid is not None:
-                seg_arr = np.asarray(segments, dtype=float)  # (N, 2, 2)
-                p1 = seg_arr[:, 0, :]
-                p2 = seg_arr[:, 1, :]
-                dx = p2[:, 0] - p1[:, 0]
-                dy = p2[:, 1] - p1[:, 1]
-                seg_len_sq = dx * dx + dy * dy
-                ok_len = seg_len_sq > 0.0
-                inv_len = np.where(ok_len, seg_len_sq ** -0.5, 0.0)
-                # Outward normal for CCW polygons
-                nx = dy * inv_len
-                ny = -dx * inv_len
-
-                drift_rad = np.radians(drift_angle)
-                drift_ux = float(np.cos(drift_rad))
-                drift_uy = float(np.sin(drift_rad))
-
-                drift_into_segment = drift_ux * nx + drift_uy * ny
-                facing_ok = (np.abs(drift_into_segment) >= 0.17) & (drift_into_segment <= 0)
-
-                mx = 0.5 * (p1[:, 0] + p2[:, 0])
-                my = 0.5 * (p1[:, 1] + p2[:, 1])
-                vx = mx - leg_centroid[0]
-                vy = my - leg_centroid[1]
-                dist_to_segment = np.sqrt(vx * vx + vy * vy)
-                distance_ahead = vx * drift_ux + vy * drift_uy
-                ahead_ok = distance_ahead >= -0.5 * dist_to_segment
-
-                pass_mask = ok_len & facing_ok & ahead_ok
-                skip = (~pass_mask).tolist()
-
-            weighted: list[tuple[int, float]] = []
-            for seg_idx, segment in enumerate(segments):
-                if skip[seg_idx]:
-                    continue
-                overlap_len = segment_corridor_overlap_length(
-                    segment, drift_corridor, drift_angle, leg_centroid,
-                )
-                if overlap_len > 0.0:
-                    weighted.append((seg_idx, overlap_len))
-
-            if not weighted:
-                return [(None, hole_pct)]
-
-            total_overlap = sum(v for _, v in weighted)
-            if total_overlap <= 0.0:
-                return [(None, hole_pct)]
-
-            return [
-                (seg_idx, hole_pct * (overlap_len / total_overlap))
-                for seg_idx, overlap_len in weighted
-            ]
-        except Exception:  # nosec B110 B112
-            return [(None, hole_pct)]
-
     # ------------------------------------------------------------------
     # Shadow + edge-geometry precompute (ship-independent)
     # ------------------------------------------------------------------
@@ -472,40 +361,292 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         drift_repair: dict, drift_speed: float, use_leg_offset: bool,
         compass_angle: float,
     ) -> list[dict[str, Any]]:
-        if poly is None or poly.is_empty or drift_corridor is None:
+        """Per-edge geometry for the drifting cascade using 1D shadow-carve.
+
+        For each facing edge we compute:
+        - ``edge_dist``: along-drift distance from the leg to the edge midpoint
+          (using :func:`directional_distances_to_points`).
+        - ``edge_p_nr``: probability the ship has not been repaired at that
+          distance.
+        - ``reachable_width``: the width of the edge's perpendicular-to-drift
+          projection that is NOT already covered by a closer edge of the same
+          polygon.  Ships in that reachable perpendicular range strike this
+          edge as their first-contact hazard; ships in the shadowed range
+          strike a closer edge first.  Sum of ``reachable_width`` across
+          edges = polygon's perpendicular-to-drift projection (its geometric
+          E-W span for southward drift).  This gives the "a ship grounds
+          once" physics without per-obstacle shadow polygons.
+        - ``edge_h_eff = reachable_width / leg_drift_width``: this edge's
+          share of ships on the leg (uniform-along-leg assumption).
+
+        The polygon-level shadow reduction from ``h_eff / hole_pct`` is
+        applied later in :meth:`_apply_hit_entry`.
+        """
+        if poly is None or poly.is_empty:
             return []
         try:
             segments = _extract_obstacle_segments(poly)
-            raw = self._edge_weighted_holes(poly, drift_corridor, math_angle, line, 1.0, None)
-            total_frac = sum(frac for _, frac in raw if frac > 0.0)
-            selected = [(si, frac) for si, frac in raw
-                        if frac > 0.0 and si is not None and 0 <= si < len(segments)]
-            if not selected or leg_state is None:
+            if not segments or leg_state is None:
                 return []
-            endpoints = np.empty((2 * len(selected), 2), dtype=float)
-            for i, (si, _) in enumerate(selected):
-                e = segments[si]
-                endpoints[2 * i, 0] = e[0][0]
-                endpoints[2 * i, 1] = e[0][1]
-                endpoints[2 * i + 1, 0] = e[1][0]
-                endpoints[2 * i + 1, 1] = e[1][1]
+            # Effective reference line for distance measurement.  Default is the
+            # leg centerline; if ``use_leg_offset`` is set the caller wants the
+            # distance measured from the leg shifted by the mean lateral offset
+            # (traffic distribution mean).  The lateral std is ignored -- we
+            # only shift by the mean.  This affects ``edge_dist`` (and hence
+            # ``edge_p_nr``); it does NOT change edge selection or the 1D
+            # shadow-carve, which are geometric relative to the leg centerline.
+            effective_line = line
+            if use_leg_offset:
+                offset_m = float(getattr(leg_state, 'mean_offset_m', 0.0) or 0.0)
+                if abs(offset_m) > 1e-9:
+                    from drifting.engine import _offset_line_perpendicular
+                    effective_line = _offset_line_perpendicular(line, offset_m)
+            # Perpendicular-to-drift leg width -- denominator for edge_h_eff.
+            # Also compute the leg's perp-drift interval so we can clip each
+            # facing edge to it: under the IWRAP-uniform-ships model, ships
+            # exist only within the leg's own perp-drift footprint, so any
+            # polygon overhang beyond the leg contributes zero.
+            rad = np.radians(math_angle)
+            perp_drift = np.array([-np.sin(rad), np.cos(rad)])
+            leg_coords = np.array(line.coords)
+            leg_vec = leg_coords[-1] - leg_coords[0]
+            leg_drift_width = abs(float(np.dot(leg_vec, perp_drift)))
+            if leg_drift_width <= 0.0:
+                return []
+            leg_perps = np.dot(leg_coords, perp_drift)
+            leg_perp_lo = float(leg_perps.min())
+            leg_perp_hi = float(leg_perps.max())
+            leg_centroid_pt = line.centroid
+            leg_centroid = (leg_centroid_pt.x, leg_centroid_pt.y)
+            # First pass: filter facing edges + keep along-drift distance so
+            # the 1D shadow-carve can sort them closest-first.
+            drift_rad = np.radians(math_angle)
+            drift_ux = float(np.cos(drift_rad))
+            drift_uy = float(np.sin(drift_rad))
+
+            def _facing_ahead(seg) -> bool:
+                """Direction-only pre-filter, mirroring the checks inside
+                :func:`segment_corridor_overlap_length` but without the
+                shapely corridor-intersection test."""
+                p1s, p2s = seg
+                dx = p2s[0] - p1s[0]
+                dy = p2s[1] - p1s[1]
+                seg_len_sq = dx * dx + dy * dy
+                if seg_len_sq <= 0.0:
+                    return False
+                inv_len = seg_len_sq ** -0.5
+                # Outward normal for CCW polygon = (dy, -dx) / len
+                drift_into = drift_ux * dy * inv_len - drift_uy * dx * inv_len
+                if abs(drift_into) < 0.17 or drift_into > 0:
+                    return False
+                mx_ = 0.5 * (p1s[0] + p2s[0])
+                my_ = 0.5 * (p1s[1] + p2s[1])
+                vx = mx_ - leg_centroid[0]
+                vy = my_ - leg_centroid[1]
+                d2 = vx * vx + vy * vy
+                if d2 > 0.0:
+                    ahead = vx * drift_ux + vy * drift_uy
+                    if ahead < -0.5 * d2 ** 0.5:
+                        return False
+                return True
+
+            def _collect(use_corridor_gate: bool) -> list[dict[str, Any]]:
+                out: list[dict[str, Any]] = []
+                for seg_idx, seg in enumerate(segments):
+                    if use_corridor_gate:
+                        if segment_corridor_overlap_length(
+                                seg, drift_corridor, math_angle, leg_centroid) <= 0.0:
+                            continue
+                    elif not _facing_ahead(seg):
+                        continue
+                    p1 = seg[0]
+                    p2 = seg[1]
+                    mx = 0.5 * (p1[0] + p2[0])
+                    my = 0.5 * (p1[1] + p2[1])
+                    # Along-drift distance from leg centroid to segment midpoint
+                    # (positive = downstream of leg in drift direction).
+                    dist_along = (mx - leg_centroid[0]) * drift_ux + (my - leg_centroid[1]) * drift_uy
+                    out.append({
+                        'seg_idx': seg_idx,
+                        'p1': p1, 'p2': p2,
+                        'dist': dist_along,
+                    })
+                return out
+
+            candidates: list[dict[str, Any]] = []
+            if drift_corridor is not None:
+                candidates = _collect(use_corridor_gate=True)
+            if not candidates:
+                # FALLBACK: the drift corridor missed every facing edge (short
+                # reach, odd drift angle, or corridor construction failure)
+                # even though the obstacle has a nonzero analytical hole.
+                # Without edges the cascade would fall back to the legacy
+                # simple branch -- whole-polygon h_eff times p_nr at the
+                # MINIMUM VERTEX distance -- which grossly overstates the
+                # probability when the facing edges are much farther away
+                # than the nearest corner.  Build the edges with the
+                # direction-only filter instead; the leg-perp clip and the
+                # 1D shadow-carve still bound the geometry, and per-edge
+                # p_nr(edge_dist) handles distance correctly.
+                candidates = _collect(use_corridor_gate=False)
+            if not candidates:
+                return []
+            carved = compute_edge_reachable_widths_1d(
+                candidates, math_angle,
+                leg_perp_lo=leg_perp_lo, leg_perp_hi=leg_perp_hi,
+            )
+            positive = [c for c in carved if c.get('reachable_width', 0.0) > 0.0]
+            if not positive:
+                return []
+            # Total reachable width across facing edges of this polygon.  Used
+            # to normalise per-edge shares so the polygon total remains equal
+            # to the analytical ``h_eff`` (which correctly accounts for the
+            # AIS lateral ship distribution).  Without this normalisation, a
+            # polygon whose ship density is far from the leg's uniform
+            # assumption over-contributes -- see the ESCOW test10 inflation.
+            total_reach = float(sum(float(c['reachable_width']) for c in positive))
+            if total_reach <= 0.0:
+                return []
+            # Vectorised along-drift edge distances for p_nr; the value used
+            # here (mid-endpoint average) matches the pre-existing formula.
+            endpoints = np.empty((2 * len(positive), 2), dtype=float)
+            for i, eg in enumerate(positive):
+                endpoints[2 * i, 0] = eg['p1'][0]
+                endpoints[2 * i, 1] = eg['p1'][1]
+                endpoints[2 * i + 1, 0] = eg['p2'][0]
+                endpoints[2 * i + 1, 1] = eg['p2'][1]
+            # Distance is measured to ``effective_line`` (leg centerline by
+            # default, offset by the traffic-distribution mean if the user
+            # opted in via ``use_leg_offset``).
             dists = directional_distances_to_points(
-                endpoints, line, compass_angle, use_leg_offset=use_leg_offset)
+                endpoints, effective_line, compass_angle,
+                use_leg_offset=False,
+            )
             items: list[dict[str, Any]] = []
-            for i, (si, frac) in enumerate(selected):
+            for i, eg in enumerate(positive):
                 valid = [float(d) for d in [dists[2 * i], dists[2 * i + 1]] if np.isfinite(d)]
                 if not valid:
                     continue
                 edge_dist = sum(valid) / len(valid)
+                reachable_width = float(eg['reachable_width'])
+                # ``edge_h_eff`` is the pure-geometric per-edge share
+                # (uniform-ship assumption) -- kept for backtracing.  The
+                # ``len_frac`` is what actually multiplies ``h_eff`` in the
+                # cascade so the polygon total matches the analytical value.
+                edge_h_eff = reachable_width / leg_drift_width
+                len_frac = reachable_width / total_reach
                 items.append({
-                    'seg_idx': si,
-                    'len_frac': frac / total_frac if total_frac > 0 else 0.0,
+                    'seg_idx': eg['seg_idx'],
+                    'edge_h_eff': edge_h_eff,
+                    'len_frac': len_frac,
+                    'reachable_width_m': reachable_width,
+                    # Perp-drift intervals used for INTER-OBSTACLE shadow-carve
+                    # at bucket time (a closer obstacle's occupied perp
+                    # intervals subtract from this edge's reach).  Empty list
+                    # if all intervals were absorbed by intra-polygon carving.
+                    'reachable_intervals': list(eg.get('reachable_intervals', [])),
                     'edge_dist': edge_dist,
                     'edge_p_nr': get_not_repaired(drift_repair, drift_speed, edge_dist),
                 })
             return items
         except Exception:  # nosec B110 B112
             return []
+
+    @staticmethod
+    def _merge_perp_intervals(
+        cov: list[tuple[float, float]],
+        new_intervals: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        """Merge ``new_intervals`` into ``cov`` and return a sorted, merged list."""
+        if not new_intervals:
+            return list(cov)
+        all_iv = sorted(list(cov) + list(new_intervals))
+        merged: list[tuple[float, float]] = [tuple(all_iv[0])]
+        for lo, hi in all_iv[1:]:
+            m_lo, m_hi = merged[-1]
+            if lo <= m_hi:
+                merged[-1] = (m_lo, max(m_hi, hi))
+            else:
+                merged.append((lo, hi))
+        return merged
+
+    def _recarve_edges_inter_obstacle(
+        self,
+        edges: list[dict[str, Any]],
+        covered_perp: list[tuple[float, float]],
+    ) -> tuple[list[dict[str, Any]], list[tuple[float, float]]]:
+        """Extend the "ship grounds once" rule to run ACROSS obstacles.
+
+        Each edge's perp-drift intervals (``reachable_intervals``) are
+        subtracted against the closer obstacles' occupied perp intervals
+        (``covered_perp``).  Edges whose reach collapses to zero are dropped
+        from the returned edge list.  Surviving edges get updated
+        ``reachable_width_m``, ``edge_h_eff`` and ``len_frac``.  Also returns
+        the union of the OBSTACLE's own perp intervals (before this carve --
+        i.e. what this obstacle claims for downstream carving of farther
+        obstacles).
+        """
+        if not edges:
+            return [], []
+        # Collect the obstacle's original perp intervals (union of ALL edges'
+        # reachable_intervals) so a farther obstacle can carve against this
+        # obstacle's full footprint, not just the surviving portions.
+        obs_intervals: list[tuple[float, float]] = []
+        for e in edges:
+            for lo, hi in e.get('reachable_intervals', []) or []:
+                if hi > lo:
+                    obs_intervals.append((float(lo), float(hi)))
+        obs_intervals_merged = self._merge_perp_intervals([], obs_intervals)
+        if not covered_perp:
+            # No inter-obstacle shadow yet -- keep edges as-is.  We still
+            # need to report our own footprint back so the next obstacle
+            # can carve against it.
+            return list(edges), obs_intervals_merged
+        # Re-carve each edge's intervals against ``covered_perp``.
+        survivors: list[dict[str, Any]] = []
+        total_reach_new = 0.0
+        for e in edges:
+            new_intervals: list[tuple[float, float]] = []
+            for lo, hi in e.get('reachable_intervals', []) or []:
+                remaining = [(lo, hi)]
+                for c_lo, c_hi in covered_perp:
+                    next_remaining = []
+                    for r_lo, r_hi in remaining:
+                        if c_hi <= r_lo or c_lo >= r_hi:
+                            next_remaining.append((r_lo, r_hi))
+                        elif c_lo <= r_lo and c_hi >= r_hi:
+                            pass
+                        elif c_lo <= r_lo:
+                            next_remaining.append((c_hi, r_hi))
+                        elif c_hi >= r_hi:
+                            next_remaining.append((r_lo, c_lo))
+                        else:
+                            next_remaining.append((r_lo, c_lo))
+                            next_remaining.append((c_hi, r_hi))
+                    remaining = next_remaining
+                for r_lo, r_hi in remaining:
+                    if r_hi > r_lo:
+                        new_intervals.append((r_lo, r_hi))
+            new_reach = sum(hi - lo for lo, hi in new_intervals)
+            if new_reach <= 0.0:
+                continue
+            # Preserve original leg_drift_width via edge_h_eff / reach ratio
+            old_reach = float(e.get('reachable_width_m', 0.0))
+            if old_reach > 0.0:
+                leg_dw = old_reach / float(e['edge_h_eff']) if e.get('edge_h_eff', 0.0) > 0 else 0.0
+            else:
+                leg_dw = 0.0
+            new_e = dict(e)
+            new_e['reachable_width_m'] = new_reach
+            new_e['reachable_intervals'] = new_intervals
+            new_e['edge_h_eff'] = (new_reach / leg_dw) if leg_dw > 0.0 else float(e['edge_h_eff'])
+            survivors.append(new_e)
+            total_reach_new += new_reach
+        # Renormalise len_frac so the polygon's total share still sums to 1.
+        if total_reach_new > 0.0:
+            for e in survivors:
+                e['len_frac'] = float(e['reachable_width_m']) / total_reach_new
+        return survivors, obs_intervals_merged
 
     def _build_shadow_entry(
         self,
@@ -577,9 +718,14 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         dists_dir: list, w_dir, structures: list, depths: list,
     ) -> tuple:
         drift_corridor = None
-        if dists_dir and w_dir is not None and lateral_spread > 0.0 and reach_distance > 0:
+        # Always build a corridor so per-edge p_nr weighting applies even when
+        # no AIS lateral distributions are available (lateral_spread==0).
+        # A 2500 m fallback half-width gives a corridor that fully encloses any
+        # obstacle that is within the leg's own projected width.
+        effective_spread = lateral_spread if lateral_spread > 0.0 else 2500.0
+        if reach_distance > 0:
             try:
-                drift_corridor = _create_drift_corridor(line, math_angle, reach_distance, lateral_spread)
+                drift_corridor = _create_drift_corridor(line, math_angle, reach_distance, effective_spread)
             except Exception:  # nosec B110 B112
                 drift_corridor = None
         if drift_corridor is not None and not drift_corridor.is_empty:
@@ -760,6 +906,14 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         sorted_obs = sorted(obstacles, key=lambda x: float(x[2]))
         blocker_union: BaseGeometry | None = None
         anchor_union: BaseGeometry | None = None
+        # Union of ACTUAL anchor polygon geometries (not their swept shadows).
+        # Used to detect the common physical case where a grounding polygon
+        # is nested inside its own anchor polygon (a fact of bathymetry -- a
+        # depth <= D contour always sits inside a depth <= anchor_d * D
+        # contour).  In that case every ship reaching the grounding polygon
+        # must first drift through the anchor zone, so h_in_anchor should
+        # equal h_reach and anchor_p * h_in_anchor should reduce grounding.
+        anchor_polygon_union: BaseGeometry | None = None
         entries: list[dict[str, Any]] = []
         for obs_type, obs_idx, dist, hole_pct in sorted_obs:
             if obs_type == 'allision':
@@ -795,29 +949,62 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 reach = geom_X
                 h_reach = float(hole_pct)
             h_in_anchor = 0.0
-            if (obs_type != 'anchoring' and anchor_union is not None
-                    and not anchor_union.is_empty and not reach.is_empty
-                    and _have_integrator and anchor_union.intersects(reach)):
-                try:
-                    _in = reach.intersection(anchor_union)
-                    if _in is not None and not _in.is_empty:
-                        h_in_anchor = self._analytical_hole_for_geom(
-                            _in, transformed_lines[leg_idx], compass_angle,
-                            dists_dir, w_dir, reach_distance, lateral_spread)
-                except Exception:  # nosec B110 B112
-                    h_in_anchor = 0.0
+            if (obs_type != 'anchoring' and not reach.is_empty
+                    and _have_integrator):
+                # Union of the anchor's swept-shadow with the anchor's actual
+                # polygon.  The swept shadow captures ships that pass DOWNSTREAM
+                # of the anchor polygon; the polygon geometry itself captures
+                # the far more common case where a grounding polygon is
+                # nested INSIDE the anchor polygon (deeper contour inside
+                # shallower contour).  Without the polygon-geometry term, the
+                # nested case gets h_in_anchor = 0 and anchor never reduces
+                # grounding for those ships -- a systematic under-application
+                # of the anchor probability that inflates grounding by ~3-5x.
+                anchor_capture: BaseGeometry | None = None
+                if anchor_union is not None and not anchor_union.is_empty:
+                    anchor_capture = anchor_union
+                if anchor_polygon_union is not None and not anchor_polygon_union.is_empty:
+                    if anchor_capture is None:
+                        anchor_capture = anchor_polygon_union
+                    else:
+                        try:
+                            anchor_capture = unary_union([anchor_capture, anchor_polygon_union])
+                        except Exception:  # nosec B110 B112
+                            pass
+                if (anchor_capture is not None
+                        and not anchor_capture.is_empty
+                        and anchor_capture.intersects(reach)):
+                    try:
+                        _in = reach.intersection(anchor_capture)
+                        if _in is not None and not _in.is_empty:
+                            h_in_anchor = self._analytical_hole_for_geom(
+                                _in, transformed_lines[leg_idx], compass_angle,
+                                dists_dir, w_dir, reach_distance, lateral_spread)
+                    except Exception:  # nosec B110 B112
+                        h_in_anchor = 0.0
             entries.append({'obs_type': obs_type, 'obs_idx': obs_idx,
                             'dist': dist, 'hole_pct': hole_pct, 'h_reach': h_reach, 'h_in_anchor': h_in_anchor})
             # Anchoring obstacles reference depth polygons; map 'anchoring' -> 'depth'
             # so the shadow lookup populates anchor_union correctly.
             lookup_type = 'depth' if obs_type == 'anchoring' else obs_type
             _s = shadows_map.get((lookup_type, obs_idx))
-            if _s is None or _s.is_empty:
-                continue
             if obs_type in ('allision', 'grounding'):
-                blocker_union = _s if blocker_union is None else unary_union([blocker_union, _s])
+                if _s is not None and not _s.is_empty:
+                    blocker_union = _s if blocker_union is None else unary_union([blocker_union, _s])
             elif obs_type == 'anchoring':
-                anchor_union = _s if anchor_union is None else unary_union([anchor_union, _s])
+                if _s is not None and not _s.is_empty:
+                    anchor_union = _s if anchor_union is None else unary_union([anchor_union, _s])
+                # Also accumulate the anchor polygon geometry itself (in
+                # addition to its downstream shadow) so nested grounding
+                # polygons trigger the anchor reduction.
+                if geom_X is not None and not geom_X.is_empty:
+                    if anchor_polygon_union is None:
+                        anchor_polygon_union = geom_X
+                    else:
+                        try:
+                            anchor_polygon_union = unary_union([anchor_polygon_union, geom_X])
+                        except Exception:  # nosec B110 B112
+                            pass
         return key, entries
 
     def _collect_bucket_obs(
@@ -1112,14 +1299,14 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             phase_progress = weighted_progress / total_weighted_work
             return self._report_progress('spatial', phase_progress, label)
 
-        # Choose probability hole computation method
-        use_analytical = data.get('use_analytical', True) if data else True
-        compute_holes_fn = (
-            compute_probability_holes_analytical if use_analytical
-            else compute_probability_holes
-        )
-        method_name = "analytical cross-section CDF" if use_analytical else "Monte Carlo"
-        logger.info(f"Probability holes: using {method_name} method")
+        # Probability holes always use the analytical cross-section CDF
+        # integration.  The Monte-Carlo estimator in
+        # geometries/calculate_probability_holes.py is retained ONLY as an
+        # independent cross-check for tests/examples -- it is not selectable
+        # from the UI or the .omrat data (the old 'use_analytical' flag was
+        # never exposed anywhere and defaulted to True).
+        compute_holes_fn = compute_probability_holes_analytical
+        logger.info("Probability holes: using analytical cross-section CDF method")
 
         # Calculate structures (allision)
         struct_probability_holes = compute_holes_fn(
@@ -1371,7 +1558,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 except (IndexError, TypeError):
                     pass
             if anchor_threshold > 0.0:
-                anchoring_idx = threshold_to_idx.get(round(anchor_threshold, 2))
+                # The threshold_to_idx keys were built in
+                # _merge_depths_by_threshold from the ROUNDED draughts:
+                # round(anchor_d * round(d, 2), 2).  Look up the same way --
+                # round(anchor_d * d, 2) differs in the 2nd decimal for
+                # full-precision AIS draughts (e.g. 7 x 5.87714 -> 41.14 vs
+                # 7 x 5.88 -> 41.16), which silently dropped the anchoring
+                # obstacle for most AIS-derived ship cells.
+                anchoring_idx = threshold_to_idx.get(
+                    round(anchor_d * round(draught, 2), 2))
                 if anchoring_idx is not None:
                     try:
                         dist = depth_min_dists[leg_idx][math_dir_idx][anchoring_idx]
@@ -1416,7 +1611,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
 
     def _apply_anchoring_entry(
         self, *,
-        entry: dict, base: float, rp: float, anchor_p: float, h_eff: float,
+        entry: dict, base: float, rp: float, anchor_p: float,
+        hole_pct: float, h_eff: float,
         depths: list, seg_id: str, d_idx: int, dist: float,
         leg_dir_key: str, precomputed_edges: list,
         debug_add, report: dict, freq: float, line,
@@ -1427,13 +1623,32 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             obs_key = f"Anchoring - {dep.get('id', str(obs_idx))}"
         except Exception:  # nosec B110 B112
             obs_key = f"Anchoring - {obs_idx}"
-        contrib_total = base * rp * anchor_p * h_eff
         if precomputed_edges:
+            # Anchoring uses the ANALYTICAL h_eff (AIS-weighted), not the
+            # IWRAP-uniform geometric edge_h_eff that grounding/allision use.
+            # Rationale:
+            #   * Anchoring doesn't include ``edge_p_nr``, so it has no need
+            #     for per-edge distance weighting (unlike grounding).
+            #   * Anchor polygons for typical draughts cover most of the
+            #     seabed shallower than ~40--50 m; under uniform-along-leg
+            #     the geometric baseline says nearly every ship enters the
+            #     anchor zone, which grossly overestimates the number of
+            #     ships that would actually anchor -- ships DO follow the
+            #     AIS distribution, and the analytical h_anchor already
+            #     captures how many of them realistically drift into that
+            #     zone.
+            # We still report per edge for traceability, distributing the
+            # analytical h_eff across the polygon's edges by the same
+            # 1D-shadow-carved reach share (``len_frac``) that grounding
+            # uses for its geometry.  Sum of edge contributions equals
+            # the obstacle-level ``base * rp * anchor_p * h_eff``.
+            contrib_total = 0.0
             for eg in precomputed_edges:
-                edge_hole = h_eff * eg['len_frac']
+                edge_hole = float(h_eff) * float(eg['len_frac'])
                 if edge_hole <= 0.0:
                     continue
                 per_edge = base * rp * anchor_p * edge_hole
+                contrib_total += per_edge
                 self._update_anchoring_report(
                     report, per_edge, obs_idx, depths, seg_id,
                     d_idx, dist, edge_hole, None, line,
@@ -1443,6 +1658,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     eg['seg_idx'], leg_dir_key, per_edge,
                 )
         else:
+            contrib_total = base * rp * anchor_p * h_eff
             self._update_anchoring_report(
                 report, contrib_total, obs_idx, depths, seg_id,
                 d_idx, dist, h_eff, None, line,
@@ -1488,8 +1704,26 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                                 seg_id, cell, d_idx, dist, base, rp, shadow_loss, p_nr, h_eff,
                                 freq, ship_type, ship_size, None, line)
         else:
+            # Per-edge branch -- IWRAP-style uniform ships along the reference
+            # line (leg centerline by default, leg+mean_offset if the user
+            # toggles ``use_leg_offset_for_distance``).  The lateral spread
+            # (std) is NOT used in the drift model here; only the geometric
+            # ``reachable_width`` matters.  The attenuation ratio combines
+            # (a) between-polygon geometric shadow (h_reach / hole_pct) and
+            # (b) anchor survival: ships that would successfully anchor in
+            # the anchor zone on their way to this polygon never ground, so
+            # only the fraction  (h_reach - anchor_p*h_in_anchor) / h_reach
+            # continues.  Both together equal  h_eff / hole_pct  because
+            # h_eff = h_reach - anchor_p * h_in_anchor.
+            if hole_pct > 0.0:
+                shadow_ratio = float(h_eff) / float(hole_pct)
+            else:
+                shadow_ratio = 1.0
+            shadow_ratio = max(0.0, min(1.0, shadow_ratio))
             for eg in precomputed_edges:
-                edge_hole = h_eff * eg['len_frac']
+                # Pure geometric per-edge share (uniform ships), attenuated
+                # only by between-polygon shadow.
+                edge_hole = float(eg['edge_h_eff']) * shadow_ratio
                 if edge_hole <= 0.0:
                     continue
                 p_nr = eg['edge_p_nr']
@@ -1502,6 +1736,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                                     p_nr, edge_hole, freq, ship_type, ship_size, None, line)
                 self._add_direct_segment_contrib(
                     report, direct_key, key_name, eg['seg_idx'], leg_dir_key, c)
+                self._record_edge_meta(
+                    report=report, obs_key=key_name, seg_idx=eg['seg_idx'],
+                    leg_dir_key=leg_dir_key, obs_type=obs_type,
+                    hole_pct=hole_pct, h_eff=h_eff,
+                    reachable_width=eg.get('reachable_width_m', 0.0),
+                    edge_h_eff=eg['edge_h_eff'], len_frac=eg['len_frac'],
+                    edge_dist=eg['edge_dist'], edge_p_nr=p_nr, edge_hole=edge_hole,
+                    base=base, rp=rp, contrib=c,
+                )
         debug_add(report, leg_dir_key, key_name, obs_type, obs_total, dist, h_eff, 1.0,
                   p_nr=None, anchor_effect=None, exposure_factor=base * rp,
                   rp=rp, base=base, freq=freq)
@@ -1554,6 +1797,16 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         total_grounding = 0.0
         total_anchoring = 0.0
 
+        # Inter-obstacle along-drift shadow: walk entries closest-first
+        # (already the sort order in ``entries``) and accumulate a running
+        # list of covered perp-drift intervals.  Each farther obstacle's
+        # edges are re-carved against the intervals claimed by closer
+        # obstacles, so a ship that grounds on a near depth polygon
+        # doesn't also allide on a structure behind it (or vice versa).
+        covered_perp: list[tuple[float, float]] = []
+        # Compute polygon-level ``total_reach`` for each obstacle from its
+        # ORIGINAL edges once, so we can renormalise ``len_frac`` when
+        # inter-obstacle carving trims individual edge reaches.
         for entry in entries:
             obs_type = entry['obs_type']
             obs_idx = entry['obs_idx']
@@ -1569,9 +1822,34 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 continue
             obs_geom_key = 'allision' if obs_type == 'allision' else 'depth'
             precomputed_edges = edge_geom_map.get((obs_geom_key, obs_idx), []) if edge_geom_map else []
+            # Re-carve edges against ``covered_perp`` before we consume them.
+            # ``precomputed_edges`` are per-obstacle only (intra-polygon
+            # 1D shadow-carve); this pass extends the "ship grounds once"
+            # rule to run ACROSS obstacles in the ship's obstacle list.
+            precomputed_edges, obs_perp_intervals = self._recarve_edges_inter_obstacle(
+                precomputed_edges, covered_perp,
+            )
+            if precomputed_edges is None:
+                # Empty list is fine (fall back to obstacle-level simple branch);
+                # None means the helper decided to skip this obstacle entirely.
+                precomputed_edges = []
+            if obs_type == 'anchoring':
+                # Anchoring is PROBABILISTIC (a ship in the anchor zone
+                # anchors with probability anchor_p), not a solid wall: it
+                # must NOT claim covered_perp, or the huge anchor polygon
+                # (which usually encloses the whole corridor) would zero
+                # every grounding/allision edge behind it.  The probabilistic
+                # reduction of grounding is already handled separately via
+                # ``h_eff = h_reach - anchor_p * h_in_anchor``.
+                obs_perp_intervals = []
+            # Update the cross-obstacle covered list with THIS obstacle's
+            # occupied perp intervals for the next iteration.
+            if obs_perp_intervals:
+                covered_perp = self._merge_perp_intervals(covered_perp, obs_perp_intervals)
             if obs_type == 'anchoring':
                 total_anchoring += self._apply_anchoring_entry(
-                    entry=entry, base=base, rp=rp, anchor_p=anchor_p, h_eff=h_eff,
+                    entry=entry, base=base, rp=rp, anchor_p=anchor_p,
+                    hole_pct=hole_pct, h_eff=h_eff,
                     depths=depths, seg_id=seg_id, d_idx=d_idx, dist=dist,
                     leg_dir_key=leg_dir_key, precomputed_edges=precomputed_edges,
                     debug_add=debug_add, report=report, freq=freq, line=line,

@@ -16,37 +16,48 @@ a tab or field you don't recognise, see :ref:`user_guide`.
 Build a project from scratch (no AIS)
 ======================================
 
-#. **Route tab** -- **Add Route**, click waypoints on the map,
-   **Stop Route**.
-#. **Traffic tab** -- for every segment, select direction and enter
-   the Frequency / Speed / Draught / Height / Beam matrix manually.
-   A single busy ship type row is enough for a first pass.
-#. **Depths tab** -- load a shapefile or use **Fetch GEBCO Depths**
-   with your OpenTopography key.
-#. **Objects tab** -- load a shapefile with a ``height`` attribute or
-   draw polygons manually.
+#. **Routes tab** -- click **Add**, click the waypoints on the map,
+   then **Stop**.
+#. **Traffic Data tab** -- for every segment, select the direction
+   and enter the Frequency / Speed / Draught / Ship heights matrices
+   manually.  A single busy ship-type row is enough for a first pass.
+   Leave **Scaling (%)** at 100 unless you are running a what-if.
+#. **Depths tab** -- click **Load** to import a polygon layer, or use
+   **Fetch GEBCO depth** with your OpenTopography key (the key goes
+   in the **API Key** field on that same tab).
+#. **Objects tab** -- **Load** a polygon layer with a ``height``
+   attribute, or **Add manually** and draw polygons.
 #. **Settings -> Drift settings** -- check the wind rose (default is
    uniform) and the repair distribution (default is lognormal with
    IWRAP defaults).  Adjust if you have local data.
-#. **Distributions tab** -- for every segment, check the PDF plot.
+#. Back on the **Routes tab**, scroll down to the lateral
+   distribution panel and check the PDF plot for every segment.
    Adjust ``mean1_1`` / ``std1_1`` / ``weight1_1`` until the plot
    matches the expected track spread.
-#. **Results tab -> Run Model.**
+#. **Run Analysis tab** -- set **Name of the model** and
+   **File path**, then **Run model**.
 
 
 Build a project from AIS
 =========================
 
 #. **Settings -> AIS connection settings** -- fill in the database
-   parameters.
-#. Digitise the route as above (**Route** tab).
-#. Select each segment in turn and click **Update AIS**.  This fires
-   a PostgreSQL query against your AIS schema; OMRAT populates the
-   traffic matrix for both directions automatically.
+   parameters.  (**Settings -> Database setup wizard...** will create
+   and populate the database if you don't have one; see
+   :ref:`database-setup`.)
+#. Digitise the route as above (**Routes** tab).
+#. Click **Update all distributions** on the Routes tab.  This fires
+   PostgreSQL queries against your AIS schema and populates the
+   traffic matrix for *every* segment and both directions at once.
+   It also re-derives the junction transition matrices
+   (:ref:`junctions`) and runs the route-validation pass, which may
+   prompt you about near-coincident waypoints and crossing legs.
 #. Continue from step 3 of the "from scratch" recipe.
 
 Tip: the AIS queries can be slow on large schemas.  The time per leg
-is written to the QGIS log tab.
+is written to the QGIS log tab.  Any **Scaling (%)** values you set by
+hand are preserved across the refresh -- only Frequency, Speed,
+Draught and Height are overwritten.
 
 
 Import an existing IWRAP XML
@@ -84,15 +95,18 @@ If a result is surprisingly high, you usually want to know which
 single polygon is contributing the most.
 
 #. Run the model.
-#. Click **View** next to the result field of interest (e.g. Drift
-   Grounding).
+#. Make sure the run you care about is selected in **Previous runs**
+   (the newest is selected automatically).
+#. Click **View** on the row of interest in the **Accident
+   probabilities** table (e.g. *Drifting grounding*).
 #. A dialog opens with per-obstacle contributions sorted by
    probability.
 
-Alternatively, inspect the **Drifting grounding results** layer on
-the map -- it is coloured by contribution (red = highest).  Click
-any polygon to open its attribute row with per-leg and per-direction
-totals.
+Alternatively, click **Add selected run results to map** and inspect
+the **Grounding Results** layer -- its features are the boundary
+edges of each depth contour, coloured by contribution (red =
+highest).  Click any edge to open its attribute row, which carries a
+``leg_<id>`` column per contributing leg.
 
 
 Debug why a number looks wrong
@@ -145,7 +159,7 @@ Reproduce an old result
 
 OMRAT is deterministic **when using the analytical probability path**
 (the default).  Given the same ``.omrat`` file and the same code
-version, **Run Model** produces bit-identical numbers on any machine.
+version, **Run model** produces bit-identical numbers on any machine.
 
 The Monte Carlo path (``use_analytical=False``) is not deterministic
 unless you set a random seed before invoking it.
@@ -157,9 +171,10 @@ Run a calculation without the QGIS UI (headless)
 The risk calculation doesn't intrinsically depend on QGIS.  You can
 load an ``.omrat`` file, build the calculation object, and run it
 from a Python script.  See
-``tests/diagnostics/profile_drifting_e2e.py`` for a minimal example
-(it's also what was used to produce the end-to-end benchmark numbers
-in :ref:`code-flow`).
+the standalone scripts under ``examples/`` -- e.g.
+``examples/run_collision_breakdown.py`` and
+``examples/check_powered_repaired.py`` -- for minimal working
+patterns.
 
 The UI-free path is useful for batch runs (sweeping parameters over a
 scenario tree) or for integrating OMRAT into a larger pipeline.
@@ -168,12 +183,23 @@ scenario tree) or for integrating OMRAT into a larger pipeline.
 Compare two result sets
 =========================
 
-There is no built-in diff tool, but the pattern is:
+Use the **Compare** tab:
 
-#. Run the first scenario, **File -> Save** as ``scenario_a.omrat``.
-#. Change whatever you want (e.g. reduce traffic on one leg).
-#. Run again, **File -> Save** as ``scenario_b.omrat``.
-#. Open both JSON files in a diff tool (``git diff --no-index``,
-   VS Code's built-in diff, etc.).  Every result field is in the
-   ``results`` section, and the full per-obstacle drifting report is
-   in ``drifting_report``.
+#. Run the first scenario.  Every run writes an input snapshot
+   ``<name>_<timestamp>.omrat`` next to its GeoPackage.
+#. Change whatever you want (e.g. reduce traffic on one leg) and run
+   again.
+#. On the **Compare** tab, browse to the two snapshots as
+   **Run A (.omrat)** and **Run B (.omrat)**, then click **Compare**.
+   You get accident probabilities side by side, a list of which
+   settings actually differ, and per-leg route distances.
+   **Add both runs as map layers (red + blue)** puts both geometries
+   on the canvas.
+
+For a quick numeric comparison without leaving the Run Analysis tab,
+select several rows in **Previous runs**: the result fields switch to
+side-by-side form with a relative difference against the first
+selected run.
+
+If you want a raw diff instead, the snapshots are plain JSON -- open
+both in ``git diff --no-index`` or VS Code's diff view.

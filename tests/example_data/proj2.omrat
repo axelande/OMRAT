@@ -5,6 +5,7 @@
     "headon": 4.9e-05,
     "overtaking": 0.00011,
     "crossing": 0.00013,
+    "merging": 0.00013,
     "bend": 0.00013,
     "grounding": 0.00016,
     "allision": 0.00019

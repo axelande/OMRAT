@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 from shapely.geometry import LineString, Polygon, box
 
@@ -21,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.drifting_model import DriftingModelMixin
+from compute.drifting_model import DriftingModelMixin  # noqa: E402
 
 
 @pytest.fixture
@@ -120,7 +119,6 @@ class TestPrecomputeShadowLayer:
         task uses the bounds-from-obstacles fallback."""
         line = LineString()  # empty
         struct = {'id': 's1', 'wkt': box(0, 0, 10, 10), 'height': 20.0}
-        from scipy.stats import norm
         cache = mixin_with_progress._precompute_shadow_layer(
             transformed_lines=[line],
             distributions=[[]],
@@ -236,24 +234,32 @@ class TestPrecomputeSpatial:
         assert struct_prob == []
         assert depth_prob == []
 
-    def test_monte_carlo_branch_selected_when_use_analytical_false(
-        self, mixin_with_progress, monkeypatch
+    @pytest.mark.parametrize('data', [
+        {},
+        {'use_analytical': True},
+        {'use_analytical': False},
+    ])
+    def test_probability_holes_always_use_the_analytical_method(
+        self, mixin_with_progress, monkeypatch, data
     ):
-        """data['use_analytical']=False routes through the Monte Carlo code
-        path (compute_probability_holes)."""
+        """The analytical cross-section CDF is the only code path.
+
+        The Monte-Carlo estimator in
+        ``geometries/calculate_probability_holes.py`` is kept as an
+        independent cross-check for tests and examples, but it is not
+        reachable from the model: the ``use_analytical`` flag was never
+        exposed in the UI or the ``.omrat`` schema and has been removed.
+        A stale ``use_analytical: False`` left in a project file must not
+        change the result.
+        """
         import compute.drifting_model as mod
         called = []
-        monkeypatch.setattr(
-            mod, 'compute_probability_holes',
-            lambda *a, **k: called.append('mc') or [],
-        )
         monkeypatch.setattr(
             mod, 'compute_probability_holes_analytical',
             lambda *a, **k: called.append('analytical') or [],
         )
         # Provide one tiny depths_gdf so the compute_holes_fn is invoked.
         import geopandas as gpd
-        from shapely.geometry import Polygon
         depths_gdf = gpd.GeoDataFrame(
             {'geometry': [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]})
         mixin_with_progress._precompute_spatial(
@@ -263,10 +269,16 @@ class TestPrecomputeSpatial:
             structs_gdfs=[],
             depths_gdfs=[depths_gdf],
             reach_distance=100.0,
-            data={'use_analytical': False},
+            data=data,
         )
-        assert 'mc' in called
-        assert 'analytical' not in called
+        assert called == ['analytical']
+
+    def test_monte_carlo_estimator_is_not_imported_by_the_model(self):
+        """Guards the comment in ``_precompute_spatial``: if someone
+        re-imports the Monte-Carlo function, the branch it feeds needs
+        re-thinking (and this test and that comment updating)."""
+        import compute.drifting_model as mod
+        assert not hasattr(mod, 'compute_probability_holes')
 
 
 # ---------------------------------------------------------------------------

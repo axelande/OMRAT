@@ -5,9 +5,9 @@ Ship-Ship Collision Calculations
 ================================
 
 This chapter describes OMRAT's calculations for ship-ship collision
-risk. Four types of collision encounters are modelled: head-on,
-overtaking, crossing, and bend collisions, all based on the equations
-in Hansen (2008).
+risk.  Five encounter types are modelled -- head-on, overtaking,
+crossing, merging and bend -- based on the equations in Pedersen
+(1995) and Friis-Hansen (2008).
 
 .. contents:: In this chapter
    :local:
@@ -41,7 +41,7 @@ Where:
 
 .. container:: source-code-ref pipeline
 
-   **Pipeline orchestrator:** ``compute/ship_collision_model.py:526`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L526>`__
+   **Pipeline orchestrator:** ``compute/ship_collision_model.py:1224`` -- `run_ship_collision_model() <https://github.com/axelande/OMRAT/blob/main/compute/ship_collision_model.py#L1224>`__
 
 
 Head-On Collisions
@@ -99,11 +99,11 @@ Where:
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:46`` -- `get_head_on_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L46>`__
+   ``compute/basic_equations.py:329`` -- `get_head_on_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L329>`__
 
 .. literalinclude:: ../../compute/basic_equations.py
    :language: python
-   :lines: 102-144
+   :pyobject: get_head_on_collision_candidates
    :caption: Head-on collision candidate calculation (compute/basic_equations.py)
 
 Default causation factor
@@ -154,7 +154,7 @@ identically to the head-on case.
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:147`` -- `get_overtaking_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L147>`__
+   ``compute/basic_equations.py:433`` -- `get_overtaking_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L433>`__
 
 Default causation factor
 -------------------------
@@ -178,20 +178,23 @@ Two traffic streams cross at angle :math:`\theta`. The collision zone
 is an area around the intersection point whose size depends on vessel
 dimensions and the crossing angle.
 
-Equations (Hansen Eq. 4.6)
----------------------------
+Equations (Pedersen 1995)
+--------------------------
+
+The two streams have linear densities :math:`Q_1/V_1` and
+:math:`Q_2/V_2` (ships per metre of leg).  Candidates accumulate at the
+rate at which one stream sweeps the other's collision cross-section:
 
 .. math::
 
-   N_G = \frac{Q_1 \times Q_2 \times D_{ij}}
-              {V_1 \times V_2 \times |\sin\theta|
-               \times \text{sec/year}}
+   N_G = \frac{Q_1}{V_1} \cdot \frac{Q_2}{V_2}
+         \cdot V_{ij} \cdot \frac{D_{ij}}{|\sin\theta|}
 
 Where:
 
 - :math:`\theta` = crossing angle (radians)
-- :math:`D_{ij}` = collision diameter (metres)
-- :math:`V_1, V_2` = vessel speeds on each leg
+- :math:`V_{ij}` = relative speed (metres/second)
+- :math:`D_{ij}` = geometric collision diameter (metres)
 
 The **relative speed** uses the law of cosines:
 
@@ -199,16 +202,38 @@ The **relative speed** uses the law of cosines:
 
    V_{ij} = \sqrt{V_1^2 + V_2^2 - 2 V_1 V_2 \cos\theta}
 
-The **collision diameter** accounts for the projected area of both
-vessels at the crossing angle:
+The **collision diameter** is the width of the Minkowski sum of the two
+hulls projected onto the normal of the *relative* velocity -- the
+cross-section ship 2 sweeps as seen from ship 1:
 
 .. math::
 
-   D_{ij} = (L_1 + L_2) \times |\sin\theta|
-           + (B_1 + B_2) \times |\cos\theta|
+   D_{ij} = \frac{(L_1 V_2 + L_2 V_1)\,|\sin\theta|}{V_{ij}}
+          + B_1 \sqrt{1 - \left(\frac{V_2 \sin\theta}{V_{ij}}\right)^2}
+          + B_2 \sqrt{1 - \left(\frac{V_1 \sin\theta}{V_{ij}}\right)^2}
 
 Where :math:`L_1, L_2` are ship lengths and :math:`B_1, B_2` are ship
-beams.
+beams.  Note the pairing: :math:`B_1` carries :math:`V_2` inside the
+root, and vice versa.  Modelling each hull as an :math:`L \times B`
+rectangle, ship 1's projection onto that normal is
+:math:`(L_1 V_2 |\sin\theta| + B_1 |V_1 - V_2\cos\theta|)/V_{ij}`, and
+the identity
+:math:`\sqrt{V_{ij}^2 - V_2^2 \sin^2\theta} = |V_1 - V_2\cos\theta|`
+gives the square-root form above.
+
+.. admonition:: Sanity check
+   :class: tip
+
+   Equal speeds, :math:`\theta = 90^\circ`: every term picks up
+   :math:`1/\sqrt{2}` and
+   :math:`D_{ij} = (L_1 + L_2 + B_1 + B_2)/\sqrt{2}` -- exactly the
+   projected width of both rectangles onto the 45-degree normal.  This
+   is checked directly in
+   ``tests/test_ship_ship_collisions.py::test_crossing_diameter_equals_projected_hull_width``.
+
+Because :math:`Q/V` appears twice and :math:`V_{ij}` once, crossing
+candidates scale as :math:`1/V` -- faster traffic spends less time in
+the conflict zone.  Head-on and overtaking obey the same law.
 
 .. note::
 
@@ -216,13 +241,28 @@ beams.
    anti-parallel courses), :math:`\sin\theta \to 0` and the crossing
    formula is not applicable. Use head-on or overtaking formulas instead.
 
+.. warning:: Changed in v0.14.0
+
+   Earlier versions omitted :math:`V_{ij}` from the numerator and used
+   the unweighted collision diameter
+   :math:`D_{ij} = (L_1+L_2)|\sin\theta| + (B_1+B_2)|\cos\theta|`.  Two
+   consequences: crossing candidates scaled as :math:`1/V^2` instead of
+   :math:`1/V` (head-on and overtaking were always correct), and the
+   beam contribution vanished entirely at right-angle crossings, where
+   :math:`\cos\theta = 0`.
+
+   On the bundled example project the corrected formula raises crossing
+   by about **5.6x** and merging by about **4.8x**.  Crossing, merging
+   and bend numbers from runs before v0.14.0 are therefore **not**
+   comparable with current ones; re-run any project you want to compare.
+
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:238`` -- `get_crossing_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L238>`__
+   ``compute/basic_equations.py:524`` -- `get_crossing_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L524>`__
 
 .. literalinclude:: ../../compute/basic_equations.py
    :language: python
-   :lines: 288-328
+   :pyobject: get_crossing_collision_candidates
    :caption: Crossing collision with law of cosines (compute/basic_equations.py)
 
 Default causation factor
@@ -231,6 +271,56 @@ Default causation factor
 .. math::
 
    P_C = 1.3 \times 10^{-4} \quad \text{(Pedersen 1995)}
+
+
+.. _merging-collisions:
+
+Merging Collisions
+==================
+
+A **merging** encounter is the same geometry as a crossing, but at a
+shallow angle: two streams converging onto nearly the same course, for
+example a feeder lane joining a main fairway.  The encounter lasts
+longer and the closing speed is lower than a broadside crossing, so it
+is worth reporting separately.
+
+OMRAT classifies each leg pair once, from its meeting angle:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Meeting angle
+     - Accident type
+   * - :math:`\theta \le 30^\circ`
+     - **Merging collision**
+   * - :math:`\theta > 30^\circ`
+     - **Crossing collision**
+
+The threshold is ``ShipCollisionModelMixin.MERGING_ANGLE_DEG``.  The
+*equations are identical* to the crossing case above -- only the
+causation factor differs, so a project can calibrate merging
+independently:
+
+.. math::
+
+   P_C^{\mathrm{merging}} = 1.3 \times 10^{-4}
+   \quad \text{(defaults to the crossing value)}
+
+IWRAP publishes no separate merging causation factor, which is why the
+default matches crossing.  Set it under **Settings -> Causation
+Factors -> Merging causation factor**.
+
+.. note:: Changed in v0.14.0
+
+   Merging used to be classified internally but summed into the
+   **crossing** total, while the Run Analysis row labelled "Merging
+   collision" was fed the *bend* number.  Merging and bend are now
+   separate accident types with their own rows, causation factors and
+   consequence-matrix entries.  There is no automatic migration: a
+   ``.omrat`` file written before v0.14.0 needs a ``pc['merging']``
+   entry and a 9th row in each spill matrix.  Opening the Causation
+   Factors dialog and the Consequence dialogs and saving writes both.
 
 
 .. _crossing_traffic_distribution:
@@ -254,7 +344,7 @@ consistent**:
 * If 1000 ships/year transit a fork and the user expects 60 % to take
   leg B and 40 % to take leg C, the *Frequency (ships/year)* value on
   leg A must be ``1000``, on leg B ``600``, on leg C ``400`` — entered
-  manually on the Traffic tab (or split by AIS in the user's
+  manually on the Traffic Data tab (or split by AIS in the user's
   pre-processing).
 * If you populate traffic from the AIS database (``pbUpdateAIS``),
   OMRAT samples passages from the AIS table that intersect each leg's
@@ -319,11 +409,36 @@ non-turning traffic and the turning traffic:
 
 Where :math:`\theta` is the bend angle (change in heading at the
 waypoint) and the crossing collision formula is applied with
-self-interaction (same ship type on both "legs").
+self-interaction: :math:`L_1 = L_2`, :math:`B_1 = B_2` and
+:math:`V_1 = V_2 = V`, the traffic-weighted mean speed on the leg.  With
+equal speeds the relative speed reduces to
+
+.. math::
+
+   V_{ij} = 2 V \left|\sin\frac{\theta}{2}\right|
+
+so the bend inherits the crossing formula's :math:`1/V` scaling: faster
+traffic yields fewer candidates.
+
+.. warning:: Changed in v0.14.0
+
+   Earlier versions called the crossing formula with a placeholder
+   ``V1 = V2 = 1.0`` m/s and a comment claiming the speed cancelled out.
+   It does not: the placeholder inflated both linear densities
+   (:math:`Q/V` with :math:`V = 1`) and removed the bend's speed
+   dependence altogether.  Together with the crossing-formula fix, bend
+   frequencies now come out roughly **5-10x lower** than before,
+   depending on speed and bend angle.  Bend numbers from earlier runs
+   are not comparable.
+
+Bend is reported as its own row in the Accident probabilities table.  It
+is *not* the same accident as a merging collision -- a bend is one leg
+changing direction, a merge is two legs converging.  See
+:ref:`merging-collisions`.
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:331`` -- `get_bend_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L331>`__
+   ``compute/basic_equations.py:648`` -- `get_bend_collision_candidates() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L648>`__
 
 Default causation factor
 -------------------------

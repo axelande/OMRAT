@@ -1,8 +1,8 @@
 .. _theory:
 
-=======================
+===========================
 Theory (what is calculated)
-=======================
+===========================
 
 This is the **theory track** -- a short umbrella that tells you where
 to find each accident type's derivation and the few global

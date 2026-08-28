@@ -29,6 +29,7 @@ ACCIDENT_TYPES: tuple[str, ...] = (
     'Head-on collision',
     'Crossing collision',
     'Merging collision',
+    'Bend collision',
 )
 
 # Internal accident keys used by ``compute/consequence.py`` to look up the
@@ -43,6 +44,7 @@ ACCIDENT_KEYS: tuple[str, ...] = (
     'head_on',
     'crossing',
     'merging',
+    'bend',
 )
 
 SPILL_LEVELS: tuple[str, ...] = (
@@ -141,6 +143,7 @@ def default_spill_probability() -> list[list[float]]:
         list(other),     # Head-on
         list(other),     # Crossing
         list(other),     # Merging
+        list(other),     # Bend
     ]
 
 

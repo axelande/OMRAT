@@ -1,8 +1,8 @@
 .. _overview:
 
-===============
+================
 Project Overview
-===============
+================
 
 What OMRAT does
 ================
@@ -43,8 +43,15 @@ Output: **expected annual frequency** for each accident type.
      - Same leg, same direction, different speeds.
    * - **Crossing collision**
      - Two legs share a waypoint at a non-trivial angle.
+   * - **Merging collision**
+     - Two legs meeting at a shallow angle (30 degrees or less).
    * - **Bend collision**
      - Same leg, one ship fails to turn at a bend.
+
+On top of these, OMRAT can convert the per-cell accident
+frequencies into **oil-spill catastrophe-exceedance rates** --
+how often a spill of at least a given size is expected per year.
+See :ref:`consequence`.
 
 
 Who OMRAT is for
@@ -109,5 +116,6 @@ What's next
 
 * Never installed OMRAT? -> :ref:`installation`.
 * Installed and curious what a first run looks like? -> :ref:`quickstart`.
+* Need real AIS traffic? -> :ref:`database-setup`.
 * Want to know what a "leg" is? -> :ref:`concepts`.
 * Ready to build your own project? -> :ref:`user_guide`.

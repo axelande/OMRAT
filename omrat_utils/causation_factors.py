@@ -24,6 +24,7 @@ class CausationFactors:
         self.data['headon'] = float(self.cfw.leHeadOnCf.text())
         self.data['overtaking'] = float(self.cfw.leOvertakingCf.text())
         self.data['crossing'] = float(self.cfw.leCrossingCf.text())
+        self.data['merging'] = float(self.cfw.leMergingCf.text())
         self.data['bend'] = float(self.cfw.leBendCf.text())
 
         # Grounding and allision causation factors
@@ -39,6 +40,7 @@ class CausationFactors:
         self.cfw.leHeadOnCf.setText(f"{self.data['headon']}")
         self.cfw.leOvertakingCf.setText(f"{self.data['overtaking']}")
         self.cfw.leCrossingCf.setText(f"{self.data['crossing']}")
+        self.cfw.leMergingCf.setText(f"{self.data['merging']}")
         self.cfw.leBendCf.setText(f"{self.data['bend']}")
 
         # Grounding and allision causation factors

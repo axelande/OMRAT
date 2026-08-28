@@ -465,6 +465,7 @@ class OMRAT(
             self.main_widget.LEPDriftingGrounding, self.main_widget.LEPPoweredGrounding,
             self.main_widget.LEPOvertakingCollision, self.main_widget.LEPHeadOnCollision,
             self.main_widget.LEPCrossingCollision, self.main_widget.LEPMergingCollision,
+            self.main_widget.LEPBendCollision,
         ]:
             field.setText('')
         self.main_widget.LEModelName.setText('')
@@ -722,6 +723,17 @@ class OMRAT(
 
     def run_calculation(self):
         """Run calculation in a background QgsTask for better UI responsiveness."""
+        if getattr(self, '_current_task', None) is not None:
+            QMessageBox.information(
+                self.main_widget,
+                self.tr('Calculation already running'),
+                self.tr(
+                    'A calculation is already running in the background. '
+                    'Wait for it to finish or cancel it in the QGIS task '
+                    'manager before starting a new one.'
+                ),
+            )
+            return
         gd = GatherData(self)
         data = gd.get_all_for_save()
         if self.calc is None:

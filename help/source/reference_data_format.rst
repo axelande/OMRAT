@@ -55,6 +55,7 @@ project reopens with its last result visible.
      "headon": 4.9e-5,
      "overtaking": 1.1e-4,
      "crossing": 1.3e-4,
+     "merging": 1.3e-4,
      "bend": 1.3e-4,
      "grounding": 1.6e-4,
      "allision": 1.9e-4,
@@ -69,14 +70,21 @@ project reopens with its last result visible.
    * - Key
      - Type
      - Used by
-   * - ``headon``, ``overtaking``, ``crossing``, ``bend``
+   * - ``headon``, ``overtaking``, ``crossing``, ``merging``,
+       ``bend``
      - float
      - ``run_ship_collision_model``.  Multiplied by the per-pair
-       geometric candidate count.
+       geometric candidate count.  ``merging`` was added in v0.14.0;
+       a project file written by an earlier version needs the key
+       adding by hand (or re-save from the Causation Factors dialog).
    * - ``grounding``, ``allision``
      - float
      - ``run_powered_grounding_model`` / ``run_powered_allision_model``
        as the :math:`P_c` in :math:`N_{II} = P_c Q m \exp(...)`.
+       These are **Category II** (missed-turn) factors, so IWRAP
+       export writes them to ``p_grounding_no_turn_causation`` /
+       ``p_allision_no_turn_causation`` -- see
+       :ref:`iwrap-causation-mapping`.
    * - ``allision_drifting_rf``, ``grounding_drifting_rf``
      - float
      - Risk-reduction factor applied to drifting totals after the
@@ -84,7 +92,59 @@ project reopens with its last result visible.
        adjustment for a whole area).
    * - ``p_pc``, ``d_pc``
      - float
-     - Legacy fields.  Not read by the current risk path.
+     - Legacy fields.  ``p_pc`` is still a fallback for
+       ``grounding`` and is kept in step with it on IWRAP import;
+       ``d_pc`` is not read by the current risk path.
+
+
+.. _iwrap-causation-mapping:
+
+IWRAP causation-factor mapping
+==============================
+
+IWRAP splits powered grounding and allision into two categories,
+each with its own causation factor:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 42 58
+
+   * - IWRAP attribute
+     - Meaning
+   * - ``p_grounding_causation``,
+       ``p_allision_causation``
+     - **Category I** -- the obstacle already lies in the lane; no
+       course change was required.
+   * - ``p_grounding_no_turn_causation``,
+       ``p_allision_no_turn_causation``
+     - **Category II** -- a turn *was* required at a waypoint and
+       the ship failed to make it.
+
+OMRAT models only Category II (see :ref:`powered`), so ``grounding``
+and ``allision`` are Category-II factors:
+
+* **Export** writes them to *both* attributes.  The Category-I one
+  gets the same value rather than a constant, because IWRAP computes
+  the Category-I geometry regardless of what we write -- scoring it
+  with a factor nobody chose is how the pre-v0.14.0 exporter
+  produced unaccountable numbers.  Zero those two attributes by hand
+  if you want IWRAP to score only what OMRAT models.
+* **Import** reads both, and the ``_no_turn`` value wins when a file
+  sets them differently.
+
+The two directions are driven by ``_CF_EXPORT_MAP`` and
+``_CF_IMPORT_MAP`` in ``compute/iwrap_convertion.py``; a test
+asserts they name the same attribute set, so a round-trip through
+IWRAP XML cannot silently lose a factor.
+
+.. warning:: Changed in v0.14.0
+
+   Before v0.14.0 the exporter ignored ``pc`` entirely and wrote a
+   fixed block of constants, and the importer put IWRAP's allision
+   causation into an unread key.  Both directions now round-trip.
+   With IWRAP's own defaults the two categories carry identical
+   values, so this only changes results for a project that tunes
+   them -- but a benchmark comparison is exactly that case.
 
 
 ``drift`` -- drifting model parameters
@@ -201,7 +261,7 @@ refresh + IWRAP import never overwrite this column, so a saved
 Companion to the per-cell ``Scaling (%)`` matrices in ``traffic_data``.
 
 * ``global_percent`` -- the value of the **Global scaling [%]** spinbox
-  on the Traffic tab.  Re-broadcast into the per-cell matrix whenever
+  on the Traffic Data tab.  Re-broadcast into the per-cell matrix whenever
   it changes, but only for ship-type rows whose ``follow_global`` flag
   is ``true``.  Compute never reads this number directly -- it reads
   the per-cell matrix that the broadcast has already updated.
@@ -374,7 +434,7 @@ Output keys (round-tripped, not inputs)
 
 When a project is saved **after** a successful run, the risk results
 are written into the same file for convenience.  They are NOT inputs
--- loading a file ignores them; **Run Model** overwrites them.
+-- loading a file ignores them; **Run model** overwrites them.
 
 .. code-block:: text
 

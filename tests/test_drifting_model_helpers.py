@@ -3,9 +3,8 @@
 These exercise the pure-logic pieces of the cascade without running the
 full traffic loop.  They fall into three groups:
 
-1. Config/math: ``_compute_reach_distance``, ``_distribution_centerline_stats``.
+1. Config/math: ``_compute_reach_distance``.
 2. Geometry: ``_build_blocker_shadow``, ``_analytical_hole_for_geom``.
-3. Edge distribution: ``_edge_weighted_holes``.
 
 Mixin methods are invoked on a trivial instance (`DriftingModelMixin()`);
 the host class's attributes aren't touched by these helpers.
@@ -18,13 +17,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 from scipy import stats
-from shapely.geometry import LineString, Point, Polygon, box
+from shapely.geometry import LineString, Polygon, box
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.drifting_model import DriftingModelMixin
+from compute.drifting_model import DriftingModelMixin  # noqa: E402
 
 
 @pytest.fixture
@@ -111,137 +110,6 @@ class TestComputeReachDistance:
         """Neither weibull nor use_lognormal set -> t99_h stays None -> default."""
         data = {'drift': {'speed': 5.0, 'repair': {}}}
         assert mixin._compute_reach_distance(data, 2000.0) == 20_000.0
-
-
-# ---------------------------------------------------------------------------
-# _distribution_centerline_stats
-# ---------------------------------------------------------------------------
-
-class TestDistributionCenterlineStats:
-    def test_empty_inputs_return_default(self, mixin):
-        assert mixin._distribution_centerline_stats([], []) == (0.0, 1.0)
-        assert mixin._distribution_centerline_stats(None, []) == (0.0, 1.0)  # type: ignore[arg-type]
-
-    def test_single_distribution_returns_its_stats(self, mixin):
-        d = stats.norm(loc=5.0, scale=2.0)
-        mean, sigma = mixin._distribution_centerline_stats([d], [1.0])
-        assert mean == pytest.approx(5.0, abs=1e-9)
-        # The helper clamps sigma to at least sqrt(1) = 1.0 and adds no
-        # mixture-variance term when there's only one component, so sigma
-        # ends up exactly the component std (2.0).
-        assert sigma == pytest.approx(2.0, abs=1e-9)
-
-    def test_zero_weights_return_default(self, mixin):
-        d = stats.norm(loc=5.0, scale=2.0)
-        assert mixin._distribution_centerline_stats([d], [0.0]) == (0.0, 1.0)
-
-    def test_two_component_mixture_mean_and_variance(self, mixin):
-        d1 = stats.norm(loc=0.0, scale=1.0)
-        d2 = stats.norm(loc=10.0, scale=1.0)
-        mean, sigma = mixin._distribution_centerline_stats([d1, d2], [1.0, 1.0])
-        # Weighted mean = 5, variance = mean(var + (mu_i - 5)^2) =
-        # (1 + 25) + (1 + 25) averaged = 26.
-        assert mean == pytest.approx(5.0, abs=1e-9)
-        assert sigma == pytest.approx(np.sqrt(26.0), abs=1e-6)
-
-    def test_sigma_floored_at_one(self, mixin):
-        """Variance clamp: sigma >= sqrt(1.0) even with tiny spreads."""
-        d = stats.norm(loc=0.0, scale=1e-6)
-        _, sigma = mixin._distribution_centerline_stats([d], [1.0])
-        assert sigma >= 1.0
-
-    def test_non_finite_values_skipped(self, mixin):
-        class BadDist:
-            def mean(self): return float('nan')
-            def std(self): return 1.0
-
-        good = stats.norm(loc=3.0, scale=2.0)
-        mean, sigma = mixin._distribution_centerline_stats([BadDist(), good], [1.0, 1.0])
-        # The NaN component is skipped, so result comes from `good` alone.
-        assert mean == pytest.approx(3.0, abs=1e-9)
-        assert sigma == pytest.approx(2.0, abs=1e-9)
-
-    def test_exception_in_dist_extraction_skipped(self, mixin):
-        """A distribution whose .mean() / .std() raises is silently skipped."""
-        class RaisingDist:
-            def mean(self): raise RuntimeError('synthetic')
-            def std(self): return 1.0
-
-        good = stats.norm(loc=3.0, scale=2.0)
-        mean, sigma = mixin._distribution_centerline_stats(
-            [RaisingDist(), good], [1.0, 1.0],
-        )
-        # Only `good` survives.
-        assert mean == pytest.approx(3.0, abs=1e-9)
-
-    def test_negative_total_weight_returns_default(self, mixin):
-        """With one non-zero weight that's negative the loop's `w <= 0`
-        guard skips it -> total_weight stays 0 -> default returned."""
-        d = stats.norm(loc=5.0, scale=1.0)
-        # All weights non-positive -> default returned via L131 (no entries).
-        assert mixin._distribution_centerline_stats([d, d], [-1.0, 0.0]) == (0.0, 1.0)
-
-
-# ---------------------------------------------------------------------------
-# _edge_weighted_holes
-# ---------------------------------------------------------------------------
-
-class TestEdgeWeightedHoles:
-    def test_returns_single_none_tuple_when_obs_missing(self, mixin):
-        corridor = box(0, 0, 100, 100)
-        assert mixin._edge_weighted_holes(None, corridor, 0.0, None, 0.5) == [(None, 0.5)]
-
-    def test_returns_single_none_tuple_when_corridor_missing(self, mixin):
-        poly = box(10, 10, 20, 20)
-        assert mixin._edge_weighted_holes(poly, None, 0.0, None, 0.3) == [(None, 0.3)]
-
-    def test_fractions_sum_to_hole_pct(self, mixin):
-        """Square polygon fully inside the corridor; fractions sum to h."""
-        # A large corridor + a small square polygon fully inside it.
-        corridor = box(-10_000, -10_000, 10_000, 10_000)
-        poly = box(0, 0, 100, 50)
-        leg = LineString([(-5000, -5000), (5000, -5000)])
-
-        edges = mixin._edge_weighted_holes(poly, corridor, 0.0, leg, 0.2)
-
-        # At least one segment identified; total fraction equals input.
-        assert edges, "expected at least one weighted edge"
-        assert all(idx is not None for idx, _ in edges)
-        total = sum(v for _, v in edges)
-        assert total == pytest.approx(0.2, rel=1e-9)
-
-    def test_falls_back_when_all_segments_filtered(self, mixin):
-        """When every segment fails the corridor test, the helper returns
-        the single-None fallback so the caller still gets `hole_pct`.
-        """
-        # Corridor that doesn't overlap the polygon at all.
-        corridor = box(-10_000, -10_000, -5_000, -5_000)
-        poly = box(5_000, 5_000, 6_000, 6_000)
-        leg = LineString([(-7000, -7000), (-6000, -6000)])
-
-        edges = mixin._edge_weighted_holes(poly, corridor, 0.0, leg, 0.7)
-        assert edges == [(None, 0.7)]
-
-    def test_point_geom_has_no_segments(self, mixin):
-        """A Point has no extractable obstacle segments -> fallback (None, h)."""
-        edges = mixin._edge_weighted_holes(
-            Point(5, 5), box(0, 0, 100, 100), 0.0, None, 0.4,
-        )
-        assert edges == [(None, 0.4)]
-
-    def test_exception_in_segments_falls_back(self, mixin, monkeypatch):
-        """If ``_extract_obstacle_segments`` raises, the outer except
-        catches it and returns the fallback tuple."""
-        import compute.drifting_model as mod
-
-        def boom(geom):
-            raise RuntimeError('synthetic')
-
-        monkeypatch.setattr(mod, '_extract_obstacle_segments', boom)
-        edges = mixin._edge_weighted_holes(
-            box(0, 0, 1, 1), box(-10, -10, 10, 10), 0.0, None, 0.9,
-        )
-        assert edges == [(None, 0.9)]
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,14 @@ Calculate probability holes using Monte Carlo integration.
 For straight legs, this computes the probability mass from the lateral distribution
 that drifts into structures/depths when drifting in each of 8 compass directions.
 
+NOTE: This module is NOT used by the production drifting cascade -- the
+cascade always uses the deterministic analytical integration in
+``geometries/analytical_probability.py`` (its drop-in replacement).  The
+Monte-Carlo estimator here is retained as an INDEPENDENT CROSS-CHECK of the
+analytical integrator, exercised by ``tests/test_parameter_sensitivity.py``,
+``tests/test_structure1_segments.py`` and
+``examples/analytical_drift_visualization.py``.
+
 PERFORMANCE: Uses Monte Carlo integration (10-100x faster than dblquad for indicator-type
 integrands) with parallel processing across multiple CPU cores.
 """

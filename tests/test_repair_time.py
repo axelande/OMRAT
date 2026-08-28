@@ -24,10 +24,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Use the headless Agg backend so plt.figure() doesn't try to spin up Qt.
-import matplotlib
+import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 
-from omrat_utils.repair_time import Repair
+from omrat_utils.repair_time import Repair  # noqa: E402
 
 
 def _make_repair(
@@ -100,14 +100,66 @@ class TestTestEvaluate:
         assert y_plot == pytest.approx(list(xs ** 2), abs=1e-12)
         r.canvas.draw.assert_called_once()
 
-    def test_invalid_expression_yields_zeros(self, capsys):
+    def test_invalid_expression_shows_error_and_no_plot(self, capsys):
         r = _make_repair(user_defined=True, func_text="this will fail")
         r.ax = MagicMock()
         r.canvas = MagicMock()
         r.test_evaluate()
-        # Each failing eval appends 0.  All 20 y values should be 0.
-        _, y_plot = r.ax.plot.call_args.args
-        assert y_plot == [0] * 20
-        # The function prints the exception per failing x; sanity-check it.
+        # Validation fails -> nothing is plotted, canvas redrawn blank,
+        # and a human-readable error is emitted (popup in QGIS, console here).
+        r.ax.plot.assert_not_called()
+        r.canvas.draw.assert_called_once()
         captured = capsys.readouterr()
-        assert captured.out  # something was printed
+        assert "Could not parse" in captured.out
+
+    def test_distribution_object_gives_cdf_hint(self, capsys):
+        """Forgetting .cdf(x) must produce a helpful message, not a
+        matplotlib TypeError traceback (regression for the QGIS log crash)."""
+        r = _make_repair(user_defined=True,
+                         func_text="stats.norm(loc=0, scale=1)")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        r.ax.plot.assert_not_called()
+        captured = capsys.readouterr()
+        assert "not a number" in captured.out
+        assert ".cdf(x)" in captured.out
+
+    def test_valid_cdf_expression_no_warning(self, capsys):
+        r = _make_repair(user_defined=True,
+                         func_text="stats.norm(loc=0, scale=1).cdf(x)")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        r.ax.plot.assert_called_once()
+        captured = capsys.readouterr()
+        # In [0, 1] everywhere -> no range note, no error.
+        assert captured.out == ""
+
+    def test_out_of_range_expression_gets_note(self, capsys):
+        r = _make_repair(user_defined=True, func_text="x * 2")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        # Still plotted (values are numbers), but a CDF-range note is shown.
+        r.ax.plot.assert_called_once()
+        captured = capsys.readouterr()
+        assert "between 0 and 1" in captured.out
+
+    def test_nonfinite_expression_shows_error(self, capsys):
+        r = _make_repair(user_defined=True, func_text="log(x - 5)")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        r.ax.plot.assert_not_called()
+        captured = capsys.readouterr()
+        assert captured.out  # an error was reported (domain -> nan/error)
+
+    def test_empty_expression_shows_error(self, capsys):
+        r = _make_repair(user_defined=True, func_text="   ")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        r.ax.plot.assert_not_called()
+        captured = capsys.readouterr()
+        assert "empty" in captured.out

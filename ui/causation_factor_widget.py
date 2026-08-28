@@ -21,6 +21,7 @@ class CausationFactorsWidget(QtWidgets.QDialog, FORM_CLASS):
         self.leHeadOnCf: QtWidgets.QLineEdit
         self.leOvertakingCf: QtWidgets.QLineEdit
         self.leCrossingCf: QtWidgets.QLineEdit
+        self.leMergingCf: QtWidgets.QLineEdit
         self.leBendCf: QtWidgets.QLineEdit
         self.leGroundingCf: QtWidgets.QLineEdit
         self.leAllisionCf: QtWidgets.QLineEdit

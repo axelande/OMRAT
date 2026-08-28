@@ -332,14 +332,25 @@ def test_bend_scales_quadratically_with_matrix_share():
 # Matrix-aware _calc_crossing_collisions
 # ---------------------------------------------------------------------------
 
+def _crossing_sum(runner, **kwargs) -> float:
+    """Combined crossing + merging total.
+
+    ``_calc_crossing_collisions`` returns the two kinds separately;
+    these tests exercise the junction conflict factor, which applies
+    identically to both, so the sum is the quantity of interest.
+    """
+    totals = runner._calc_crossing_collisions(**kwargs)
+    return float(totals['crossing'] + totals['merging'])
+
 
 def test_crossing_unchanged_when_no_junctions_provided():
     sd = _x_crossing_segments()
     td = {k: _stub_traffic(freq=1000.0) for k in sd}
     runner = _StubRunner()
-    total_no_j = runner._calc_crossing_collisions(
+    total_no_j = _crossing_sum(
+        runner,
         traffic_data=td, segment_data=sd,
-        leg_keys=list(sd.keys()), pc_crossing=1.3e-4,
+        leg_keys=list(sd.keys()), pc_crossing=1.3e-4, pc_merging=1.3e-4,
         length_intervals=[{'min': 50, 'max': 150}],
         junctions=None,
     )
@@ -362,15 +373,17 @@ def test_crossing_zero_when_full_continuation_matrix():
     }
     j.source = 'user'
     runner = _StubRunner()
-    total_with_j = runner._calc_crossing_collisions(
+    total_with_j = _crossing_sum(
+        runner,
         traffic_data=td, segment_data=sd,
-        leg_keys=list(sd.keys()), pc_crossing=1.3e-4,
+        leg_keys=list(sd.keys()), pc_crossing=1.3e-4, pc_merging=1.3e-4,
         length_intervals=[{'min': 50, 'max': 150}],
         junctions=js,
     )
-    total_no_j = runner._calc_crossing_collisions(
+    total_no_j = _crossing_sum(
+        runner,
         traffic_data=td, segment_data=sd,
-        leg_keys=list(sd.keys()), pc_crossing=1.3e-4,
+        leg_keys=list(sd.keys()), pc_crossing=1.3e-4, pc_merging=1.3e-4,
         length_intervals=[{'min': 50, 'max': 150}],
         junctions=None,
     )
@@ -394,9 +407,10 @@ def test_crossing_scales_linearly_with_conflict_factor():
     j_full = next(iter(js_full.values()))
     j_full.transitions = {k: {} for k in ['1', '2', '3', '4']}
     j_full.source = 'user'
-    total_full = runner._calc_crossing_collisions(
+    total_full = _crossing_sum(
+        runner,
         traffic_data=td, segment_data=sd,
-        leg_keys=list(sd.keys()), pc_crossing=1.3e-4,
+        leg_keys=list(sd.keys()), pc_crossing=1.3e-4, pc_merging=1.3e-4,
         length_intervals=[{'min': 50, 'max': 150}],
         junctions=js_full,
     )
@@ -410,9 +424,10 @@ def test_crossing_scales_linearly_with_conflict_factor():
         '4': {'1': 0.25, '2': 0.25, '3': 0.5},
     }
     j_partial.source = 'user'
-    total_partial = runner._calc_crossing_collisions(
+    total_partial = _crossing_sum(
+        runner,
         traffic_data=td, segment_data=sd,
-        leg_keys=list(sd.keys()), pc_crossing=1.3e-4,
+        leg_keys=list(sd.keys()), pc_crossing=1.3e-4, pc_merging=1.3e-4,
         length_intervals=[{'min': 50, 'max': 150}],
         junctions=js_partial,
     )

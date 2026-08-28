@@ -1,7 +1,7 @@
 .. _code-flow:
 
 ==========================================
-Code Flow: From "Run Model" to Results
+Code Flow: From "Run model" to Results
 ==========================================
 
 This chapter is the **implementation-side companion** to the theory
@@ -39,16 +39,16 @@ Pair each of these with its theory counterpart:
 * :ref:`powered` <-> :ref:`code-flow-powered`
 
 
-Entry point: the "Run Model" button
+Entry point: the "Run model" button
 ====================================
 
-The user triggers a run by clicking **Run Model** on the main plugin
+The user triggers a run by clicking **Run model** on the main plugin
 dialog.  The wiring between that button and the background calculation
 is set up when the dialog is constructed:
 
 .. container:: source-code-ref pipeline
 
-   **Button wiring:** ``omrat.py:1152`` -- `self.main_widget.pbRunModel.clicked.connect(self.run_calculation) <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1152>`__
+   **Button wiring:** ``omrat.py:1028`` -- `self.main_widget.pbRunModel.clicked.connect(self.run_calculation) <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1028>`__
 
 When the button is clicked, :meth:`omrat.OMRAT.run_calculation` runs on
 the Qt main thread:
@@ -76,7 +76,7 @@ the Qt main thread:
 
 .. container:: source-code-ref pipeline
 
-   **Orchestrator:** ``omrat.py:599`` -- `run_calculation() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L599>`__
+   **Orchestrator:** ``omrat.py:724`` -- `run_calculation() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L724>`__
 
 
 Background orchestration: :class:`~compute.calculation_task.CalculationTask`
@@ -136,7 +136,7 @@ phase weights:
 
 .. container:: source-code-ref pipeline
 
-   **Progress conversion:** ``compute/run_calculations.py:80`` -- `_report_progress() <https://github.com/axelande/OMRAT/blob/main/compute/run_calculations.py#L80>`__
+   **Progress conversion:** ``compute/run_calculations.py:90`` -- `_report_progress() <https://github.com/axelande/OMRAT/blob/main/compute/run_calculations.py#L90>`__
 
 
 The four phases, in order
@@ -303,7 +303,7 @@ emits whichever of these signals applies:
   1. Calls :meth:`_auto_save_run` to persist the finished run to the
      history GeoPackage (see "Run-history persistence" below).
   2. Calls :meth:`refresh_previous_runs_table` so the
-     ``TWPreviousRuns`` table on the Results tab picks up the new
+     ``TWPreviousRuns`` table on the Run Analysis tab picks up the new
      entry.
   3. (via :class:`VisualizationMixin`) redraws the result layers,
      writes the drifting report Markdown file if a path is
@@ -330,7 +330,7 @@ fully unit-testable without a QGIS instance
 (``tests/test_run_history.py`` covers save / list / get / compare /
 delete with 28 tests).
 
-The table on the Results tab (``TWPreviousRuns``) is populated by
+The table on the Run Analysis tab (``TWPreviousRuns``) is populated by
 :meth:`refresh_previous_runs_table` and supports a right-click context
 menu with **Load on map**, **Compare selected**, and **Delete**.
 **File -> Manage previous runs...** is a shortcut to the same view.
@@ -341,4 +341,4 @@ menu with **Load on map**, **Compare selected**, and **Delete**.
 
 .. container:: source-code-ref pipeline
 
-   **Completion handler:** ``omrat.py:635`` -- `_on_calculation_finished() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L635>`__
+   **Completion handler:** ``omrat.py:813`` -- `_on_calculation_finished() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L813>`__

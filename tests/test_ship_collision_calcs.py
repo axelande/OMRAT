@@ -12,14 +12,15 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.ship_collision_model import ShipCollisionModelMixin
+from compute.ship_collision_model import (  # noqa: E402
+    ShipCollisionModelMixin,
+)
 
 
 def _segment_data():
@@ -43,10 +44,14 @@ def _two_dir_traffic(speed_list_for_one_cell=None,
     def grid(init):
         return [[init] * 5 for _ in range(21)]
 
-    f1 = grid(0.0); f1[18][1] = 100.0   # cargo, LOA 25-50, 100 ships/yr
-    f2 = grid(0.0); f2[18][1] = 50.0
-    s1 = grid(10.0); b1 = grid(20.0)
-    s2 = grid(8.0);  b2 = grid(20.0)
+    f1 = grid(0.0)
+    f1[18][1] = 100.0   # cargo, LOA 25-50, 100 ships/yr
+    f2 = grid(0.0)
+    f2[18][1] = 50.0
+    s1 = grid(10.0)
+    b1 = grid(20.0)
+    s2 = grid(8.0)
+    b2 = grid(20.0)
     if speed_list_for_one_cell is not None:
         s1[18][1] = speed_list_for_one_cell
     if beam_list_for_one_cell is not None:
@@ -118,8 +123,12 @@ class TestCalcOvertakingCollisions:
             return [[init] * 5 for _ in range(21)]
 
         # Two cells with different speeds in the same direction.
-        f = grid(0.0); f[18][0] = 80.0; f[18][1] = 100.0
-        s = grid(0.0); s[18][0] = 8.0; s[18][1] = 14.0  # second is faster
+        f = grid(0.0)
+        f[18][0] = 80.0
+        f[18][1] = 100.0
+        s = grid(0.0)
+        s[18][0] = 8.0
+        s[18][1] = 14.0  # second is faster
         b = grid(20.0)
         traffic = {
             'East going': {
@@ -156,7 +165,8 @@ class TestCalcBendCollisions:
 
     def test_bend_angle_below_5_skipped(self, mixin):
         """Bend angle <= 5° -> no bend collision (L354 guard)."""
-        seg = _segment_data(); seg['bend_angle'] = 3.0
+        seg = _segment_data()
+        seg['bend_angle'] = 3.0
         out = mixin._calc_bend_collisions(
             leg_dirs=_two_dir_traffic(),
             seg_info=seg, pc_bend=1.3e-4, length_intervals=[],
@@ -165,7 +175,8 @@ class TestCalcBendCollisions:
 
     def test_bend_angle_above_5_calculates(self, mixin):
         """Bend angle > 5° fires the calculation (L355-363)."""
-        seg = _segment_data(); seg['bend_angle'] = 30.0
+        seg = _segment_data()
+        seg['bend_angle'] = 30.0
         out = mixin._calc_bend_collisions(
             leg_dirs=_two_dir_traffic(),
             seg_info=seg, pc_bend=1.3e-4,
@@ -191,10 +202,10 @@ class TestCalcCrossingCollisions:
         traffic = {'1': _two_dir_traffic(), '2': _two_dir_traffic()}
         out = mixin._calc_crossing_collisions(
             traffic_data=traffic, segment_data=seg_data,
-            leg_keys=['1', '2'], pc_crossing=1.3e-4,
+            leg_keys=['1', '2'], pc_crossing=1.3e-4, pc_merging=1.3e-4,
             length_intervals=[],
         )
-        assert out == 0.0
+        assert out == {'crossing': 0.0, 'merging': 0.0}
 
     def test_legs_meeting_at_waypoint_compute_crossing(self, mixin):
         """Two legs that share a waypoint and meet at an angle compute
@@ -210,11 +221,11 @@ class TestCalcCrossingCollisions:
         traffic = {'1': _two_dir_traffic(), '2': _two_dir_traffic()}
         out = mixin._calc_crossing_collisions(
             traffic_data=traffic, segment_data=seg_data,
-            leg_keys=['1', '2'], pc_crossing=1.3e-4,
+            leg_keys=['1', '2'], pc_crossing=1.3e-4, pc_merging=1.3e-4,
             length_intervals=[{'min': 0, 'max': 25, 'label': '0-25'},
                               {'min': 25, 'max': 50, 'label': '25-50'}],
         )
-        assert out >= 0.0
+        assert out['crossing'] >= 0.0 and out['merging'] >= 0.0
 
     def test_parallel_legs_skipped(self, mixin):
         """Legs that share a waypoint but are nearly parallel don't compute
@@ -229,11 +240,11 @@ class TestCalcCrossingCollisions:
         traffic = {'1': _two_dir_traffic(), '2': _two_dir_traffic()}
         out = mixin._calc_crossing_collisions(
             traffic_data=traffic, segment_data=seg_data,
-            leg_keys=['1', '2'], pc_crossing=1.3e-4,
+            leg_keys=['1', '2'], pc_crossing=1.3e-4, pc_merging=1.3e-4,
             length_intervals=[],
         )
         # Bearings are both ~90° -> crossing_angle ~0° -> skipped.
-        assert out == 0.0
+        assert out == {'crossing': 0.0, 'merging': 0.0}
 
     def test_explicit_bearing_used_when_set(self, mixin):
         """If 'bearing' is in seg_info, it's used directly instead of computed."""
@@ -248,8 +259,8 @@ class TestCalcCrossingCollisions:
         traffic = {'1': _two_dir_traffic(), '2': _two_dir_traffic()}
         out = mixin._calc_crossing_collisions(
             traffic_data=traffic, segment_data=seg_data,
-            leg_keys=['1', '2'], pc_crossing=1.3e-4,
+            leg_keys=['1', '2'], pc_crossing=1.3e-4, pc_merging=1.3e-4,
             length_intervals=[{'min': 0, 'max': 25, 'label': '0-25'},
                               {'min': 25, 'max': 50, 'label': '25-50'}],
         )
-        assert out >= 0.0
+        assert out['crossing'] >= 0.0 and out['merging'] >= 0.0

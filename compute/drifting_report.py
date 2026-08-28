@@ -301,6 +301,81 @@ class DriftingReportMixin:
 
         md_lines.append("")
 
+        # Per-edge calculation traceability (Formula C: 1D shadow-carve)
+        edge_meta = rep.get('edge_calc_meta', {}) or {}
+        if edge_meta:
+            md_lines.append("## Per-Edge Calculation Trace")
+            md_lines.append("")
+            md_lines.append(
+                "Each row shows a single polygon edge that contributed to the drifting "
+                "risk.  The formula is:")
+            md_lines.append("")
+            md_lines.append(
+                "    contrib = exposure_sum * (h_eff * len_frac) * edge_p_nr")
+            md_lines.append("")
+            md_lines.append(
+                "where\n\n"
+                "- ``exposure_sum = Σ(base * rp)`` over the ship cells that fed this edge.\n"
+                "- ``h_eff`` is the polygon-level analytical hole probability after\n"
+                "  between-polygon shadow + anchor reduction (this is what preserves\n"
+                "  the AIS ship-density profile).\n"
+                "- ``len_frac = reachable_width / Σ reachable_widths`` -- the edge's\n"
+                "  share of the polygon, from a 1D shadow-carve within the polygon\n"
+                "  (a closer edge blocks the perpendicular-to-drift range it covers).\n"
+                "  Sum of ``len_frac`` across a polygon's edges = 1, so summing\n"
+                "  edge contributions reproduces the polygon-level ``h_eff * P_NR``.\n"
+                "- ``edge_h_eff = reachable_width / leg_drift_width`` -- the pure-\n"
+                "  geometric per-edge share under a uniform-ships assumption.  Kept\n"
+                "  for backtracing only; multiplying by it directly would ignore the\n"
+                "  ship-density profile and inflate obstacles that lie away from the\n"
+                "  traffic distribution mean.\n"
+                "- ``edge_dist_m`` is the along-drift distance from the leg to the\n"
+                "  edge midpoint; ``edge_p_nr`` is P(ship not repaired by that\n"
+                "  distance).  ``edge_hole = h_eff * len_frac`` is the effective share.")
+            md_lines.append("")
+
+            flat: list[tuple[str, str, str, dict[str, Any]]] = []
+            for obs_key, obs_map in edge_meta.items():
+                for seg_key, seg_map in obs_map.items():
+                    for legdir_key, entry in seg_map.items():
+                        flat.append((obs_key, seg_key, legdir_key, entry))
+            flat.sort(key=lambda x: -float(x[3].get('contrib_sum', 0.0)))
+
+            top_n = min(50, len(flat))
+            md_lines.append(f"### Top {top_n} contributing edges (of {len(flat)})")
+            md_lines.append("")
+            md_lines.append(
+                "| Obstacle | Seg | Leg:Dir:Ang | Type | hole_pct | h_eff "
+                "| reach_w (m) | len_frac | edge_h_eff | edge_dist (m) "
+                "| edge_p_nr | edge_hole | exposure_sum | cells | contrib |")
+            md_lines.append(
+                "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+            for obs_key, seg_key, legdir_key, e in flat[:top_n]:
+                md_lines.append(
+                    f"| {obs_key} | {seg_key} | {legdir_key}"
+                    f" | {e.get('obs_type', '')}"
+                    f" | {float(e.get('hole_pct', 0.0)):.3e}"
+                    f" | {float(e.get('h_eff', 0.0)):.3e}"
+                    f" | {float(e.get('reachable_width_m', 0.0)):.1f}"
+                    f" | {float(e.get('len_frac', 0.0)):.4f}"
+                    f" | {float(e.get('edge_h_eff', 0.0)):.3e}"
+                    f" | {float(e.get('edge_dist_m', 0.0)):.1f}"
+                    f" | {float(e.get('edge_p_nr', 0.0)):.4f}"
+                    f" | {float(e.get('edge_hole', 0.0)):.3e}"
+                    f" | {float(e.get('exposure_sum', 0.0)):.3e}"
+                    f" | {int(e.get('cell_count', 0))}"
+                    f" | {float(e.get('contrib_sum', 0.0)):.3e} |")
+            md_lines.append("")
+            obs_totals: dict[str, float] = {}
+            for obs_key, _sk, _lk, e in flat:
+                obs_totals[obs_key] = obs_totals.get(obs_key, 0.0) + float(e.get('contrib_sum', 0.0))
+            md_lines.append("### Per-obstacle sub-totals from edge trace")
+            md_lines.append("| Obstacle | Σ contrib (from edges) |")
+            md_lines.append("|---|---:|")
+            for obs_key in sorted(obs_totals.keys(), key=lambda k: -obs_totals[k])[:50]:
+                md_lines.append(f"| {obs_key} | {obs_totals[obs_key]:.3e} |")
+            md_lines.append("")
+
         # Summary of legs
         md_lines.append("## Leg Summary")
         md_lines.append("| Leg | Allision | Grounding |")

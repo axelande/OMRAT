@@ -104,6 +104,8 @@ class AccidentResultsMixin:
          'pbViewCrossingCollision', 'show_crossing_collision'),
         ('Merging collision', 'LEPMergingCollision',
          'pbViewMergingCollision', 'show_merging_collision'),
+        ('Bend collision', 'LEPBendCollision',
+         'pbViewBendCollision', 'show_bend_collision'),
     )
 
     # View slot -> (calc-method-name, label, optional breakdown key).
@@ -136,6 +138,10 @@ class AccidentResultsMixin:
         'show_merging_collision': (
             'run_collision_breakdown_dialog',
             'Merging collision', 'merging',
+        ),
+        'show_bend_collision': (
+            'run_collision_breakdown_dialog',
+            'Bend collision', 'bend',
         ),
     }
 
@@ -569,3 +575,6 @@ class AccidentResultsMixin:
 
     def show_merging_collision(self):
         self._dispatch_view('show_merging_collision')
+
+    def show_bend_collision(self):
+        self._dispatch_view('show_bend_collision')

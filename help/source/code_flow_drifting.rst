@@ -5,7 +5,7 @@ Code Flow: Drifting Model
 ==========================================
 
 This chapter walks the drifting model one function at a time, in the
-order that the calls fire when a user presses **Run Model**.  Pair it
+order that the calls fire when a user presses **Run model**.  Pair it
 with the theory chapter :ref:`drifting`, which derives the formulas
 that each function below implements.
 
@@ -29,7 +29,7 @@ Entry point
 
 .. container:: source-code-ref pipeline
 
-   **Entry:** ``compute/drifting_model.py:1608`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1608>`__
+   **Entry:** ``compute/drifting_model.py:2070`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L2070>`__
 
 
 Top-level call tree
@@ -108,7 +108,7 @@ eight parallel lists used by every downstream helper.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:859`` -- `_build_transformed() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L859>`__
+   **Source:** ``compute/drifting_model.py:1123`` -- `_build_transformed() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1123>`__
 
 Calls performed:
 
@@ -156,7 +156,7 @@ back.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:92`` -- `_compute_reach_distance() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L92>`__
+   **Source:** ``compute/drifting_model.py:80`` -- `_compute_reach_distance() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L80>`__
 
 Logic:
 
@@ -197,7 +197,7 @@ geometry only.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:986`` -- `_precompute_spatial() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L986>`__
+   **Source:** ``compute/drifting_model.py:1251`` -- `_precompute_spatial() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1251>`__
 
 Returns four lists, each indexed ``[leg_idx][math_dir_idx][obstacle_idx]``:
 
@@ -259,7 +259,7 @@ For every ``(leg, direction)`` pair, build:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:334`` -- `_precompute_shadow_layer() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L334>`__
+   **Source:** ``compute/drifting_model.py:751`` -- `_precompute_shadow_layer() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L751>`__
 
 Pre-computation outside the thread pool:
 
@@ -299,7 +299,7 @@ check aborts the remaining work if the user clicks stop.
 
 .. container:: source-code-ref pipeline
 
-   **Shadow cache helper:** ``compute/drifting_model.py:161`` -- `_build_blocker_shadow() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L161>`__
+   **Shadow cache helper:** ``compute/drifting_model.py:130`` -- `_build_blocker_shadow() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L130>`__
 
 :meth:`_build_blocker_shadow`
 -----------------------------
@@ -333,37 +333,124 @@ Implementation:
 5. Cache and return.
 
 
-Inner :func:`_edge_geom_for`
-----------------------------
+Inner :func:`_edge_geom_for` -- per-edge h_eff with 1D shadow-carve
+-------------------------------------------------------------------
 
 Works per obstacle inside ``_shadow_task``.  The result
-(``[{'seg_idx', 'len_frac', 'edge_dist', 'edge_p_nr'}, ...]``) is used
-by the cascade to split the obstacle's hole probability across
-individual polygon edges.
+(``[{'seg_idx', 'edge_h_eff', 'reachable_width_m', 'edge_dist',
+'edge_p_nr'}, ...]``) is used by the cascade to compute each polygon
+edge's contribution INDEPENDENTLY.  Each edge is treated as a physical
+"hazard wall" that a drifting ship strikes as its first-contact
+obstacle; ships that would strike a *closer* edge of the same polygon
+never reach a farther edge behind it.
+
+The formula per edge is
+:math:`edge\_h\_eff = reachable\_width / leg\_drift\_width`,
+where ``leg_drift_width`` is the leg's projection onto the axis
+perpendicular to the drift direction (E-W for southward drift) and
+``reachable_width`` is the perpendicular-to-drift extent of the edge
+that is **not already covered by a closer edge of the same polygon**.
+Between-polygon shadowing (from other closer obstacles) is applied
+separately in :meth:`_apply_hit_entry` via
+:math:`shadow\_ratio = h\_eff / hole\_pct`, so the full per-edge
+contribution is
+
+.. math::
+
+   contrib = base \cdot rp \cdot (edge\_h\_eff \cdot shadow\_ratio)
+             \cdot edge\_p\_nr(edge\_dist)
+
+Case studies
+~~~~~~~~~~~~
+
+The following canonical shapes show how the 1D shadow-carve reacts to
+the polygon geometry.  In every panel the leg is horizontal at the top,
+ships drift south, and each polygon's facing edges are marked green.
+The right panel of each figure additionally draws sample ships as red
+arrows that terminate on the FIRST edge they hit; edges (or portions of
+edges) that are fully shadowed are drawn dashed grey.
+
+**Simple convex polygon** -- only one facing edge, ``reach == width``.
+
+.. image:: _static/images/drift_edge_1_simple.png
+   :alt: Simple convex polygon
+   :width: 100%
+
+**Concave polygon with a north-facing notch** -- three facing edges;
+the notch back-edge is farther, but *not* shadowed because its E-W
+range doesn't overlap the closer arm edges.
+
+.. image:: _static/images/drift_edge_2_notch.png
+   :alt: Concave polygon with N-facing notch
+   :width: 100%
+
+**MultiPolygon stacked N-S (same E-W range)** -- the closer patch fully
+shadows the farther patch: ``reachable_width`` of the far edge is
+zero and it contributes nothing.  This is the "a ship grounds once"
+rule -- physically correct, and different from a naive per-edge sum
+which would double-count.
+
+.. image:: _static/images/drift_edge_4_stacked.png
+   :alt: Stacked multipolygon patches
+   :width: 100%
+
+**MultiPolygon side-by-side (disjoint E-W ranges)** -- no overlap in
+the perpendicular-to-drift axis, so both patches contribute their full
+edge widths; each edge has its own ``edge_dist`` and hence its own
+``edge_p_nr``.
+
+.. image:: _static/images/drift_edge_5_sidebyside.png
+   :alt: Side-by-side multipolygon patches
+   :width: 100%
+
+**MultiPolygon partially overlapping** -- the far edge only gets the
+portion that isn't shadowed by the near edge; ``reachable_width`` for
+the far edge is the E-W range where ships pass over the near patch and
+continue south.
+
+.. image:: _static/images/drift_edge_6_overlap.png
+   :alt: Partially overlapping patches
+   :width: 100%
+
+Algorithm
+~~~~~~~~~
 
 1. ``segments = _extract_obstacle_segments(poly)`` - polygon edges as
-   a list of ``((x0,y0), (x1,y1))`` tuples.
-2. ``raw = self._edge_weighted_holes(poly, drift_corridor, math_angle,
-   line, 1.0, None)`` - for each segment that survives the
-   drift-direction pre-filter, returns
-   ``(seg_idx, overlap_length)``.  The pre-filter runs numpy-batched
-   so most rejected segments never touch shapely; the survivors go
-   through :func:`segment_corridor_overlap_length` for the actual
-   corridor intersection.
-3. Collect the two endpoints of every selected edge into a flat
-   ``(2N, 2)`` array and call
+   a list of ``((x0,y0), (x1,y1))`` tuples with CCW-normalised
+   orientation so the outward normal is well-defined.
+2. Drop segments whose outward normal doesn't oppose the drift
+   direction (pre-filter via
+   :func:`segment_corridor_overlap_length`).  The survivors are the
+   "facing" edges of the polygon for this compass direction.
+3. Sort surviving edges by along-drift distance (closest first) and
+   run a 1D interval subtraction on the perpendicular-to-drift axis:
+   each edge's remaining ranges (after subtracting already-covered
+   ranges from closer edges) become its ``reachable_intervals``, and
+   their combined length is ``reachable_width``.  Implemented in
+   :func:`compute_edge_reachable_widths_1d`.
+4. Collect endpoints of edges with ``reachable_width > 0`` and call
    :func:`geometries.get_drifting_overlap.directional_distances_to_points`
-   **once**.  That function returns per-point along-drift distances
-   via a single vectorised edge-crossing pass, falling back to a
-   vectorised nearest-point projection for points that miss every
-   leg segment.
-4. For each edge, average its two endpoint distances ->
-   ``edge_dist``.
-5. :math:`P_{NR}` = :func:`compute.basic_equations.get_not_repaired`.
-   That function compiles the repair ``func`` string or matches the
-   common ``norm.cdf`` / ``weibull_min.cdf`` patterns and caches a
-   pure-:func:`scipy.special.ndtr` closure, so repeated calls are
-   O(1) in Python -- no scipy frozen-distribution dispatch.
+   **once** on the flat ``(2N, 2)`` array.  The reference line is the
+   leg centerline by default; set
+   ``drift['use_leg_offset_for_distance'] = True`` to measure from the
+   leg shifted by the traffic-distribution mean instead.  The lateral
+   standard deviation is *not* used -- only the mean.
+5. For each edge, average its two endpoint distances ->
+   ``edge_dist``.  Compute
+   :math:`edge\_h\_eff = reachable\_width / leg\_drift\_width` and
+   :math:`P_{NR}(edge\_dist)` via
+   :func:`compute.basic_equations.get_not_repaired`.
+
+Back-tracing
+~~~~~~~~~~~~
+
+The drifting report emits ``edge_calc_meta`` per
+``(obstacle, edge, leg_direction)``.  Every entry stores ``hole_pct``,
+``h_eff``, ``reachable_width_m``, ``edge_h_eff``, ``shadow_ratio``,
+``edge_dist_m``, ``edge_p_nr``, ``edge_hole``, ``exposure_sum``,
+``cell_count`` and ``contrib_sum``, so users can back-trace every
+edge's contribution to the formula above.  The Markdown appendix
+renders the top 50 contributing edges as a table.
 
 
 Phase 3: :meth:`_precompute_bucket_memo` (``shadow``, 50--100 %)
@@ -378,7 +465,7 @@ turns the later traffic cascade into pure arithmetic.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:617`` -- `_precompute_bucket_memo() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L617>`__
+   **Source:** ``compute/drifting_model.py:1090`` -- `_precompute_bucket_memo() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1090>`__
 
 Per bucket:
 
@@ -418,7 +505,7 @@ bucket memo.  The outer structure is:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1067`` -- `_iterate_traffic_and_sum() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1067>`__
+   **Source:** ``compute/drifting_model.py:1454`` -- `_iterate_traffic_and_sum() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1454>`__
 
 Each ship cell contributes:
 
@@ -439,7 +526,7 @@ and the per-direction contribution is:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1296`` -- `_process_cell_direction() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1296>`__
+   **Source:** ``compute/drifting_model.py:1753`` -- `_process_cell_direction() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1753>`__
 
 1. Build the obstacle list for this cell (respecting draught +
    anchor threshold), compute ``bucket_key`` from the tuple of sorted
@@ -452,7 +539,8 @@ and the per-direction contribution is:
    * Compute ``h_eff = max(0, h_reach - anchor_p * h_in_anchor)``.
    * If the obstacle has precomputed per-edge geometry, sum
      ``contrib = base * r_p * (h_eff * len_frac) * edge_p_nr`` across
-     edges.  Otherwise fall back to the obstacle-level contrib.
+     edges.  Otherwise fall back to the obstacle-level ``contrib =
+     base * r_p * h_eff * P_NR(dist)``.
    * Call :meth:`_update_report` / :meth:`_update_anchoring_report`
      to record the per-leg-direction breakdown.
    * Call :meth:`_add_direct_segment_contrib` to record the

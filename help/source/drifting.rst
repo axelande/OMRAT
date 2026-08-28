@@ -169,7 +169,7 @@ Two buttons in the OMRAT QGIS plugin trigger different code paths.
      - Entry point
      - What it does
    * - **Run analysis**
-     - :code:`run_drift_analysis()` in ``omrat.py:884`` →
+     - :code:`run_drift_analysis()` in ``omrat_utils/drift_analysis_mixin.py:59`` →
        ``DriftCorridorTask``
      - Builds the **drift corridor polygons** (per leg, per direction)
        and draws them as QGIS vector layers.  Uses the quad-sweep
@@ -297,8 +297,8 @@ probability.
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:9`` -- `get_drifting_prob()
-   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L9>`__
+   ``compute/basic_equations.py:72`` -- `get_drifting_prob()
+   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L72>`__
 
 
 .. _drifting-repair:
@@ -337,8 +337,8 @@ the event.
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:30`` -- `get_not_repaired()
-   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L30>`__
+   ``compute/basic_equations.py:199`` -- `get_not_repaired()
+   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L199>`__
 
 
 .. _drifting-hole:
@@ -413,10 +413,10 @@ Edge         vertex 0 (m)       vertex 1 (m)       average (m)
 
 .. container:: source-code-ref
 
-   ``drifting/engine.py:215`` -- `directional_distance_to_point_from_offset_leg()
-   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L215>`__ |
-   ``drifting/engine.py:288`` -- `edge_average_distance_m()
-   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L288>`__
+   ``drifting/engine.py:223`` -- `directional_distance_to_point_from_offset_leg()
+   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L223>`__ |
+   ``drifting/engine.py:297`` -- `edge_average_distance_m()
+   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L297>`__
 
 
 .. _drifting-level1:
@@ -555,10 +555,10 @@ To enable this mode set ``use_leg_offset_for_distance = True`` in the
 
 .. container:: source-code-ref
 
-   ``drifting/engine.py:215`` -- `directional_distance_to_point_from_offset_leg(use_leg_offset=True)
-   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L215>`__ |
-   ``drifting/engine.py:46`` -- `DriftConfig.use_leg_offset_for_distance
-   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L46>`__
+   ``drifting/engine.py:223`` -- `directional_distance_to_point_from_offset_leg(use_leg_offset=True)
+   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L223>`__ |
+   ``drifting/engine.py:50`` -- `DriftConfig.use_leg_offset_for_distance
+   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L50>`__
 
 
 .. _drifting-level2:
@@ -1172,8 +1172,8 @@ shadow-coverage subtraction, per-level equations above).
 
 .. container:: source-code-ref
 
-   ``omrat.py:884`` -- `run_drift_analysis()
-   <https://github.com/axelande/OMRAT/blob/main/omrat.py#L884>`__ |
+   ``omrat_utils/drift_analysis_mixin.py:59`` -- `run_drift_analysis()
+   <https://github.com/axelande/OMRAT/blob/main/omrat_utils/drift_analysis_mixin.py#L59>`__ |
    ``geometries/drift/corridor.py:16`` -- `create_base_surface()
    <https://github.com/axelande/OMRAT/blob/main/geometries/drift/corridor.py#L16>`__ |
    ``geometries/drift/clipping.py:16`` -- `clip_corridor_at_obstacles()
@@ -1200,7 +1200,7 @@ Pipeline and Source Code Pointers
    shadow-coverage subtraction per Levels 3–5.
 
    **Visualisation pipeline (``run analysis``):**
-   ``omrat.py:884 run_drift_analysis()`` →
+   ``omrat_utils/drift_analysis_mixin.py:59 run_drift_analysis()`` →
    ``DriftCorridorTask`` →
    `DriftCorridorGenerator
    <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L25>`__ →

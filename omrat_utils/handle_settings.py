@@ -84,12 +84,43 @@ class DriftSettings:
         last_value = float(last_widget.text()) if last_widget.text() != '' else 0
         last_widget.setText(str(last_value + difference))
 
+    def _project_type_names(self) -> list[str] | None:
+        """Return the PROJECT's ship-type names (from the Ship Categories
+        widget) or ``None`` when unavailable.
+
+        The project taxonomy (often the AIS type list, with "Passenger" at
+        index 17) generally differs from OMRAT's internal ``SHIP_TYPE_NAMES``
+        (passenger classes at 8-11).  The blackout table must follow the
+        project taxonomy because the per-type rates are applied by traffic-
+        matrix row index in the drifting cascade.
+        """
+        try:
+            scw = self.parent.ship_cat.scw
+            tbl = getattr(scw, 'cvTypes', None)
+            if tbl is None:
+                return None
+            names: list[str] = []
+            for i in range(tbl.rowCount()):
+                it = tbl.item(i, 0)
+                names.append(it.text() if it is not None else '')
+            return names if any(names) else None
+        except Exception:  # nosec B110 B112
+            return None
+
+    def _blackout_row_names(self) -> list[str]:
+        """Row labels for the blackout table: project taxonomy if available."""
+        names = self._project_type_names()
+        if names:
+            return names
+        return [SHIP_TYPE_NAMES[i] for i in sorted(SHIP_TYPE_NAMES)]
+
     def _ensure_blackout_table(self) -> QTableWidget:
         """Create the per-ship-type blackout-rate tab the first time it's needed.
 
-        Adds a new tab to the existing ``tabWidget`` containing a 21-row
-        QTableWidget (one row per OMRAT ship-type index) and a
-        "Reset to IWRAP defaults" button.  Does nothing on subsequent calls.
+        Adds a new tab to the existing ``tabWidget`` containing one row per
+        ship-type index in the project's taxonomy (falling back to OMRAT's
+        internal list) and a "Reset to IWRAP defaults" button.  Does nothing
+        on subsequent calls.
         """
         if self._blackout_table is not None:
             return self._blackout_table
@@ -106,12 +137,13 @@ class DriftSettings:
         label.setWordWrap(True)
         layout.addWidget(label)
 
+        row_names = self._blackout_row_names()
         table = QTableWidget()
         table.setColumnCount(2)
         table.setHorizontalHeaderLabels(["Ship type", "Blackout rate (/year)"])
-        table.setRowCount(len(SHIP_TYPE_NAMES))
-        for row, idx in enumerate(sorted(SHIP_TYPE_NAMES)):
-            name_item = QTableWidgetItem(f"{idx}: {SHIP_TYPE_NAMES[idx]}")
+        table.setRowCount(len(row_names))
+        for row, name in enumerate(row_names):
+            name_item = QTableWidgetItem(f"{row}: {name}")
             name_item.setFlags(name_item.flags() & ~_ITEM_IS_EDITABLE)
             table.setItem(row, 0, name_item)
             # Value cell: editable; we fill the actual value in populate_drift().
@@ -133,12 +165,17 @@ class DriftSettings:
         return table
 
     def _reset_blackout_defaults(self) -> None:
-        """Fill the table with the IWRAP-compatible defaults."""
+        """Fill the table with the IWRAP-compatible defaults.
+
+        Uses NAME matching against the project taxonomy when available so
+        the 0.1 roro_passenger rate lands on the actual passenger rows.
+        """
         if self._blackout_table is None:
             return
-        defaults = default_blackout_by_ship_type()
-        for row, idx in enumerate(sorted(SHIP_TYPE_NAMES)):
-            value = defaults.get(idx, 1.0)
+        names = self._project_type_names()
+        defaults = default_blackout_by_ship_type(names)
+        for row in range(self._blackout_table.rowCount()):
+            value = defaults.get(row, 1.0)
             item = self._blackout_table.item(row, 1)
             if item is None:
                 item = QTableWidgetItem("")
@@ -149,16 +186,17 @@ class DriftSettings:
         """Read the per-ship-type blackout rates from the GUI table."""
         if self._blackout_table is None:
             # Table never created (GUI not shown) -- keep the existing dict.
-            return dict(self.drift_values.get('blackout_by_ship_type') or default_blackout_by_ship_type())
+            return dict(self.drift_values.get('blackout_by_ship_type')
+                        or default_blackout_by_ship_type(self._project_type_names()))
         out: dict[int, float] = {}
-        for row, idx in enumerate(sorted(SHIP_TYPE_NAMES)):
+        for row in range(self._blackout_table.rowCount()):
             item = self._blackout_table.item(row, 1)
             txt = item.text().strip() if item is not None else ""
             try:
                 val = float(txt) if txt else 1.0
             except Exception:  # nosec B110 B112
                 val = 1.0
-            out[int(idx)] = max(0.0, val)
+            out[row] = max(0.0, val)
         return out
 
     def commit_changes(self):
@@ -273,9 +311,9 @@ class DriftSettings:
                     stored[int(k)] = float(v)
                 except Exception:  # nosec B110 B112
                     continue
-            defaults = default_blackout_by_ship_type()
-            for row, idx in enumerate(sorted(SHIP_TYPE_NAMES)):
-                value = stored.get(idx, defaults.get(idx, 1.0))
+            defaults = default_blackout_by_ship_type(self._project_type_names())
+            for row in range(table.rowCount()):
+                value = stored.get(row, defaults.get(row, 1.0))
                 item = table.item(row, 1)
                 if item is None:
                     item = QTableWidgetItem("")

@@ -106,41 +106,58 @@
        </widget>
       </item>
       <item row="3" column="0">
-       <widget class="QLabel" name="labelBendCf">
+       <widget class="QLabel" name="labelMergingCf">
         <property name="text">
-         <string>Bend causation factor:</string>
+         <string>Merging causation factor:</string>
+        </property>
+        <property name="toolTip">
+         <string>Applied to leg pairs meeting at 30 degrees or less.  Defaults to the crossing value; IWRAP publishes no separate figure.</string>
         </property>
        </widget>
       </item>
       <item row="3" column="1">
-       <widget class="QLineEdit" name="leBendCf">
+       <widget class="QLineEdit" name="leMergingCf">
         <property name="text">
          <string>1.3E-4</string>
         </property>
        </widget>
       </item>
       <item row="4" column="0">
+       <widget class="QLabel" name="labelBendCf">
+        <property name="text">
+         <string>Bend causation factor:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QLineEdit" name="leBendCf">
+        <property name="text">
+         <string>1.3E-4</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
        <widget class="QLabel" name="labelGroundingCf">
         <property name="text">
          <string>Grounding causation factor:</string>
         </property>
        </widget>
       </item>
-      <item row="4" column="1">
+      <item row="5" column="1">
        <widget class="QLineEdit" name="leGroundingCf">
         <property name="text">
          <string>1.6E-4</string>
         </property>
        </widget>
       </item>
-      <item row="5" column="0">
+      <item row="6" column="0">
        <widget class="QLabel" name="labelAllisionCf">
         <property name="text">
          <string>Allision causation factor:</string>
         </property>
        </widget>
       </item>
-      <item row="5" column="1">
+      <item row="6" column="1">
        <widget class="QLineEdit" name="leAllisionCf">
         <property name="text">
          <string>1.9E-4</string>

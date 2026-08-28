@@ -24,7 +24,7 @@ import os
 import re
 import uuid
 import xml.etree.ElementTree as ET  # nosec B405 - parsing delegated to defusedxml; used only to build trees
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # defusedxml protects against XML attacks (XXE, billion laughs, etc.) when
 # we read XML files from disk.  We still use the stdlib ``ElementTree`` for
@@ -84,7 +84,11 @@ def new_guid() -> str:
 def prettify_xml(elem: ET.Element) -> str:
     rough_string = ET.tostring(elem, encoding='utf-8')
     reparsed = defused_minidom.parseString(rough_string)
-    return reparsed.toprettyxml(indent="  ")
+    # toprettyxml with encoding returns bytes; decode and strip the BOM-style byte prefix.
+    # We need encoding="UTF-8" in the declaration so IWRAP (and VSCode) recognise the file.
+    raw = reparsed.toprettyxml(indent="  ", encoding='utf-8').decode('utf-8')
+    # toprettyxml prepends <?xml version="1.0" encoding="utf-8"?> — normalise to uppercase UTF-8.
+    return raw.replace('encoding="utf-8"', 'encoding="UTF-8"', 1)
 
 
 def build_drifting(parent: ET.Element, drift: dict):
@@ -111,6 +115,44 @@ def build_drifting(parent: ET.Element, drift: dict):
     for attr in ['combi', 'param_0', 'param_1', 'param_2', 'type', 'weight']:
         if attr in repair and repair.get(attr) is not None:
             rep.set(attr, str(repair.get(attr)))
+    # If OMRAT's repair dict carries no explicit IWRAP attributes, synthesize
+    # them from the internal representation.  Exporting an EMPTY repair_time
+    # makes IWRAP fall back to its default Normal(mean 0, std 1), which has a
+    # far shorter tail than a typical lognormal -- silently changing drifting
+    # results by orders of magnitude on legs with distant shallow areas.
+    has_attrs = any(rep.get(a) is not None for a in
+                    ['combi', 'param_0', 'param_1', 'param_2', 'type'])
+    if not has_attrs:
+        dist_type = str(repair.get('dist_type', '') or '')
+        if repair.get('use_lognormal'):
+            # OMRAT lognormal(s=std, loc, scale) -> IWRAP 3-param LogNormal
+            # ("Mean / Std. Dev. / Lower bound").  Inverse of the import
+            # mapping in _fill_repair_combi:
+            #   adj_mean = scale * exp(s^2/2);  std = adj_mean * sqrt(exp(s^2)-1)
+            try:
+                s = float(repair.get('std', 0.0))
+                loc = float(repair.get('loc', 0.0))
+                scale = float(repair.get('scale', 1.0))
+                adj_mean = scale * math.exp(s * s / 2.0)
+                std_out = adj_mean * math.sqrt(math.exp(s * s) - 1.0)
+                rep.set('combi', '/Mean/Std. Dev./Lower bound')
+                rep.set('type', 'LogNormal')
+                rep.set('param_0', str(adj_mean + loc))
+                rep.set('param_1', str(std_out))
+                rep.set('param_2', str(loc))
+            except Exception:  # nosec B110 B112
+                pass
+        elif dist_type == 'normal':
+            rep.set('combi', '/Mean/Std. Dev.')
+            rep.set('type', 'Normal')
+            rep.set('param_0', str(repair.get('norm_mean', 0.0)))
+            rep.set('param_1', str(repair.get('norm_std', 1.0)))
+        elif dist_type == 'weibull':
+            rep.set('combi', '/Scale/Shape/Location')
+            rep.set('type', 'Weibull')
+            rep.set('param_0', str(repair.get('wb_scale', 1.0)))
+            rep.set('param_1', str(repair.get('wb_shape', 1.0)))
+            rep.set('param_2', str(repair.get('wb_loc', 0.0)))
     # Optional repair_time_func.
     # IWRAP treats presence of repair_time_func as Function mode; when a known
     # distribution is provided via repair_time attributes, omit function node.
@@ -295,6 +337,7 @@ def _fill_mal_mixed_dist(md_el: ET.Element, seg: dict, dir_num: int) -> None:
         item.set('combi', '/Mean/Std. Dev.')
         mean = _as_float(seg.get(f'mean{dir_num}_{i}', 0))
         std = _as_float(seg.get(f'std{dir_num}_{i}', 0))
+        std = std if std > 0 else 1e-6  # IWRAP rejects Normal Std == 0; clamp matches importer
         if dir_num == 2:
             mean = -mean
         item.set('param_0', str(mean))
@@ -414,23 +457,108 @@ def _build_objects_as_depths(objects_list: list) -> list:
     return result
 
 
-def _add_global_settings(root: ET.Element) -> None:
+# IWRAP ``causation_factors`` attribute -> (OMRAT ``pc`` keys to try, default).
+#
+# The first key that is present in the project's ``pc`` block wins; the
+# default is used only when none of them are set, so an incomplete ``pc``
+# still produces valid IWRAP XML.  The alternatives exist because the
+# same quantity has been stored under more than one name over time --
+# ``grounding`` is what the powered model reads, ``p_pc`` is what an
+# IWRAP import writes.
+#
+# Keep this in step with ``cf_mapping`` in ``_parse_global_settings_el``:
+# export and import must name the same IWRAP attributes, or a
+# round-trip loses values.
+_CF_EXPORT_MAP: dict[str, tuple[tuple[str, ...], str]] = {
+    # IWRAP splits powered grounding / allision into two categories:
+    #
+    #   p_*_causation           Category I  -- the obstacle already lies in
+    #                           the lane; no course change was required.
+    #   p_*_no_turn_causation   Category II -- a turn *was* required at a
+    #                           waypoint and the ship failed to make it.
+    #
+    # OMRAT models only the second one (see the docstrings on
+    # ``run_powered_grounding_model`` / ``run_powered_allision_model``), so
+    # ``pc['grounding']`` and ``pc['allision']`` are Category-II factors and
+    # belong on the ``_no_turn`` attributes.
+    #
+    # The Category-I attributes get the same value rather than a constant:
+    # IWRAP computes the Category-I geometry whatever we write there, and
+    # scoring it with a factor the user never chose is how the old hardcoded
+    # block produced numbers nobody could account for.  A project that wants
+    # IWRAP to score only what OMRAT models should zero these two by hand.
+    'p_allision_causation': (('allision',), '0.000155'),
+    'p_allision_no_turn_causation': (('allision',), '0.000155'),
+    'p_allision_drifting_causation': (('allision_drifting_rf',), '1'),
+    'p_bend_causation': (('bend',), '0.00013'),
+    'p_crossing_causation': (('crossing',), '0.00013'),
+    'p_grounding_causation': (('grounding', 'p_pc'), '0.000155'),
+    'p_grounding_no_turn_causation': (('grounding', 'p_pc'), '0.000155'),
+    'p_grounding_drifting_causation': (('grounding_drifting_rf',), '1'),
+    'p_headon_causation': (('headon',), '5e-05'),
+    'p_merging_causation': (('merging',), '0.00013'),
+    'p_overtaking_causation': (('overtaking',), '0.00011'),
+}
+
+
+# OMRAT ``pc`` key -> IWRAP attributes to read, in *increasing* precedence.
+# Later entries overwrite earlier ones, so where an IWRAP file sets both
+# categories the turn-failure factor wins -- that is the one OMRAT's
+# powered models actually apply.  Mirror of ``_CF_EXPORT_MAP``; changing
+# one without the other breaks the round-trip.
+_CF_IMPORT_MAP: dict[str, tuple[str, ...]] = {
+    'headon': ('p_headon_causation',),
+    'overtaking': ('p_overtaking_causation',),
+    'crossing': ('p_crossing_causation',),
+    'merging': ('p_merging_causation',),
+    'bend': ('p_bend_causation',),
+    'grounding': (
+        'p_grounding_causation', 'p_grounding_no_turn_causation',
+    ),
+    'allision': (
+        'p_allision_causation', 'p_allision_no_turn_causation',
+    ),
+    'grounding_drifting_rf': ('p_grounding_drifting_causation',),
+    'allision_drifting_rf': ('p_allision_drifting_causation',),
+}
+
+
+def _fmt_pc(value: Any) -> str | None:
+    """Render one causation factor for the XML, or None if unusable."""
+    try:
+        return repr(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _add_global_settings(root: ET.Element, data: dict | None = None) -> None:
+    """Write ``global_settings`` using the project's own causation factors.
+
+    Before v0.14.0 this emitted hardcoded constants and ignored ``data``
+    entirely, so an exported model was scored with IWRAP defaults rather
+    than the values set under **Settings -> Causation Factors**.  Any
+    OMRAT-vs-IWRAP comparison built on such an export was comparing two
+    different sets of inputs.
+    """
+    pc = (data or {}).get('pc') or {}
+    if not isinstance(pc, dict):
+        pc = {}
+
     gs = ET.SubElement(root, 'global_settings')
     cf = ET.SubElement(gs, 'causation_factors')
-    cf.set('p_allision_causation', '0.000155')
-    cf.set('p_allision_drifting_causation', '1')
-    cf.set('p_allision_no_turn_causation', '0.000155')
-    cf.set('p_bend_causation', '0.00013')
-    cf.set('p_crossing_causation', '0.00013')
-    cf.set('p_grounding_causation', '0.000155')
-    cf.set('p_grounding_drifting_causation', '1')
-    cf.set('p_grounding_no_turn_causation', '0.000155')
-    cf.set('p_headon_causation', '5e-05')
-    cf.set('p_merging_causation', '0.00013')
-    cf.set('p_overtaking_causation', '0.00011')
+    for attr, (keys, default) in _CF_EXPORT_MAP.items():
+        rendered = None
+        for key in keys:
+            if key in pc:
+                rendered = _fmt_pc(pc[key])
+                if rendered is not None:
+                    break
+        cf.set(attr, rendered if rendered is not None else default)
+
     misc = ET.SubElement(gs, 'misc')
     misc.set('fastferry_reduction_factor', '20')
-    misc.set('meantime_between_checks', '240')
+    mtbc = _fmt_pc(pc.get('mean_time_between_checks'))
+    misc.set('meantime_between_checks', mtbc if mtbc is not None else '240')
     misc.set('passengership_reductionfactor', '20')
 
 
@@ -457,7 +585,7 @@ def generate_iwrap_xml(data: dict) -> ET.Element:
     ET.SubElement(root, 'area_traffic')
     ET.SubElement(root, 'routes')
     ET.SubElement(root, 'tug_boats')
-    _add_global_settings(root)
+    _add_global_settings(root, data)
     return root
 
 
@@ -735,6 +863,15 @@ _UI_TO_IWRAP: dict[str, str] = {
     'Other Type, all ships of this type': 'Other ship',
 }
 
+# All 14 IWRAP ship types in canonical order — always emitted even when empty,
+# so IWRAP can read the distribution without falling back to re-extraction.
+_IWRAP_SHIP_TYPE_ORDER: list[str] = [
+    'Crude oil tanker', 'Oil products tanker', 'Chemical tanker', 'Gas tanker',
+    'Container ship', 'General cargo ship', 'Bulk carrier', 'Ro-Ro cargo ship',
+    'Passenger ship', 'Fast ferry', 'Support ship', 'Fishing ship',
+    'Pleasure boat', 'Other ship',
+]
+
 
 def _mat_safe(mat, r: int, c: int) -> float:
     return _sanitize_num(mat[r][c]) if mat and r < len(mat) and c < len(mat[r]) else 0.0
@@ -783,14 +920,22 @@ def _emit_shiptypes_grouped(shiptypes_el: ET.Element, freq_mat, speed_mat, draft
     groups: dict[str, list[int]] = {}
     for r, type_name in enumerate(types):
         groups.setdefault(_UI_TO_IWRAP.get(type_name, 'Other ship'), []).append(r)
-    for iwrap_name, rows in groups.items():
+    # Always emit all 14 canonical IWRAP ship types (empty categories for unmapped ones)
+    # so IWRAP does not need to fall back to its own AIS re-extraction.
+    for iwrap_name in _IWRAP_SHIP_TYPE_ORDER:
+        rows = groups.get(iwrap_name, [])
         st_el = ET.SubElement(shiptypes_el, 'shiptype')
         for attr, val in [('causation_reduction_factor', '0'), ('freq_adjustment', '1'),
                           ('grounding_safety_margin', '-1'), ('name', iwrap_name)]:
             st_el.set(attr, val)
         cats_el = ET.SubElement(st_el, 'categories')
         for c, interval in enumerate(intervals):
-            label = re.sub(r"\s*-\s*", "-", str(interval.get('label', f'{c}'))).strip()
+            # IWRAP looks up categories by name — use integer "min-max" format ("0-25")
+            # not the OMRAT label which has decimals ("0.0 - 25.0" → "0.0-25.0").
+            try:
+                label = f"{int(float(interval['min']))}-{int(float(interval['max']))}"
+            except (KeyError, TypeError, ValueError):
+                label = re.sub(r"\s*-\s*", "-", str(interval.get('label', f'{c}'))).strip()
             freq_sum = sum(_mat_safe(freq_mat, r, c) for r in rows)
             if freq_sum <= 0:
                 continue
@@ -835,12 +980,15 @@ def build_traffic_distributions(parent: ET.Element, traffic_data: dict, segment_
         intervals = ship_categories.get('length_intervals', []) or []
     for leg_key in segment_data:
         leg_td = traffic_data.get(str(leg_key), {}) if isinstance(traffic_data, dict) else {}
-        east = leg_td.get('East going', {})
-        west = leg_td.get('West going', {})
+        dirs = segment_data[leg_key].get('Dirs', [])
+        ftl_dir = dirs[0] if len(dirs) > 0 else ''
+        ltf_dir = dirs[1] if len(dirs) > 1 else ''
+        ftl_data = leg_td.get(ftl_dir, {})
+        ltf_data = leg_td.get(ltf_dir, {})
         guid_ftl, shiptypes_e = _create_td_element(td_root, leg_key, 'FTL')
         guid_ltf, shiptypes_w = _create_td_element(td_root, leg_key, 'LTF')
         td_guid_map[str(leg_key)] = {'ftl': guid_ftl, 'ltf': guid_ltf}
-        for dir_data, shiptypes_el in [(east, shiptypes_e), (west, shiptypes_w)]:
+        for dir_data, shiptypes_el in [(ftl_data, shiptypes_e), (ltf_data, shiptypes_w)]:
             _emit_td_shiptypes(shiptypes_el, dir_data, types, intervals,
                                global_shiptypes, global_categories, leg_td)
     return td_guid_map
@@ -1339,22 +1487,20 @@ def _parse_global_settings_el(gs_el, result: dict, debug: bool) -> None:
     cf_el = gs_el.find('causation_factors')
     if cf_el is not None:
         pc = result['pc']
-        cf_mapping = {
-            'p_headon_causation': 'headon', 'p_overtaking_causation': 'overtaking',
-            'p_crossing_causation': 'crossing', 'p_bend_causation': 'bend',
-            'p_merging_causation': 'merging', 'p_grounding_causation': 'p_pc',
-            'p_allision_causation': 'allision_pc',
-            'p_grounding_drifting_causation': 'grounding_drifting_rf',
-            'p_allision_drifting_causation': 'allision_drifting_rf',
-            'p_grounding_no_turn_causation': 'grounding_no_turn_pc',
-            'p_allision_no_turn_causation': 'allision_no_turn_pc',
-        }
-        for iwrap_key, omrat_key in cf_mapping.items():
-            if (val := cf_el.get(iwrap_key)) is not None:
+        for omrat_key, iwrap_keys in _CF_IMPORT_MAP.items():
+            for iwrap_key in iwrap_keys:
+                if (val := cf_el.get(iwrap_key)) is None:
+                    continue
                 try:
                     pc[omrat_key] = float(val)
                 except (ValueError, TypeError):
                     pass
+        # ``p_pc`` is the dialog's "Powered causation factor" and a legacy
+        # alias the powered grounding model falls back to.  Keep it in step
+        # so the dialog does not show a stale default next to an imported
+        # grounding factor.
+        if 'grounding' in pc:
+            pc['p_pc'] = pc['grounding']
     misc_el = gs_el.find('misc')
     if misc_el is not None and (mtbc_val := misc_el.get('meantime_between_checks')) is not None:
         try:

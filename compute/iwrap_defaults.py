@@ -17,6 +17,10 @@ IWRAP_PC_DEFAULTS: dict[str, float] = {
     'headon': 4.9e-5,
     'overtaking': 1.1e-4,
     'crossing': 1.3e-4,
+    # Merging (legs meeting at <= 30 deg) shares the crossing value
+    # by default -- IWRAP does not publish a separate figure.  It is
+    # a distinct entry so a project can calibrate it independently.
+    'merging': 1.3e-4,
     'bend': 1.3e-4,
     'grounding': 1.6e-4,
     'allision': 1.9e-4,

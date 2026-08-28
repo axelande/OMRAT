@@ -76,7 +76,10 @@ class Storage:
         out['segment_data'] = self._normalize_segment_data(out.get('segment_data', {}) or {})
         out['traffic_data'] = self._normalize_traffic_data(out.get('traffic_data', {}) or {})
         out['traffic_scaling'] = self._normalize_traffic_scaling(out.get('traffic_scaling'))
-        out['drift'] = self._normalize_drift(out.get('drift', {}) or {})
+        out['drift'] = self._normalize_drift(
+            out.get('drift', {}) or {},
+            type_names=(out.get('ship_categories') or {}).get('types'),
+        )
         if 'junctions' not in out or not isinstance(out.get('junctions'), dict):
             out['junctions'] = {}
         if 'consequence' not in out or not isinstance(out.get('consequence'), dict):
@@ -166,7 +169,7 @@ class Storage:
         return scaling_block
 
     @staticmethod
-    def _normalize_drift(drift: dict) -> dict:
+    def _normalize_drift(drift: dict, type_names: list | None = None) -> dict:
         repair = drift.get('repair', {}) or {}
         try:
             combi = str(repair.get('combi', ''))
@@ -213,7 +216,12 @@ class Storage:
         else:
             try:
                 from compute.basic_equations import default_blackout_by_ship_type
-                drift['blackout_by_ship_type'] = default_blackout_by_ship_type()
+                # Seed by NAME against the project's own taxonomy when
+                # available, so the 0.1 roro_passenger rate lands on the
+                # right rows (AIS taxonomy has Passenger at 17, not 8-11).
+                drift['blackout_by_ship_type'] = default_blackout_by_ship_type(
+                    type_names if type_names else None,
+                )
             except Exception:  # nosec B110 B112
                 drift['blackout_by_ship_type'] = {}
         return drift

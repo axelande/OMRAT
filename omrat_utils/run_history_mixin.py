@@ -82,7 +82,7 @@ class RunHistoryMixin:
     _ACCIDENT_TOTAL_KEYS: tuple[str, ...] = (
         'drift_allision', 'drift_grounding',
         'powered_allision', 'powered_grounding',
-        'overtaking', 'head_on', 'crossing', 'bend',
+        'overtaking', 'head_on', 'crossing', 'merging', 'bend',
     )
 
     # ------------------------------------------------------------------

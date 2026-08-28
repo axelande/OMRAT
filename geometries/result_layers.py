@@ -303,6 +303,56 @@ def _fill_segment_contributions(obstacle_data: dict, seg_map: dict, prefix: str)
             obstacle_data[obj_id]['segment_contributions'] = dict(seg_data)
 
 
+def _fill_segment_edge_meta(obstacle_data: dict, edge_meta: dict, prefix: str) -> None:
+    """Attach per-segment edge_calc_meta to the obstacle dicts.
+
+    Structure of ``edge_meta`` is
+    ``{obstacle_key: {seg_key: {leg_dir_key: {edge_dist_m, reachable_width_m,
+    edge_p_nr, edge_h_eff, contrib_sum, ...}}}}``.  For each obstacle we
+    condense every (seg, leg_dir) entry into a single per-segment attribute
+    set using contribution-weighted averages (so segments hit from many
+    directions still report one representative value per attribute).
+    """
+    for obs_key, seg_map in (edge_meta or {}).items():
+        if not obs_key.startswith(prefix):
+            continue
+        obj_id = obs_key.replace(prefix, '')
+        if obj_id not in obstacle_data:
+            continue
+        per_seg: dict[str, dict[str, float]] = {}
+        for seg_key, ld_map in (seg_map or {}).items():
+            total_w = 0.0
+            wsum = {'edge_dist_m': 0.0, 'reachable_width_m': 0.0,
+                    'edge_p_nr': 0.0, 'edge_h_eff': 0.0}
+            min_dist = None
+            max_reach = 0.0
+            for ld_key, entry in (ld_map or {}).items():
+                w = float(entry.get('contrib_sum', 0.0))
+                if w <= 0.0:
+                    continue
+                for k in wsum:
+                    wsum[k] += float(entry.get(k, 0.0)) * w
+                total_w += w
+                ed = float(entry.get('edge_dist_m', 0.0))
+                if min_dist is None or ed < min_dist:
+                    min_dist = ed
+                rw = float(entry.get('reachable_width_m', 0.0))
+                if rw > max_reach:
+                    max_reach = rw
+            if total_w > 0.0:
+                per_seg[seg_key] = {
+                    'edge_dist_m': wsum['edge_dist_m'] / total_w,
+                    'reachable_width_m': wsum['reachable_width_m'] / total_w,
+                    'edge_p_nr': wsum['edge_p_nr'] / total_w,
+                    'edge_h_eff': wsum['edge_h_eff'] / total_w,
+                    'min_edge_dist_m': float(min_dist) if min_dist is not None else 0.0,
+                    'max_reachable_width_m': max_reach,
+                    'contrib_sum': total_w,
+                }
+        if per_seg:
+            obstacle_data[obj_id]['segment_edge_meta'] = per_seg
+
+
 def extract_obstacle_probabilities(
     report: dict[str, Any],
     structures: list[dict[str, Any]],
@@ -338,6 +388,9 @@ def extract_obstacle_probabilities(
     _fill_legdir_contributions(grounding_data, report.get('by_depth_legdir', {}), 'Depth - ')
     _fill_segment_contributions(allision_data, report.get('by_structure_segment_legdir', {}), 'Structure - ')
     _fill_segment_contributions(grounding_data, report.get('by_depth_segment_legdir', {}), 'Depth - ')
+    edge_meta = report.get('edge_calc_meta', {})
+    _fill_segment_edge_meta(allision_data, edge_meta, 'Structure - ')
+    _fill_segment_edge_meta(grounding_data, edge_meta, 'Depth - ')
     return allision_data, grounding_data
 
 
@@ -472,6 +525,15 @@ def _init_result_layer(
         QgsField("object_probability", QVariant.Double),
         QgsField("normal_deg", QVariant.Double),
         QgsField("value", QVariant.Double),
+        # Per-edge back-tracing attributes (contribution-weighted across
+        # leg-directions and wind angles that struck this segment).
+        QgsField("edge_dist_m", QVariant.Double),
+        QgsField("reach_width_m", QVariant.Double),
+        QgsField("edge_p_nr", QVariant.Double),
+        QgsField("edge_h_eff", QVariant.Double),
+        # Extremes across leg-directions for filtering / worst-case colouring.
+        QgsField("min_edge_dist_m", QVariant.Double),
+        QgsField("max_reach_width_m", QVariant.Double),
     ]
     leg_key_to_field: dict[str, str] = {}
     for leg_key in sorted(all_leg_keys):
@@ -523,6 +585,16 @@ def _make_obstacle_segment_feat(
     feat.setAttribute("object_probability", obs_data.get('total_probability', 0.0))
     feat.setAttribute("normal_deg", normal_angle)
     feat.setAttribute("value", obs_data.get('value', 0.0))
+    # Per-edge back-tracing attributes from edge_calc_meta (or 0 if the
+    # segment never entered the per-edge branch -- e.g. simple-branch obstacles).
+    seg_edge_meta = obs_data.get('segment_edge_meta', {}) or {}
+    em = seg_edge_meta.get(f"seg_{seg_idx}", {})
+    feat.setAttribute("edge_dist_m", float(em.get('edge_dist_m', 0.0)))
+    feat.setAttribute("reach_width_m", float(em.get('reachable_width_m', 0.0)))
+    feat.setAttribute("edge_p_nr", float(em.get('edge_p_nr', 0.0)))
+    feat.setAttribute("edge_h_eff", float(em.get('edge_h_eff', 0.0)))
+    feat.setAttribute("min_edge_dist_m", float(em.get('min_edge_dist_m', 0.0)))
+    feat.setAttribute("max_reach_width_m", float(em.get('max_reachable_width_m', 0.0)))
     for leg_key, field_name in leg_key_to_field.items():
         feat.setAttribute(field_name, seg_leg_contribs.get(leg_key, 0.0))
     return feat
@@ -879,6 +951,7 @@ def _build_collision_point_layer(by_waypoint: dict) -> QgsVectorLayer:
     pp.addAttributes([
         QgsField('waypoint', QVariant.String),
         QgsField('crossing', QVariant.Double),
+        QgsField('merging', QVariant.Double),
         QgsField('bend', QVariant.Double),
         QgsField('combined', QVariant.Double),
     ])
@@ -891,14 +964,16 @@ def _build_collision_point_layer(by_waypoint: dict) -> QgsVectorLayer:
         except Exception:  # nosec B110 B112
             continue
         crossing = float(rec.get('crossing', 0.0) or 0.0)
+        merging = float(rec.get('merging', 0.0) or 0.0)
         bend = float(rec.get('bend', 0.0) or 0.0)
-        combined = crossing + bend
+        combined = crossing + merging + bend
         if combined <= 0.0:
             continue
         feat = QgsFeature(layer.fields())
         feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
         feat.setAttribute('waypoint', wp_key)
         feat.setAttribute('crossing', crossing)
+        feat.setAttribute('merging', merging)
         feat.setAttribute('bend', bend)
         feat.setAttribute('combined', combined)
         feats.append(feat)

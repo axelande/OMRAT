@@ -38,6 +38,7 @@ _VIEW_SLOTS = [
     ("show_head_on_collision",    "Head-on collision"),
     ("show_crossing_collision",   "Crossing collision"),
     ("show_merging_collision",    "Merging collision"),
+    ("show_bend_collision",       "Bend collision"),
 ]
 
 

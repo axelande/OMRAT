@@ -41,9 +41,9 @@ Current implementation notes:
 
 .. container:: source-code-ref pipeline
 
-   **Grounding pipeline:** ``compute/powered_model.py:28`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L28>`__ |
-   **Allision pipeline:** ``compute/powered_model.py:178`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L178>`__ |
-   **Exponential decay:** ``compute/basic_equations.py:26`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L26>`__
+   **Grounding pipeline:** ``compute/powered_model.py:301`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L301>`__ |
+   **Allision pipeline:** ``compute/powered_model.py:334`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L334>`__ |
+   **Exponential decay:** ``compute/basic_equations.py:96`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L96>`__
 
 
 Category I: Direct Overlap
@@ -84,11 +84,11 @@ are the mean and standard deviation of the lateral position distribution.
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:432`` -- `get_powered_grounding_cat1() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L432>`__
+   ``compute/basic_equations.py:754`` -- `get_powered_grounding_cat1() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L754>`__
 
 .. literalinclude:: ../../compute/basic_equations.py
    :language: python
-   :lines: 466-467
+   :pyobject: get_powered_grounding_cat1
    :caption: Category I -- direct overlap (compute/basic_equations.py)
 
 Physical Interpretation
@@ -109,6 +109,17 @@ Category II covers ships that fail to change course at a
 waypoint/bend. The ship continues on its original heading instead of
 turning, and may collide with an obstacle that lies ahead on the
 original course.
+
+.. note::
+
+   This is the **only** powered category OMRAT computes;
+   ``run_powered_grounding_model`` and
+   ``run_powered_allision_model`` are both Category II.  It is why
+   ``pc['grounding']`` and ``pc['allision']`` map to IWRAP's
+   ``p_*_no_turn_causation`` attributes rather than the plain ones --
+   see :ref:`iwrap-causation-mapping`.  An IWRAP model of the same
+   waterway will report a higher powered total than OMRAT because it
+   adds the Category-I contribution on top.
 
 The probability decreases **exponentially** with distance from the bend,
 because the crew has more opportunities to detect and correct the course
@@ -135,11 +146,11 @@ Where:
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:470`` -- `get_powered_grounding_cat2() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L470>`__
+   ``compute/basic_equations.py:792`` -- `get_powered_grounding_cat2() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L792>`__
 
 .. literalinclude:: ../../compute/basic_equations.py
    :language: python
-   :lines: 521-532
+   :pyobject: get_powered_grounding_cat2
    :caption: Category II -- exponential decay (compute/basic_equations.py)
 
 Recovery Distance
@@ -164,7 +175,7 @@ For a ship travelling at 10 knots (~5.1 m/s):
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:408`` -- `get_recovery_distance() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L408>`__
+   ``compute/basic_equations.py:730`` -- `get_recovery_distance() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L730>`__
 
 Exponential Decay
 -----------------
@@ -272,7 +283,7 @@ significantly reduces runtime on projects with many draught entries.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:205`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L205>`__
+   ``geometries/get_powered_overlap.py:350`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L350>`__
 
 
 Shadow Effect
@@ -350,7 +361,7 @@ ship draught.
 
 .. container:: source-code-ref
 
-   ``compute/powered_model.py:66`` -- `draught grouping <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L66>`__
+   ``compute/powered_model.py:70`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L70>`__
 
 
 Computation Pipeline
@@ -430,8 +441,8 @@ a short recovery distance, so the exponential drops off quickly.
 
 .. container:: source-code-ref pipeline
 
-   ``compute/powered_model.py:28`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L28>`__ |
-   ``compute/powered_model.py:178`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L178>`__
+   ``compute/powered_model.py:301`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L301>`__ |
+   ``compute/powered_model.py:334`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L334>`__
 
 
 .. _powered-visualization:
@@ -492,7 +503,7 @@ distribution, leaving little mass for obstacles further away.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:447`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L447>`__
+   ``geometries/get_powered_overlap.py:566`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L566>`__
 
 
 Combined Powered Risk
