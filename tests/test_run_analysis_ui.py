@@ -274,3 +274,24 @@ class TestSnapshotLayers:
         assert abs(ax - 500.0) < 1e-9 and abs(bx - 500.0) < 1e-9
         assert sorted((ay, by)) == [-250.0, 250.0]
         assert perpendicular_through_midpoint((1.0, 1.0), (1.0, 1.0), 10.0) is None
+
+
+class TestSnapshotTangentPosition:
+    def test_build_tangent_layer_honours_tangent_pos(self, omrat):
+        from omrat_utils.snapshot_layers import build_tangent_layer
+        seg = {
+            '1': {'Start_Point': '14.0 55.0', 'End_Point': '14.2 55.0', 'Width': 2000,
+                  'Route_Id': 1, 'Leg_name': 'L1', 'Segment_Id': '1', 'Tangent_Pos': 0.2},
+            '2': {'Start_Point': '14.0 56.0', 'End_Point': '14.2 56.0', 'Width': 2000,
+                  'Route_Id': 1, 'Leg_name': 'L2', 'Segment_Id': '2'},
+        }
+        layer = build_tangent_layer(seg, 'Tangent Lines', color='#000000')
+        assert layer is not None
+        mids = {}
+        for f in layer.getFeatures():
+            pts = f.geometry().asPolyline()
+            mids[f['type']] = ((pts[0].x() + pts[-1].x()) / 2, (pts[0].y() + pts[-1].y()) / 2)
+        assert mids['Tangent Line 1'][0] == pytest.approx(14.04, abs=2e-3)
+        assert mids['Tangent Line 1'][1] == pytest.approx(55.0, abs=2e-4)
+        # No Tangent_Pos -> midpoint, as before.
+        assert mids['Tangent Line 2'][0] == pytest.approx(14.1, abs=2e-3)

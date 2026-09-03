@@ -289,6 +289,16 @@ QToolTip {
                   </property>
                  </widget>
                 </item>
+                <item>
+                 <widget class="QPushButton" name="pbMoveTangent">
+                  <property name="toolTip">
+                   <string>Activate the Tangent Line layer and QGIS's Move Feature tool. Drag a tangent line along its leg; it snaps back onto the leg when released.</string>
+                  </property>
+                  <property name="text">
+                   <string>Move tangent</string>
+                  </property>
+                 </widget>
+                </item>
                </layout>
               </item>
               <item>
@@ -2143,6 +2153,7 @@ shadows/holes created by shallow depths and low structures.</string>
   <tabstop>pbStopRoute</tabstop>
   <tabstop>pbLoadRoute</tabstop>
   <tabstop>pbRemoveRoute</tabstop>
+  <tabstop>pbMoveTangent</tabstop>
   <tabstop>pbUpdateAIS</tabstop>
   <tabstop>leNormMean1_1</tabstop>
   <tabstop>leNormStd1_1</tabstop>

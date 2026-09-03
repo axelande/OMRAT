@@ -112,6 +112,7 @@ class AisUpdateTask(QgsTask):
 
     def _process_leg(self, leg_key: str, leg_d: dict) -> None:
         from omrat_utils.handle_ais import get_pl
+        from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
         from shapely import wkt
         ais = self.ais
         dirs = self.leg_dirs.get(leg_key, [])
@@ -134,7 +135,11 @@ class AisUpdateTask(QgsTask):
             )
             self.bad_legs.append(leg_key)
             return
-        pl = get_pl(ais.db, lat1=start_p.y, lat2=end_p.y, lon1=start_p.x, lon2=end_p.x, l_width=float(leg_d['Width']))
+        pl = get_pl(
+            ais.db, lat1=start_p.y, lat2=end_p.y, lon1=start_p.x, lon2=end_p.x,
+            l_width=float(leg_d['Width']),
+            tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
+        )
         ais_data = ais.run_sql(pl)
         sql = (f"select degrees(ST_Azimuth(ST_Point({start_p.x}, {start_p.y})::geography, "
                f"ST_Point({end_p.x}, {end_p.y})::geography))")

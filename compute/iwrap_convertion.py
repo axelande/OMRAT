@@ -1364,6 +1364,7 @@ def _parse_legs_el(legs_el, waypoint_map: dict, mal_map: dict, debug: bool) -> d
         ep = f"{end_wp.get('lon', 0)} {end_wp.get('lat', 0)}"
         seg: dict = {
             'Leg_name': leg_name, 'Width': int(round(float(leg_el.get('max_width', 0)))),
+            'Tangent_Pos': 0.5,
             'Start_Point': sp, 'End_Point': ep,
             'Dirs': ['East going', 'West going'], 'line_length': _haversine_m(sp, ep),
             'Route_Id': 0, 'Segment_Id': str(idx),

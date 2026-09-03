@@ -150,6 +150,8 @@ def test_get_segment_data_from_table_valid_data(mock_ais, mock_table):
 
     # Verify the result.  Width is stored as a string (matches
     # get_segment_data_from_table's dict[str, str] type signature).
+    # Tangent_Pos is read from segment_data, not the table; with a
+    # mocked plugin it falls back to the midpoint.
     assert result == {
         '1': {
             'Route_Id': '1',
@@ -157,6 +159,7 @@ def test_get_segment_data_from_table_valid_data(mock_ais, mock_table):
             'Start_Point': '14.33188 55.21143',
             'End_Point': '14.52057 55.35013',
             'Width': '5000',
+            'Tangent_Pos': 0.5,
         }
     }
 

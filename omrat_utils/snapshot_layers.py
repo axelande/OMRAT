@@ -22,6 +22,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from geometries.tangent_position import (
+    TANGENT_POS_KEY, normalize_tangent_pos, perpendicular_through_point,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +77,8 @@ def _parse_xy(text: Any) -> tuple[float, float] | None:
 
 
 def _leg_rows(segment_data: Any) -> list[dict[str, Any]]:
-    """``segment_data`` -> list of ``{id, route, name, start, end, width}``."""
+    """``segment_data`` -> list of
+    ``{id, route, name, start, end, width, tangent_pos}``."""
     rows: list[dict[str, Any]] = []
     if not isinstance(segment_data, dict):
         return rows
@@ -97,6 +102,7 @@ def _leg_rows(segment_data: Any) -> list[dict[str, Any]]:
             'start': start,
             'end': end,
             'width': width,
+            'tangent_pos': normalize_tangent_pos(seg.get(TANGENT_POS_KEY)),
         })
     rows.sort(key=lambda r: int(r['id']) if r['id'].isdigit() else 10 ** 9)
     return rows
@@ -107,18 +113,9 @@ def perpendicular_through_midpoint(
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """Endpoints of the segment perpendicular to ``start->end`` through
     its midpoint, extending ``half_width`` to each side (planar maths --
-    feed it projected coordinates)."""
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = (dx * dx + dy * dy) ** 0.5
-    if length < 1e-9:
-        return None
-    px, py = -dy / length, dx / length
-    mx, my = (start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0
-    return (
-        (mx - px * half_width, my - py * half_width),
-        (mx + px * half_width, my + py * half_width),
-    )
+    feed it projected coordinates).  Thin wrapper over
+    :func:`geometries.tangent_position.perpendicular_through_point`."""
+    return perpendicular_through_point(start, end, half_width, 0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +237,9 @@ def build_tangent_layer(segment_data: Any, name: str, *, color: str):
             )
             s_utm = to_utm.transform(QgsPointXY(*row['start']))
             e_utm = to_utm.transform(QgsPointXY(*row['end']))
-            ends = perpendicular_through_midpoint(
+            ends = perpendicular_through_point(
                 (s_utm.x(), s_utm.y()), (e_utm.x(), e_utm.y()), row['width'] / 2.0,
+                row['tangent_pos'],
             )
             if ends is None:
                 continue

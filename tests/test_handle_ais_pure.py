@@ -844,3 +844,40 @@ class TestAISUpdateDistDataUiReset:
         mw.leNormMean2_1.setText.assert_called_with(str(l2.mean()))
         mw.leNormStd1_1.setText.assert_called_with(str(l1.std()))
         mw.leNormStd2_1.setText.assert_called_with(str(l2.std()))
+
+
+# ---------------------------------------------------------------------------
+# get_pl -- movable tangent line (passage line anchored at Tangent_Pos)
+# ---------------------------------------------------------------------------
+
+class TestGetPlTangentPosition:
+    def _sql(self, **kwargs) -> str:
+        mock_db = MagicMock()
+        mock_db.execute_and_return.return_value = [True, [['LINESTRING(...)']]]
+        get_pl(mock_db, 55.0, 56.0, 14.0, 15.0, l_width=1000.0, **kwargs)
+        return mock_db.execute_and_return.call_args.args[0]
+
+    def test_default_anchor_is_midpoint(self):
+        """Without ``tangent_pos`` the passage line sits at 50 % of the leg,
+        i.e. exactly where ``ST_Centroid`` used to put it."""
+        sql = self._sql()
+        assert 'ST_LineInterpolatePoint(' in sql
+        assert ', 0.5)' in sql
+        assert 'ST_Centroid' not in sql
+
+    def test_fraction_is_interpolated_along_leg(self):
+        sql = self._sql(tangent_pos=0.2)
+        assert ', 0.2)' in sql
+
+    def test_fraction_is_clamped_and_normalised(self):
+        assert ', 1.0)' in self._sql(tangent_pos=7)
+        assert ', 0.0)' in self._sql(tangent_pos=-1)
+        assert ', 0.5)' in self._sql(tangent_pos='garbage')
+
+    def test_both_ends_share_the_anchor(self):
+        """The two ``ST_Project`` calls must start from the same point so the
+        line is a true perpendicular through the anchor."""
+        sql = self._sql(tangent_pos=0.3)
+        assert sql.count('ST_LineInterpolatePoint(') == 2
+        assert sql.count(', 0.3)') == 2
+        assert 'radians(90)' in sql and 'radians(270)' in sql

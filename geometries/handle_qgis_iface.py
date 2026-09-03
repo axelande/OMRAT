@@ -12,12 +12,16 @@ from qgis.core import (
     QgsLineSymbol, QgsPointXY, QgsWkbTypes,
 )
 from qgis.gui import QgsRubberBand
-from qgis.PyQt.QtCore import QMetaType, Qt
+from qgis.PyQt.QtCore import QMetaType, Qt, QTimer
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 
 
 from omrat_utils import PointTool
+from geometries.tangent_position import (
+    DEFAULT_TANGENT_POS, TANGENT_POS_KEY, fraction_from_percent, normalize_tangent_pos,
+    percent_from_fraction, point_along, project_fraction,
+)
 
 
 def is_valid_point_pair(start: QgsPointXY, end: QgsPointXY) -> bool:
@@ -58,6 +62,10 @@ class HandleQGISIface:
         self.buffer_edits: list[QgsVectorLayerEditBuffer] = []
         self.leg_dirs: dict[str, list[str]] = {}
         self._rubber_band: QgsRubberBand | None = None
+        # Re-entrancy guards: our own tangent redraws / table writes must
+        # not be mistaken for user edits.
+        self._tangent_guard = False
+        self._table_sync_guard = False
         self.omrat.main_widget.twRouteList.cellClicked.connect(self.on_route_table_cell_clicked)
         # Spinboxes for current route / next-leg IDs (declared in the .ui).
         mw = self.omrat.main_widget
@@ -321,6 +329,7 @@ class HandleQGISIface:
             self.omrat.main_widget.twRouteList.disconnect()
         except TypeError:
             pass
+        self._disconnect_tangent_signal()
         # Break circular references
         self._clear_rubber_band()
         self.tangent_layer = None
@@ -669,11 +678,15 @@ class HandleQGISIface:
                 row_id, 4, QTableWidgetItem(self.format_wkt(QgsPoint(ep[0], ep[1]))),
             )
             widget.twRouteList.setItem(row_id, 5, QTableWidgetItem(f"{int(width)}"))
+            widget.twRouteList.setItem(
+                row_id, 6,
+                QTableWidgetItem(percent_from_fraction(normalize_tangent_pos(seg.get(TANGENT_POS_KEY)))),
+            )
             btn = QPushButton("Update AIS")
             btn.clicked.connect(
                 lambda _checked=False, k=str(seg_id): self.omrat.ais.update_legs(k)
             )
-            widget.twRouteList.setCellWidget(row_id, 6, btn)
+            widget.twRouteList.setCellWidget(row_id, 7, btn)
 
             # Refresh the offset / tangent line for this leg.
             try:
@@ -838,6 +851,7 @@ class HandleQGISIface:
         item4 = QTableWidgetItem(f'{point2.asWkt(precision=5).split("(")[1].split(")")[0]}')
         item5 = QTableWidgetItem('5000')  # Default width
         item6 = QTableWidgetItem(f'LEG_{self.cur_route_id}_{self.segment_id}')  # Leg name
+        item7 = QTableWidgetItem(percent_from_fraction(DEFAULT_TANGENT_POS))  # Tangent position
 
         # Add items to the table
         self.omrat.main_widget.twRouteList.setItem(row_id, 0, item1)
@@ -846,14 +860,112 @@ class HandleQGISIface:
         self.omrat.main_widget.twRouteList.setItem(row_id, 3, item3)
         self.omrat.main_widget.twRouteList.setItem(row_id, 4, item4)
         self.omrat.main_widget.twRouteList.setItem(row_id, 5, item5)
+        self.omrat.main_widget.twRouteList.setItem(row_id, 6, item7)
         btn_update_ais = QPushButton("Update AIS")
         btn_update_ais.clicked.connect(lambda: self.omrat.ais.update_legs(str(self.segment_id)))
-        self.omrat.main_widget.twRouteList.setCellWidget(row_id, 6, btn_update_ais)
+        self.omrat.main_widget.twRouteList.setCellWidget(row_id, 7, btn_update_ais)
 
-        # Connect the itemChanged signal to a handler
+        self.ensure_route_table_signal()
+
+    # ------------------------------------------------------------------
+    # Route table wiring shared by drawing, reload and file load
+    # ------------------------------------------------------------------
+
+    def ensure_route_table_signal(self) -> None:
+        """Connect ``twRouteList.itemChanged`` -> ``on_width_changed`` once."""
+        if self.item_changed_connected:
+            return
+        self.omrat.main_widget.twRouteList.itemChanged.connect(self.on_width_changed)
+        self.item_changed_connected = True
+
+    def suspend_route_table_signal(self) -> None:
+        """Disconnect the edit handler before a bulk repopulation so
+        ``setItem`` calls are not mistaken for user edits."""
         if not self.item_changed_connected:
-            self.omrat.main_widget.twRouteList.itemChanged.connect(self.on_width_changed)
-            self.item_changed_connected = True
+            return
+        try:
+            self.omrat.main_widget.twRouteList.itemChanged.disconnect(self.on_width_changed)
+        except TypeError:
+            pass
+        self.item_changed_connected = False
+
+    def finish_route_table_rows(self) -> None:
+        """Complete rows written by a bulk population (file load).
+
+        ``GatherData.populate_segment_tbl`` writes the six data columns
+        only.  This adds the Tangent (%) cell and the Update AIS button
+        to every row that lacks them and (re)connects the edit signal,
+        so width / tangent edits on a loaded project reach the canvas
+        exactly like on a freshly drawn one.
+        """
+        widget = self.omrat.main_widget
+        if widget is None:
+            return
+        table = widget.twRouteList
+        for row in range(table.rowCount()):
+            id_item = table.item(row, 0)
+            if id_item is None:
+                continue
+            seg_key = id_item.text()
+            if table.item(row, 6) is None:
+                table.setItem(
+                    row, 6, QTableWidgetItem(percent_from_fraction(self.stored_tangent_pos(seg_key))),
+                )
+            if table.cellWidget(row, 7) is None:
+                btn = QPushButton("Update AIS")
+                btn.clicked.connect(
+                    lambda _checked=False, k=seg_key: self.omrat.ais.update_legs(k)
+                )
+                table.setCellWidget(row, 7, btn)
+        self.ensure_route_table_signal()
+
+    def start_move_tangent(self) -> None:
+        """One-click entry point for dragging a tangent line.
+
+        Activates the *Tangent Line* layer, makes sure it is in edit
+        mode and starts QGIS's own **Move Feature** tool, so the user
+        does not have to find the Advanced Digitizing toolbar.  The
+        drag itself is handled by ``_on_tangent_geometry_changed``.
+        """
+        self.ensure_tangent_layer()
+        self.ensure_tangent_fields()
+        layer = self.tangent_layer
+        if layer is None:
+            return
+        if layer.featureCount() == 0:
+            self._notify(self.omrat.tr(
+                "There are no tangent lines to move yet. Draw or load a route first."
+            ), duration=6)
+            return
+        iface = self.omrat.iface
+        try:
+            iface.setActiveLayer(layer)
+        except Exception:  # nosec B110 B112
+            pass
+        if not layer.isEditable():
+            layer.startEditing()
+        getter = getattr(iface, 'actionMoveFeature', None)
+        action = getter() if callable(getter) else None
+        if action is None:
+            self._notify(self.omrat.tr(
+                "Tangent Line layer is ready for editing. Pick 'Move Feature' on the "
+                "Advanced Digitizing toolbar and drag a tangent line along its leg."
+            ), duration=10)
+            return
+        action.trigger()
+        self._notify(self.omrat.tr(
+            "Drag a tangent line along its leg. It snaps back onto the leg when released. "
+            "Choose the Pan tool when you are done."
+        ), duration=10)
+
+    def _notify(self, message: str, *, duration: int = 8) -> None:
+        notifier = getattr(self.omrat, 'notifier', None)
+        if notifier is None:
+            return
+        try:
+            notifier.display_message(message, duration=duration)
+        except Exception:  # nosec B110 B112
+            pass
 
     def on_route_table_cell_clicked(self, row: int, column: int):
         """Called when any cell in the route table is clicked."""
@@ -911,6 +1023,7 @@ class HandleQGISIface:
                 'Start_Point': start_wkt,
                 'End_Point': point.asWkt(),
                 'Dirs': dirs, 'Width': 5000, 'line_length': dist,
+                TANGENT_POS_KEY: DEFAULT_TANGENT_POS,
                 'Route_Id': self.cur_route_id,
                 'Segment_Id': self.segment_id,
                 'Leg_name': f'LEG_{self.cur_route_id}_{self.segment_id}',
@@ -959,6 +1072,10 @@ class HandleQGISIface:
                 raise RuntimeError("Tangent line layer is not valid")
             QgsProject.instance().addMapLayer(self.tangent_layer)
             self.vector_layers.append(self.tangent_layer)
+            # The layer stays in edit mode so the user can drag a tangent
+            # with QGIS's own Move Feature / vertex tools; we catch the
+            # edit and snap the line back onto the leg.
+            self.tangent_layer.geometryChanged.connect(self._on_tangent_geometry_changed)
         self.tangent_layer.startEditing()
 
     def ensure_tangent_fields(self):
@@ -968,8 +1085,10 @@ class HandleQGISIface:
             self.tangent_layer.updateFields()
 
     def calculate_midpoint_utm(
-        self, start: QgsPointXY, end: QgsPointXY
+        self, start: QgsPointXY, end: QgsPointXY, tangent_pos: float = DEFAULT_TANGENT_POS,
     ) -> tuple[QgsPointXY, QgsCoordinateTransform, QgsCoordinateTransform]:
+        """UTM point at fraction ``tangent_pos`` along ``start -> end``
+        (``0.5`` = midpoint) plus the to/from-UTM transforms."""
         longitude = (start.x() + end.x()) / 2
         utm_zone = int((longitude + 180) / 6) + 1
         is_northern = start.y() >= 0
@@ -985,7 +1104,10 @@ class HandleQGISIface:
 
         start_utm = transform_to_utm.transform(start)
         end_utm = transform_to_utm.transform(end)
-        mid_utm = QgsPointXY((start_utm.x() + end_utm.x()) / 2, (start_utm.y() + end_utm.y()) / 2)
+        mx, my = point_along(
+            (start_utm.x(), start_utm.y()), (end_utm.x(), end_utm.y()), tangent_pos,
+        )
+        mid_utm = QgsPointXY(mx, my)
 
         return mid_utm, transform_to_utm, transform_to_canvas
 
@@ -1005,16 +1127,35 @@ class HandleQGISIface:
         fet.setAttributes([f"Tangent Line {segment_id}"])
         self.tangent_layer.dataProvider().addFeatures([fet])
 
+    def stored_tangent_pos(self, segment_id: int | str) -> float:
+        """``Tangent_Pos`` fraction for ``segment_id`` from ``segment_data``
+        (midpoint when the leg is unknown or the value is malformed)."""
+        seg = (getattr(self.omrat, 'segment_data', None) or {}).get(str(segment_id))
+        if not isinstance(seg, dict):
+            return DEFAULT_TANGENT_POS
+        return normalize_tangent_pos(seg.get(TANGENT_POS_KEY))
+
     def create_offset_lines(
-        self, start_point: QgsPointXY, end_point: QgsPointXY, offset_distance: float, segment_id: int
+        self, start_point: QgsPointXY, end_point: QgsPointXY, offset_distance: float, segment_id: int,
+        tangent_pos: float | None = None,
     ):
+        """(Re)draw the tangent line of ``segment_id``.
+
+        ``tangent_pos`` is the fraction along the leg; ``None`` reads the
+        value stored in ``segment_data`` so every existing caller (width
+        edits, vertex drags, reloads) keeps a moved tangent in place.
+        """
         if not is_valid_point_pair(start_point, end_point):
             return
+
+        if tangent_pos is None:
+            tangent_pos = self.stored_tangent_pos(segment_id)
+        tangent_pos = normalize_tangent_pos(tangent_pos)
 
         self.ensure_tangent_layer()
         self.ensure_tangent_fields()
 
-        mid_utm, to_utm, to_canvas = self.calculate_midpoint_utm(start_point, end_point)
+        mid_utm, to_utm, to_canvas = self.calculate_midpoint_utm(start_point, end_point, tangent_pos)
         start_utm = to_utm.transform(start_point)
         end_utm = to_utm.transform(end_point)
 
@@ -1029,8 +1170,188 @@ class HandleQGISIface:
         self.tangent_layer.commitChanges()
         self.tangent_layer.triggerRepaint()
 
+    # ------------------------------------------------------------------
+    # Movable tangent line
+    # ------------------------------------------------------------------
+
+    def _disconnect_tangent_signal(self) -> None:
+        if self.tangent_layer is None:
+            return
+        try:
+            self.tangent_layer.geometryChanged.disconnect(self._on_tangent_geometry_changed)
+        except (TypeError, RuntimeError):
+            pass
+
+    @staticmethod
+    def _segment_id_from_tangent_type(type_text: object) -> int | None:
+        """``'Tangent Line 3' -> 3``; ``None`` for anything else."""
+        if not isinstance(type_text, str):
+            return None
+        prefix = 'Tangent Line '
+        if not type_text.startswith(prefix):
+            return None
+        try:
+            return int(type_text[len(prefix):].strip())
+        except ValueError:
+            return None
+
+    def _leg_endpoints(self, segment_id: int) -> tuple[QgsPointXY, QgsPointXY, float] | None:
+        """``(start, end, width)`` of a leg from ``segment_data``, falling
+        back to the route table.  ``None`` when the leg is unknown."""
+        seg_key = str(segment_id)
+        seg = (getattr(self.omrat, 'segment_data', None) or {}).get(seg_key)
+        sp = ep = None
+        width = 5000.0
+        if isinstance(seg, dict):
+            sp = self._parse_wkt_xy(seg.get('Start_Point'))
+            ep = self._parse_wkt_xy(seg.get('End_Point'))
+            try:
+                width = float(seg.get('Width', 5000) or 5000)
+            except (TypeError, ValueError):
+                width = 5000.0
+        if sp is None or ep is None:
+            row = self._tangent_row_for_segment(segment_id)
+            if row is None:
+                return None
+            table = self.omrat.main_widget.twRouteList
+            sp = self._parse_wkt_xy(table.item(row, 3).text() if table.item(row, 3) else None)
+            ep = self._parse_wkt_xy(table.item(row, 4).text() if table.item(row, 4) else None)
+            try:
+                width = float(table.item(row, 5).text())
+            except (AttributeError, TypeError, ValueError):
+                width = 5000.0
+        if sp is None or ep is None:
+            return None
+        return QgsPointXY(sp[0], sp[1]), QgsPointXY(ep[0], ep[1]), width
+
+    def _tangent_row_for_segment(self, segment_id: int) -> int | None:
+        widget = self.omrat.main_widget
+        if widget is None:
+            return None
+        table = widget.twRouteList
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            try:
+                if int(item.text()) == int(segment_id):
+                    return row
+            except ValueError:
+                continue
+        return None
+
+    def tangent_fraction_from_geometry(self, segment_id: int, geom: QgsGeometry) -> float | None:
+        """Project the midpoint of a (dragged) tangent geometry onto the
+        leg and return the clamped fraction along it."""
+        ends = self._leg_endpoints(segment_id)
+        if ends is None or geom is None or geom.isEmpty():
+            return None
+        start, end, _width = ends
+        pts = geom.asPolyline()
+        if not pts or len(pts) < 2:
+            return None
+        first, last = QgsPointXY(pts[0]), QgsPointXY(pts[-1])
+        drag_mid = QgsPointXY((first.x() + last.x()) / 2.0, (first.y() + last.y()) / 2.0)
+        _mid, to_utm, _to_canvas = self.calculate_midpoint_utm(start, end)
+        s = to_utm.transform(start)
+        e = to_utm.transform(end)
+        m = to_utm.transform(drag_mid)
+        return project_fraction((s.x(), s.y()), (e.x(), e.y()), (m.x(), m.y()))
+
+    def _on_tangent_geometry_changed(self, fid: int, geom: QgsGeometry) -> None:
+        """User moved a tangent feature with a QGIS editing tool.
+
+        Only the along-track component of the move is kept: the new
+        fraction is stored and the line is redrawn perpendicular
+        through that point on the leg.  The snap-back is deferred to
+        the next event-loop pass so the map tool has finished its own
+        edit before we roll the buffer back.
+        """
+        if self._tangent_guard or self.tangent_layer is None:
+            return
+        try:
+            feat = self.tangent_layer.getFeature(fid)
+            segment_id = self._segment_id_from_tangent_type(feat['type'])
+        except Exception:  # nosec B110 B112
+            return
+        if segment_id is None:
+            return
+        t = self.tangent_fraction_from_geometry(segment_id, geom)
+        if t is None:
+            return
+        if getattr(self.omrat, 'testing', False):
+            self._apply_tangent_drag(segment_id, t)
+        else:
+            QTimer.singleShot(0, lambda: self._apply_tangent_drag(segment_id, t))
+
+    def _apply_tangent_drag(self, segment_id: int, tangent_pos: float) -> None:
+        """Discard the user's raw edit and redraw the tangent at ``tangent_pos``."""
+        self._tangent_guard = True
+        try:
+            layer = self.tangent_layer
+            if layer is not None:
+                try:
+                    if layer.isEditable():
+                        layer.rollBack()
+                except RuntimeError:
+                    pass
+            self.set_tangent_pos(segment_id, tangent_pos, notify=True)
+        finally:
+            self._tangent_guard = False
+
+    def set_tangent_pos(
+        self, segment_id: int, tangent_pos: float, *, redraw: bool = True, notify: bool = False,
+    ) -> float:
+        """Store ``tangent_pos`` for a leg, mirror it into the route table
+        and (optionally) redraw the tangent.  Returns the clamped value."""
+        t = normalize_tangent_pos(tangent_pos)
+        seg_key = str(segment_id)
+        seg = (getattr(self.omrat, 'segment_data', None) or {}).get(seg_key)
+        if isinstance(seg, dict):
+            seg[TANGENT_POS_KEY] = t
+
+        row = self._tangent_row_for_segment(segment_id)
+        if row is not None:
+            table = self.omrat.main_widget.twRouteList
+            text = percent_from_fraction(t)
+            self._table_sync_guard = True
+            try:
+                cell = table.item(row, 6)
+                if cell is None:
+                    table.setItem(row, 6, QTableWidgetItem(text))
+                elif cell.text() != text:
+                    cell.setText(text)
+            finally:
+                self._table_sync_guard = False
+
+        if redraw:
+            ends = self._leg_endpoints(segment_id)
+            if ends is not None:
+                start, end, width = ends
+                self._tangent_guard = True
+                try:
+                    self.create_offset_lines(start, end, width / 2, int(segment_id), tangent_pos=t)
+                finally:
+                    self._tangent_guard = False
+
+        if notify:
+            self._notify_tangent_moved(segment_id, t)
+        return t
+
+    def _notify_tangent_moved(self, segment_id: int, tangent_pos: float) -> None:
+        self._notify(
+            self.omrat.tr(
+                "Tangent line for leg {leg} moved to {pct} % of the leg. "
+                "Press 'Update AIS' on that leg to resample the traffic."
+            ).format(leg=segment_id, pct=percent_from_fraction(tangent_pos)),
+            duration=8,
+        )
+
     def on_width_changed(self, item: QTableWidgetItem):
-        """Handle edits to the route table: width (col 5) and Leg_name (col 2)."""
+        """Handle edits to the route table: width (col 5), Leg_name (col 2)
+        and tangent position in percent (col 6)."""
+        if self._table_sync_guard:
+            return
         column = item.column()
         row = item.row()
         seg_id_item = self.omrat.main_widget.twRouteList.item(row, 0)
@@ -1054,6 +1375,18 @@ class HandleQGISIface:
                 start_point: QgsPointXY = start_point_geom.asPoint()
                 end_point: QgsPointXY = end_point_geom.asPoint()
                 self.create_offset_lines(start_point, end_point, width / 2, segment_id)
+
+        elif column == 6:  # Tangent position (%)
+            t = fraction_from_percent(item.text())
+            if t is None:
+                # Not a number: put the stored value back.
+                self._table_sync_guard = True
+                try:
+                    item.setText(percent_from_fraction(self.stored_tangent_pos(segment_id)))
+                finally:
+                    self._table_sync_guard = False
+                return
+            self.set_tangent_pos(segment_id, t)
 
         elif column == 2:  # Leg_name
             new_name = item.text()

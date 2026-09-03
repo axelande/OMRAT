@@ -591,6 +591,9 @@ def split_leg_at_points(
         sub['line_length'] = haversine_m(all_points[i], all_points[i + 1])
         sub['Segment_Id'] = sub_id
         sub['Leg_name'] = f"{base_name}_{_avail[i]}"
+        # A sub-leg is a new cross-section; the parent's tangent offset
+        # has no meaning on it, so snap back to the midpoint.
+        sub['Tangent_Pos'] = 0.5
         segment_data[sub_id] = sub
         if traffic_data is not None and parent_traffic is not None:
             traffic_data[sub_id] = _copy.deepcopy(parent_traffic)

@@ -126,6 +126,7 @@ class Storage:
                 ('line_length', 0.0), ('Route_Id', 0), ('Leg_name', ''), ('Segment_Id', str(sid)),
                 ('u_min1', 0.0), ('u_max1', 0.0), ('ai1', 0.0), ('u_min2', 0.0), ('u_max2', 0.0), ('ai2', 0.0),
                 ('Width', seg.get('Width', 0)),
+                ('Tangent_Pos', 0.5),
             ]:
                 seg.setdefault(key, default)
             seg.setdefault('dist1', [])

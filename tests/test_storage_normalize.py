@@ -590,3 +590,19 @@ class TestPublicMethods:
         monkeypatch.setattr(storage_mod, 'QSettings', lambda *a, **k: fake_settings)
         assert s.last_used_dir() == '/my/last/dir'
         fake_settings.value.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# segment_data: Tangent_Pos default (movable tangent line)
+# ---------------------------------------------------------------------------
+
+class TestTangentPosDefault:
+    def test_missing_tangent_pos_seeds_midpoint(self, storage):
+        data = {'segment_data': {'1': {'Start_Point': '14 55', 'End_Point': '15 55'}}}
+        out = storage._normalize_legacy_to_schema(data)
+        assert out['segment_data']['1']['Tangent_Pos'] == 0.5
+
+    def test_existing_tangent_pos_preserved(self, storage):
+        data = {'segment_data': {'1': {'Tangent_Pos': 0.2}}}
+        out = storage._normalize_legacy_to_schema(data)
+        assert out['segment_data']['1']['Tangent_Pos'] == 0.2

@@ -6,6 +6,10 @@ import numpy as np
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
 
+from geometries.tangent_position import (
+    TANGENT_POS_KEY, normalize_tangent_pos, percent_from_fraction,
+)
+
 if TYPE_CHECKING:
     from omrat import OMRAT
 
@@ -453,8 +457,20 @@ class GatherData:
                 tbl.setItem(i, j, item)
 
     def populate_segment_tbl(self, data: dict[str, dict[str, Any]], tbl: QTableWidget):
+        # Bulk fill: keep the edit handler quiet while rows are written,
+        # then let the geometry handler add buttons and reconnect it.
+        qgis_geoms = getattr(self.p, 'qgis_geoms', None)
+        if qgis_geoms is not None and hasattr(qgis_geoms, 'suspend_route_table_signal'):
+            qgis_geoms.suspend_route_table_signal()
         tbl.setRowCount(len(data))
         for j, col in enumerate(['Segment_Id', 'Route_Id', 'Leg_name', 'Start_Point', 'End_Point', 'Width']):
             for i, key in enumerate(data.keys()):
                 item = QTableWidgetItem(str(data[key][col]))
                 self.p.main_widget.twRouteList.setItem(i, j, item)
+        # Tangent position column (percent along the leg).  Stored as a
+        # fraction in ``segment_data``; the table only mirrors it.
+        for i, key in enumerate(data.keys()):
+            pct = percent_from_fraction(normalize_tangent_pos(data[key].get(TANGENT_POS_KEY)))
+            self.p.main_widget.twRouteList.setItem(i, 6, QTableWidgetItem(pct))
+        if qgis_geoms is not None and hasattr(qgis_geoms, 'finish_route_table_rows'):
+            qgis_geoms.finish_route_table_rows()

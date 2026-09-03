@@ -53,11 +53,11 @@ You need:
 Click the OMRAT icon in the QGIS toolbar.  The dock widget docks on
 the right side of the window.
 
-.. figure:: _static/screenshots/ui_toolbar.png
-   :width: 80%
-   :alt: QGIS toolbar highlighting the OMRAT icon
+.. figure:: _static/images/omrat_icon.png
+   :width: 96px
+   :alt: The OMRAT plugin icon
 
-   The OMRAT icon in the QGIS plugins toolbar.
+   The OMRAT icon as it appears in the QGIS plugins toolbar.
 
 The dock has a **menu bar** (File, Settings, Consequence, Help) and a
 stack of seven tabs: **Routes**, **Traffic Data**, **Depths**,

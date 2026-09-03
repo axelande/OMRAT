@@ -51,10 +51,15 @@ A **route** is a polyline split into one or more **segments** (legs).
 Each segment has:
 
 * **Start_Point** / **End_Point** -- lon/lat of the two endpoints.
-* **Width** -- the lateral extent (metres) used to draw the corridor
-  marker on the map.  This is *visualisation only*; the actual lateral
-  spread used in the calculation comes from the distribution panel
-  lower down the same tab.
+* **Width** -- the length (metres) of the dashed **tangent line** drawn
+  across the leg.  The tangent line is also the *passage line* the AIS
+  query samples when you click **Update AIS**, so the width bounds
+  which ships are counted.  The lateral spread used in the risk
+  calculation itself comes from the distribution panel lower down the
+  same tab.
+* **Tangent (%)** -- where along the leg the tangent line sits, in
+  percent from the start point.  Defaults to 50 (the midpoint).  See
+  :ref:`moving-the-tangent-line`.
 * **Dirs** -- the two direction labels auto-derived from the segment's
   compass bearing (``"North going"`` / ``"South going"``, etc.).
 * **bearing** -- stored compass bearing in degrees.
@@ -86,6 +91,69 @@ the geometry-change signal and:
 
 The recomputed values are included in project save and in IWRAP XML
 export, so map geometry and exported model stay in sync.
+
+.. _moving-the-tangent-line:
+
+Moving the tangent line
+-----------------------
+
+By default the tangent line crosses each leg at its midpoint.  Where
+the midpoint is a poor cross-section -- close to a junction, a port
+approach or an anchorage that pollutes the AIS sample -- you can slide
+it along the leg.  Its centre always stays on the leg, so the lateral
+distribution fitted from the AIS passages still refers to the leg
+centreline.
+
+Three ways to move it, from easiest to most manual:
+
+**Type a value in the table.**  Edit the **Tangent (%)** cell of the
+leg in the route table (``0`` = start point, ``100`` = end point) and
+press Enter.  The dashed line on the map jumps to the new position.
+Non-numeric input is reverted to the stored value.
+
+**Drag it with the Move tangent button.**
+
+#. Click **Move tangent** under the route table.  OMRAT selects the
+   *Tangent Line* layer, puts it in edit mode and activates QGIS's
+   **Move Feature** tool for you.  A message in the QGIS message bar
+   confirms this.
+#. On the map, press the left mouse button on the dashed line you want
+   to move and release it where you want the line to be.  (In QGIS 3
+   *Move Feature* works with one click to pick up and a second click
+   to drop, not press-and-hold.)
+#. The line snaps back onto its leg at the new position, perpendicular
+   and with the width from the table.  Only the movement *along* the
+   leg counts; dragging sideways or rotating the line has no lasting
+   effect.  The **Tangent (%)** cell updates to match.
+#. Repeat for other legs, then pick the **Pan Map** tool (hand icon on
+   the QGIS toolbar) to leave the move tool.
+
+**Drag it with the QGIS tools yourself.**  This is what the button does
+behind the scenes, useful if the toolbar is customised:
+
+#. In the QGIS **Layers** panel click *Tangent Line* so it is the
+   active layer.
+#. If the pencil icon on the layer is grey, click **Toggle Editing**
+   (the pencil on the Digitizing toolbar) so the layer is editable.
+#. Open the **Advanced Digitizing** toolbar if it is hidden
+   (*View -> Toolbars -> Advanced Digitizing Toolbar*) and choose
+   **Move Feature**.  The **Vertex Tool** on the Digitizing toolbar
+   also works; moving one end of the line moves its centre half as
+   far along the leg.
+#. Click the tangent line, then click where it should go.  OMRAT
+   snaps it back onto the leg as above.
+
+Whichever way you use, the position is stored with the leg and saved
+in the project, and the table and the map always agree.  After a move
+the leg's traffic is stale until you click **Update AIS** for that
+leg; a message-bar hint reminds you.  When a leg is split at a
+crossing, the sub-legs start at 50 % again.
+
+.. note::
+
+   You never need to save the *Tangent Line* layer's edits.  OMRAT
+   discards the raw drag and redraws the line itself; the layer is a
+   temporary memory layer that is rebuilt from the project file.
 
 Junctions, crossings and merging
 --------------------------------

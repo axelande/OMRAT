@@ -496,3 +496,23 @@ class TestSplitLegAtPoints:
         assert set(names) == {'LEG_1_1_b', 'LEG_1_1_c'}, (
             f"Expected LEG_1_1_b and LEG_1_1_c, got {names}"
         )
+
+
+# ---------------------------------------------------------------------------
+# split_leg_at_points -- sub-legs start with the tangent at their midpoint
+# ---------------------------------------------------------------------------
+
+def test_split_resets_tangent_pos_on_sub_legs():
+    """A moved tangent (``Tangent_Pos != 0.5``) belongs to the parent's
+    cross-section; the sub-legs are new legs and start at 50 %."""
+    sd = {
+        '1': {
+            'Start_Point': '14.0 55.0', 'End_Point': '15.0 55.0',
+            'Width': 5000, 'Route_Id': 1, 'Leg_name': 'LEG_1_1',
+            'Segment_Id': '1', 'Tangent_Pos': 0.15,
+        },
+    }
+    ids = split_leg_at_points(sd, '1', [(14.5, 55.0)], _make_id_provider(sd))
+    assert len(ids) == 2
+    for sub_id in ids:
+        assert sd[sub_id]['Tangent_Pos'] == 0.5

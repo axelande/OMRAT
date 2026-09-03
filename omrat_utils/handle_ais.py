@@ -12,6 +12,7 @@ from shapely import wkt
 from shapely.geometry import Point
 
 from compute.database import DB
+from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
 from omrat_utils.vessel_lookup import VesselLookupConfig
 from ui.ais_connection_widget import AISConnectionWidget
 
@@ -86,19 +87,29 @@ db_name = '{db_name}'
 """)
 
 
-def get_pl(db: DB, lat1: float, lat2: float, lon1: float, lon2: float, l_width: float) -> str:
-    """Collects the passage line as text"""
+def get_pl(
+    db: DB, lat1: float, lat2: float, lon1: float, lon2: float, l_width: float,
+    tangent_pos: float = 0.5,
+) -> str:
+    """Collects the passage line as text.
+
+    The line is the perpendicular through the point at fraction
+    ``tangent_pos`` along the leg (``0.5`` = midpoint), extending
+    ``l_width / 2`` to each side -- the same construction the canvas
+    uses for the drawn tangent line, so what the user sees is what
+    the AIS query samples.
+    """
     half = l_width / 2
+    t = normalize_tangent_pos(tangent_pos)
+    anchor = (
+        f"ST_LineInterpolatePoint(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326), {t})"
+        "::geography"
+    )
+    azimuth = f"ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography)"
     sql = (
         f"SELECT st_astext(st_makeline("
-        f"ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography,"
-        f" {half},"
-        f" ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography)"
-        f" + radians(90))::geometry,"
-        f" ST_Project(ST_Centroid(ST_GeomFromText('LINESTRING({lon1} {lat1}, {lon2} {lat2})', 4326))::geography,"
-        f" {half},"
-        f" ST_Azimuth(ST_Point({lon1}, {lat1})::geography, ST_Point({lon2}, {lat2})::geography)"
-        f" + radians(270))::geometry))"
+        f"ST_Project({anchor}, {half}, {azimuth} + radians(90))::geometry,"
+        f" ST_Project({anchor}, {half}, {azimuth} + radians(270))::geometry))"
     )
     ok, res = cast(tuple[bool, list[list[Any]]], db.execute_and_return(sql, return_error=True))
     if ok:
@@ -599,6 +610,7 @@ class AIS:
             lat1=start_p.y, lat2=end_p.y,
             lon1=start_p.x, lon2=end_p.x,
             l_width=float(leg_d.get('Width', 5000)),
+            tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
         )
         try:
             self.run_sql(pl)
@@ -732,6 +744,10 @@ class AIS:
             start_point: str | None = table.item(row, 3).text() if table.item(row, 3) else None
             end_point: str | None = table.item(row, 4).text() if table.item(row, 4) else None
             width: str | None = table.item(row, 5).text() if table.item(row, 5) else None
+            # Column 6 shows the tangent position in percent; the
+            # authoritative fraction lives in ``segment_data``.
+            seg = (getattr(self.omrat, 'segment_data', None) or {}).get(segment_id or '', {})
+            tangent_pos = normalize_tangent_pos(seg.get(TANGENT_POS_KEY) if isinstance(seg, dict) else None)
 
             if segment_id and route_id and start_point and end_point and width:
                 segment_data[segment_id] = {
@@ -739,7 +755,8 @@ class AIS:
                     'Leg_name': leg_name,
                     'Start_Point': start_point,
                     'End_Point': end_point,
-                    'Width': width
+                    'Width': width,
+                    TANGENT_POS_KEY: tangent_pos,
                 }
 
         return segment_data

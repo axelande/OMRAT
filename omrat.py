@@ -64,6 +64,7 @@ from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin  # noqa: E402
 from omrat_utils.iwrap_io_mixin import IwrapIOMixin  # noqa: E402
 from omrat_utils.run_history_mixin import RunHistoryMixin  # noqa: E402
 from omrat_utils.notifier import MessageBarNotifier  # noqa: E402
+from geometries.tangent_position import normalize_tangent_pos  # noqa: E402
 
 
 class OMRAT(
@@ -711,8 +712,11 @@ class OMRAT(
             if len(pts) < 2:
                 return
             width = float(seg_data.get('Width', 5000) or 5000)
+            # ``segment_data`` is swapped in *after* load_lines, so the
+            # stored tangent position must travel with the seg dict here.
             self.qgis_geoms.create_offset_lines(
                 QgsPointXY(pts[0]), QgsPointXY(pts[-1]), width / 2, fid,
+                tangent_pos=normalize_tangent_pos(seg_data.get('Tangent_Pos')),
             )
         except Exception as exc:
             QgsMessageLog.logMessage(
@@ -721,9 +725,10 @@ class OMRAT(
             )
 
     def reset_route_table(self) -> None:
-        self.main_widget.twRouteList.setColumnCount(7)
+        self.main_widget.twRouteList.setColumnCount(8)
         self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment_Id', 'Route_Id', 'Leg_name',
-                                                                'Start_Point', 'End_Point', 'Width', 'Update AIS'])
+                                                                'Start_Point', 'End_Point', 'Width',
+                                                                'Tangent (%)', 'Update AIS'])
         self.main_widget.twRouteList.setColumnWidth(0, 75)
         self.main_widget.twRouteList.setColumnWidth(1, 75)
         self.main_widget.twRouteList.setColumnWidth(2, 75)
@@ -731,6 +736,7 @@ class OMRAT(
         self.main_widget.twRouteList.setColumnWidth(4, 125)
         self.main_widget.twRouteList.setColumnWidth(5, 75)
         self.main_widget.twRouteList.setColumnWidth(6, 75)
+        self.main_widget.twRouteList.setColumnWidth(7, 75)
         self.main_widget.twRouteList.setRowCount(0)
 
     def run_traffic_module(self) -> None:
@@ -1071,6 +1077,8 @@ class OMRAT(
         self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
         self.main_widget.pbStopRoute.clicked.connect(self.stop_route)
         self.main_widget.pbRemoveRoute.clicked.connect(self.qgis_geoms.remove_leg)
+        if hasattr(self.main_widget, 'pbMoveTangent'):
+            self.main_widget.pbMoveTangent.clicked.connect(self.qgis_geoms.start_move_tangent)
         self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
         self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
         self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
