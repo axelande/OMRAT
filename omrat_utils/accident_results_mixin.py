@@ -30,6 +30,10 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QCursor
 from qgis.PyQt.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
+from omrat_utils.accident_summary import (
+    ACCIDENT_TOTAL_KEYS, SUMMARY_ROWS, format_probability, parse_probability,
+    summary_values,
+)
 from omrat_utils.run_history_mixin import _qt_enum
 
 if TYPE_CHECKING:
@@ -283,7 +287,9 @@ class AccidentResultsMixin:
         headers = ['Accident type', 'Probability', 'View']
         tw.setColumnCount(len(headers))
         tw.setHorizontalHeaderLabels(headers)
-        tw.setRowCount(len(AccidentResultsMixin._ACCIDENT_ROWS))
+        tw.setRowCount(
+            len(AccidentResultsMixin._ACCIDENT_ROWS) + len(SUMMARY_ROWS),
+        )
         tw.verticalHeader().setVisible(False)
         tw.setEditTriggers(_qt_enum(
             AIV, 'NoEditTriggers', 'EditTrigger.NoEditTriggers',
@@ -334,6 +340,47 @@ class AccidentResultsMixin:
                     )
                 except Exception:  # nosec B110 B112
                     pass
+
+        n_accidents = len(self._ACCIDENT_ROWS)
+        for offset, (label, _keys) in enumerate(SUMMARY_ROWS):
+            row = n_accidents + offset
+            item = QtWidgets.QTableWidgetItem(label)
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            tw.setItem(row, 0, item)
+            tw.setItem(row, 1, QtWidgets.QTableWidgetItem(''))
+            tw.setItem(row, 2, QtWidgets.QTableWidgetItem(''))
+        self._refresh_summary_rows(tw)
+
+    def _current_accident_totals(self, tw) -> dict[str, float | None]:
+        """Probability column of the nine accident rows, keyed like
+        ``RunHistory`` totals (``drift_allision`` ...)."""
+        totals: dict[str, float | None] = {}
+        for row, key in enumerate(ACCIDENT_TOTAL_KEYS):
+            item = tw.item(row, 1)
+            totals[key] = parse_probability(item.text() if item is not None else None)
+        return totals
+
+    def _refresh_summary_rows(self, tw=None) -> None:
+        """Recompute the All grounding / All allision / All collisions
+        rows from the nine accident rows above them."""
+        from qgis.PyQt import QtWidgets
+        if tw is None:
+            tw = getattr(self.main_widget, 'TWAccidentResults', None)
+        if tw is None:
+            return
+        values = summary_values(self._current_accident_totals(tw))
+        n_accidents = len(self._ACCIDENT_ROWS)
+        for offset, value in enumerate(values):
+            row = n_accidents + offset
+            if row >= tw.rowCount():
+                break
+            item = QtWidgets.QTableWidgetItem(format_probability(value))
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            tw.setItem(row, 1, item)
 
     def _wire_clipboard_copy_shortcut(self, tw) -> None:
         try:
@@ -394,6 +441,7 @@ class AccidentResultsMixin:
             from qgis.PyQt.QtWidgets import QTableWidgetItem
             tw = self.main_widget.TWAccidentResults
             tw.setItem(row, 1, QTableWidgetItem(text))
+            self._refresh_summary_rows(tw)
         except Exception:  # nosec B110 B112
             pass
 
@@ -510,17 +558,21 @@ class AccidentResultsMixin:
         method = getattr(self.calc, method_name, None)
         if not callable(method):
             return
+        if method_name == 'run_collision_breakdown_dialog':
+            # The breakdown is a plain table that opens instantly and
+            # runs a modal exec() loop.  Wrapping it in the progress
+            # dialog would leave "Building ... visualization" on screen
+            # for as long as the table is open, so no progress here.
+            self._invoke_collision_breakdown(
+                method, breakdown_key, collision_report,
+            )
+            return
         # All early-return paths cleared: actual build starts here.  Show
         # a wait cursor + indeterminate progress so the user gets
         # immediate feedback that the click registered.  The
         # visualisation still runs on the UI thread; processEvents
         # paints the dialog before the freeze.
         with self._view_progress(label):
-            if method_name == 'run_collision_breakdown_dialog':
-                self._invoke_collision_breakdown(
-                    method, breakdown_key, collision_report,
-                )
-                return
             self._invoke_drift_or_powered_visualiser(
                 method, data, drifting_report,
             )

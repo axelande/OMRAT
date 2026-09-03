@@ -133,10 +133,40 @@ class OObject:
     # Consolidated depth layer helpers
     # ------------------------------------------------------------------
 
+    def _depth_layer_in_project(self) -> bool:
+        """Return True if the cached depth layer is still registered in the QGIS project.
+
+        The user may delete "Depth Areas" from the Layers panel, or open a
+        new QGIS project, without going through the plugin.  In both cases
+        ``self.depth_layer`` keeps pointing at a layer that is no longer in
+        the layer tree (and possibly a deleted C++ object).  Reusing it
+        would silently add features to a layer nobody can see.
+        """
+        if self.depth_layer is None:
+            return False
+        try:
+            layer_id = self.depth_layer.id()
+        except RuntimeError:
+            # Underlying C++ object already deleted by QGIS.
+            return False
+        project = QgsProject.instance()
+        if project is None:
+            return False
+        return project.mapLayer(layer_id) is not None
+
     def _ensure_depth_layer(self) -> QgsVectorLayer:
-        """Create the consolidated 'Depth Areas' layer if it doesn't exist, or return it."""
+        """Create the consolidated 'Depth Areas' layer if it doesn't exist, or return it.
+
+        If a previously created layer has been removed from the project
+        behind our back, the stale reference is dropped and a fresh layer
+        is created and added to the project.
+        """
         if self.depth_layer is not None:
-            return self.depth_layer
+            if self._depth_layer_in_project():
+                return self.depth_layer
+            self.depth_layer = None
+            self._depth_edit_buffer = None
+            self.depth_feature_row = {}
 
         layer = QgsVectorLayer("Polygon?crs=epsg:4326", "Depth Areas", "memory")
         pr = layer.dataProvider()

@@ -170,17 +170,45 @@ def build_accident_table(
 # Settings differences
 # ---------------------------------------------------------------------------
 
-_SETTINGS_PATHS: tuple[tuple[str, str], ...] = (
-    ("drift.speed_knots", "Drift speed (knots)"),
-    ("drift.blackout_prob", "Blackout probability"),
-    ("drift.anchor_prob", "Anchor probability"),
-    ("drift.anchor_d", "Anchor distance factor"),
-    ("drift.repair.use_lognormal", "Use lognormal repair"),
-    ("drift.repair.lognormal_mu", "Repair lognormal mu"),
-    ("drift.repair.lognormal_sigma", "Repair lognormal sigma"),
-    ("pc.cat_i", "Causation factor (Cat I)"),
-    ("pc.cat_ii", "Causation factor (Cat II)"),
+# Top-level ``.omrat`` blocks that hold model *settings* (as opposed to
+# geometry / traffic).  Every scalar underneath is diffed.
+_SETTINGS_BLOCKS: tuple[str, ...] = (
+    "drift", "pc", "traffic_scaling", "consequence", "ship_categories",
 )
+
+# Human labels for the well-known paths.  Anything not listed falls back
+# to a prettified dotted path so new settings are never silently hidden.
+_SETTING_LABELS: dict[str, str] = {
+    "drift.drift_p": "Drift (blackout) probability",
+    "drift.anchor_p": "Anchor probability",
+    "drift.anchor_d": "Anchor distance factor",
+    "drift.speed": "Drift speed (knots)",
+    "drift.start_from": "Drift start position",
+    "drift.squat_mode": "Squat mode",
+    "drift.repair.func": "Repair-time function",
+    "drift.repair.std": "Repair-time std",
+    "drift.repair.loc": "Repair-time loc",
+    "drift.repair.scale": "Repair-time scale",
+    "drift.repair.use_lognormal": "Use lognormal repair time",
+    "pc.p_pc": "Causation factor (powered, legacy)",
+    "pc.d_pc": "Causation factor (drifting, legacy)",
+    "pc.headon": "Causation factor head-on",
+    "pc.overtaking": "Causation factor overtaking",
+    "pc.crossing": "Causation factor crossing",
+    "pc.merging": "Causation factor merging",
+    "pc.bend": "Causation factor bend",
+    "pc.grounding": "Causation factor powered grounding",
+    "pc.allision": "Causation factor powered allision",
+    "traffic_scaling.global_percent": "Global traffic scaling (%)",
+}
+
+_BLOCK_TITLES: dict[str, str] = {
+    "drift": "Drift",
+    "pc": "Causation",
+    "traffic_scaling": "Traffic scaling",
+    "consequence": "Consequence",
+    "ship_categories": "Ship categories",
+}
 
 
 def _dig(d: dict[str, Any], dotted: str) -> Any:
@@ -193,37 +221,93 @@ def _dig(d: dict[str, Any], dotted: str) -> Any:
 
 
 def _eq(a: Any, b: Any) -> bool:
-    if isinstance(a, float) and isinstance(b, float):
-        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-12)
     return a == b
+
+
+def _flatten(value: Any, prefix: str, out: dict[str, Any]) -> None:
+    """Flatten nested dicts / lists into ``{dotted.path: scalar}``."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _flatten(v, f"{prefix}.{k}" if prefix else str(k), out)
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            _flatten(v, f"{prefix}[{i}]", out)
+    else:
+        out[prefix] = value
+
+
+def _label_for(path: str) -> str:
+    if path in _SETTING_LABELS:
+        return _SETTING_LABELS[path]
+    if path.startswith("drift.rose."):
+        return f"Wind rose {path[len('drift.rose.'):]}°"
+    if path.startswith("drift.blackout_by_ship_type."):
+        return f"Blackout probability: {path[len('drift.blackout_by_ship_type.'):]}"
+    block, _, rest = path.partition(".")
+    title = _BLOCK_TITLES.get(block, block)
+    return f"{title}: {rest}" if rest else title
+
+
+def _fmt_value(v: Any) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, float):
+        return f"{v:g}"
+    return str(v)
 
 
 def build_settings_table(
     snap_a: dict[str, Any],
     snap_b: dict[str, Any],
 ) -> list[list[str]]:
-    """Return rows ``[label, value_a, value_b]`` for fields that differ."""
-    rows: list[list[str]] = []
-    for dotted, label in _SETTINGS_PATHS:
-        a = _dig(snap_a, dotted)
-        b = _dig(snap_b, dotted)
-        if a is None and b is None:
-            continue
-        if _eq(a, b):
-            continue
-        rows.append([label, str(a), str(b)])
+    """Return rows ``[label, value_a, value_b]`` for settings that differ.
 
-    # Wind rose: each direction.
-    rose_a = _dig(snap_a, "drift.rose") or {}
-    rose_b = _dig(snap_b, "drift.rose") or {}
-    keys = sorted(set(rose_a) | set(rose_b), key=lambda k: int(k) if str(k).isdigit() else 999)
-    for k in keys:
-        a = rose_a.get(k)
-        b = rose_b.get(k)
-        if _eq(a, b):
+    Every scalar under the ``drift``, ``pc``, ``traffic_scaling``,
+    ``consequence`` and ``ship_categories`` blocks is compared, plus the
+    per-leg ``Width`` of ``segment_data``.  A setting present on only
+    one side shows an em-dash on the other.  Equal values are hidden.
+    """
+    snap_a = snap_a if isinstance(snap_a, dict) else {}
+    snap_b = snap_b if isinstance(snap_b, dict) else {}
+    rows: list[list[str]] = []
+    for block in _SETTINGS_BLOCKS:
+        flat_a: dict[str, Any] = {}
+        flat_b: dict[str, Any] = {}
+        _flatten(snap_a.get(block), block, flat_a)
+        _flatten(snap_b.get(block), block, flat_b)
+        # ``_flatten`` of a missing block yields {block: None}; drop that.
+        flat_a.pop(block, None)
+        flat_b.pop(block, None)
+        for path in sorted(set(flat_a) | set(flat_b), key=_path_sort_key):
+            a = flat_a.get(path)
+            b = flat_b.get(path)
+            if _eq(a, b):
+                continue
+            rows.append([_label_for(path), _fmt_value(a), _fmt_value(b)])
+
+    seg_a = snap_a.get("segment_data") or {}
+    seg_b = snap_b.get("segment_data") or {}
+    for k in sorted(set(seg_a) | set(seg_b), key=lambda k: int(k) if str(k).isdigit() else 10**9):
+        wa = (seg_a.get(k) or {}).get("Width") if isinstance(seg_a.get(k), dict) else None
+        wb = (seg_b.get(k) or {}).get("Width") if isinstance(seg_b.get(k), dict) else None
+        if wa is None and wb is None:
             continue
-        rows.append([f"Wind rose {k}", str(a), str(b)])
+        if _eq(wa, wb):
+            continue
+        rows.append([f"Leg {k} width (m)", _fmt_value(wa), _fmt_value(wb)])
     return rows
+
+
+def _path_sort_key(path: str) -> tuple:
+    """Sort numerically where a path segment is an integer (wind rose)."""
+    parts = []
+    for seg in path.replace("[", ".").replace("]", "").split("."):
+        parts.append((0, int(seg), "") if seg.isdigit() else (1, 0, seg))
+    return tuple(parts)
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -42,6 +41,30 @@ class TestEnsureDepthLayer:
 
 
 class TestApplyDepthGraduatedStyle:
+    def test_recreates_layer_removed_from_project(self, obj):
+        """Layer deleted from the Layers panel must be re-added on next use."""
+        from qgis.core import QgsProject
+        l1 = obj._ensure_depth_layer()
+        obj.depth_feature_row = {1: 0}
+        QgsProject.instance().removeMapLayer(l1.id())
+        l2 = obj._ensure_depth_layer()
+        assert l2 is not l1
+        assert QgsProject.instance().mapLayer(l2.id()) is l2
+        assert obj.depth_layer is l2
+        assert obj.depth_feature_row == {}
+
+    def test_load_area_after_external_removal_adds_layer(self, obj):
+        """Regression: loading a model after the depth layer vanished showed nothing."""
+        from qgis.core import QgsProject
+        obj.area_type = 'depth'
+        first = obj._ensure_depth_layer()
+        QgsProject.instance().removeMapLayer(first.id())
+        obj.load_area('Depth - 10m', 'POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))', row=0,
+                      value='10', value_field='Depth', defer_style=True)
+        assert obj.depth_layer is not first
+        assert QgsProject.instance().mapLayer(obj.depth_layer.id()) is not None
+        assert obj.depth_layer.featureCount() == 1
+
     def test_no_depth_layer_returns_silently(self, obj):
         obj.depth_layer = None
         # Should not raise.
@@ -58,8 +81,6 @@ class TestApplyDepthGraduatedStyle:
         assert obj.depth_layer.renderer() is not None
 
     def test_skips_when_no_finite_depths(self, obj):
-        from qgis.core import QgsFeature, QgsField, QgsGeometry, QgsVectorLayer
-        from qgis.PyQt.QtCore import QVariant
         # Create the layer.
         obj._ensure_depth_layer()
         # Don't add any features -> depths list is empty -> early return.
@@ -179,7 +200,6 @@ class TestSelectFile:
 
 class TestSimpleDepthFlow:
     def test_add_then_store_populates_table(self, obj):
-        from qgis.PyQt.QtWidgets import QTableWidgetItem
         from qgis.core import QgsFeature, QgsGeometry
         # First click: button text 'Add manual' -> creates layer + flips to 'Save'.
         obj.p.main_widget.pbAddSimpleDepth.setText('Add manual')
@@ -234,7 +254,8 @@ class TestRemoveDepth:
         # Add a depth feature & corresponding table row.
         obj._add_depth_feature(1, 5.0, 'POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))', 0, defer_style=True)
         tbl = obj.p.main_widget.twDepthList
-        tbl.setRowCount(1); tbl.setColumnCount(3)
+        tbl.setRowCount(1)
+        tbl.setColumnCount(3)
         tbl.setItem(0, 0, QTableWidgetItem('1'))
         tbl.setItem(0, 1, QTableWidgetItem('5'))
         tbl.setItem(0, 2, QTableWidgetItem('w'))
@@ -258,7 +279,8 @@ class TestRemoveObject:
         QgsProject.instance().addMapLayer(layer)
         obj.loaded_object_areas = [layer]
         tbl = obj.p.main_widget.twObjectList
-        tbl.setRowCount(1); tbl.setColumnCount(3)
+        tbl.setRowCount(1)
+        tbl.setColumnCount(3)
         tbl.setItem(0, 0, QTableWidgetItem('1'))
         tbl.setItem(0, 1, QTableWidgetItem('5'))
         tbl.setItem(0, 2, QTableWidgetItem('w'))
@@ -325,7 +347,7 @@ class TestLoadShortCircuits:
 class TestPopulateTable:
     def test_populates_with_attribute(self, obj):
         from qgis.core import (
-            QgsVectorLayer, QgsField, QgsFeature, QgsGeometry, QgsProject
+            QgsVectorLayer, QgsField, QgsFeature, QgsGeometry
         )
         from qgis.PyQt.QtCore import QVariant
         layer = QgsVectorLayer("Polygon?crs=EPSG:4326", "x", "memory")
@@ -338,7 +360,8 @@ class TestPopulateTable:
         prov.addFeature(feat)
 
         tbl = obj.p.main_widget.twDepthList
-        tbl.setRowCount(0); tbl.setColumnCount(3)
+        tbl.setRowCount(0)
+        tbl.setColumnCount(3)
         obj._populate_table(layer, tbl, 'depth')
         assert tbl.rowCount() == 1
         assert tbl.item(0, 1).text() == '7.5'
@@ -360,7 +383,8 @@ class TestPopulateTable:
         prov.addFeature(feat)
 
         tbl = obj.p.main_widget.twObjectList
-        tbl.setRowCount(0); tbl.setColumnCount(3)
+        tbl.setRowCount(0)
+        tbl.setColumnCount(3)
         obj._populate_table(layer, tbl, 'object')
         assert tbl.rowCount() == 1
         wkt = tbl.item(0, 2).text()

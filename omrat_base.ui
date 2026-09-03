@@ -2071,6 +2071,16 @@ shadows/holes created by shallow depths and low structures.</string>
            </layout>
           </item>
           <item>
+           <widget class="QPushButton" name="pbAddCompareLayers">
+            <property name="text">
+             <string>Add both models to QGIS (grouped: A = red, B = blue)</string>
+            </property>
+            <property name="toolTip">
+             <string>Creates one layer group per model with its depth areas, structures, legs, tangent lines and, when the GeoPackage exists next to the .omrat file, the result layers.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QPushButton" name="pbRunCompare">
             <property name="text">
              <string>Compare</string>
@@ -2116,13 +2126,6 @@ shadows/holes created by shallow depths and low structures.</string>
           </item>
           <item>
            <widget class="QTableWidget" name="TWCompareLegs"/>
-          </item>
-          <item>
-           <widget class="QPushButton" name="pbAddCompareLayers">
-            <property name="text">
-             <string>Add both runs as map layers (red + blue)</string>
-            </property>
-           </widget>
           </item>
          </layout>
         </widget>

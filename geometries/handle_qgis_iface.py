@@ -936,7 +936,23 @@ class HandleQGISIface:
         self.omrat.traffic.c_seg = f'{self.segment_id}'
         self.current_start_point = None
 
+    def _tangent_layer_in_project(self) -> bool:
+        """False when the cached tangent layer was removed from the
+        project behind our back (Layers panel delete / new project)."""
+        if self.tangent_layer is None:
+            return False
+        try:
+            layer_id = self.tangent_layer.id()
+        except RuntimeError:
+            return False
+        project = QgsProject.instance()
+        return project is not None and project.mapLayer(layer_id) is not None
+
     def ensure_tangent_layer(self):
+        if self.tangent_layer is not None and not self._tangent_layer_in_project():
+            stale = self.tangent_layer
+            self.tangent_layer = None
+            self.vector_layers = [lyr for lyr in self.vector_layers if lyr is not stale]
         if self.tangent_layer is None:
             self.tangent_layer = QgsVectorLayer("LineString?crs=EPSG:4326", "Tangent Line", "memory")
             if not self.tangent_layer.isValid():

@@ -6,6 +6,8 @@
     "python.testing.pytestArgs": [
         "tests", "--cov=."
     ],
+    "ruff.path": ["C:/OSGeo4W/apps/Python312/Scripts/ruff.exe"],
+
     "python.analysis.extraPaths": ["%OSGEO4W_ROOT%/apps/qgis/python",
     "%OSGEO4W_ROOT%/apps/qgis/python/plugins", 
     "%OSGEO4W_ROOT%/apps/Python312/Lib/site-packages/PyQt5"],

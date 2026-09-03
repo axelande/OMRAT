@@ -28,8 +28,16 @@ from qgis.core import Qgis, QgsMessageLog
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
+from omrat_utils.accident_summary import (
+    ACCIDENT_TOTAL_KEYS, format_probability, summary_values,
+)
+
 if TYPE_CHECKING:
     pass
+
+# QSettings key holding the run_id of the "main" run that the
+# comparison columns on the Run Analysis tab are computed against.
+MAIN_RUN_SETTING = 'omrat/main_run_id'
 
 
 def _fmt(v: float | None) -> str:
@@ -79,11 +87,13 @@ class RunHistoryMixin:
     # The accident-row order is shared with ``AccidentResultsMixin`` --
     # we declare it here too because the run-history's
     # "fill comparison columns" path indexes into the accident table.
-    _ACCIDENT_TOTAL_KEYS: tuple[str, ...] = (
-        'drift_allision', 'drift_grounding',
-        'powered_allision', 'powered_grounding',
-        'overtaking', 'head_on', 'crossing', 'merging', 'bend',
-    )
+    _ACCIDENT_TOTAL_KEYS: tuple[str, ...] = ACCIDENT_TOTAL_KEYS
+
+    # Column indices of ``TWPreviousRuns``.
+    _RUNS_COL_NAME = 0
+    _RUNS_COL_MAIN = 1
+    _RUNS_COL_DATE = 2
+    _RUNS_COL_DURATION = 3
 
     # ------------------------------------------------------------------
     # Auto-save after a successful run
@@ -469,10 +479,19 @@ class RunHistoryMixin:
         AIV = QtWidgets.QAbstractItemView
         tw = self.main_widget.TWPreviousRuns
 
-        headers = ['Name', 'Date', 'Duration']
+        headers = ['Name', 'Main', 'Date', 'Duration']
         tw.setColumnCount(len(headers))
         tw.setHorizontalHeaderLabels(headers)
         tw.horizontalHeader().setStretchLastSection(True)
+        try:
+            tw.horizontalHeaderItem(self._RUNS_COL_MAIN).setToolTip(
+                'Tick one run to make it the "main" run.  The delta '
+                'columns of the accident table are then computed against '
+                'it instead of against the current model.'
+            )
+        except Exception:  # nosec B110 B112
+            pass
+        tw.itemChanged.connect(self._on_previous_runs_item_changed)
         tw.setSelectionBehavior(_qt_enum(
             AIV, 'SelectRows', 'SelectionBehavior.SelectRows',
         ))
@@ -551,19 +570,124 @@ class RunHistoryMixin:
             )
             tw.setRowCount(0)
             return
-        tw.setRowCount(len(runs))
-        for i, run in enumerate(runs):
-            cells = [
-                run.name,
-                run.timestamp,
-                _format_duration(run.duration_seconds),
-            ]
-            for j, text in enumerate(cells):
-                item = QtWidgets.QTableWidgetItem(text)
-                if j == 0:
-                    item.setData(user_role, run.run_id)
-                tw.setItem(i, j, item)
+        main_id = self._get_main_run_id()
+        if main_id is not None and main_id not in {r.run_id for r in runs}:
+            # The main run was deleted from history: forget it.
+            self._set_main_run_id(None)
+            main_id = None
+        checked = _qt_enum(QtCore.Qt, 'Checked', 'CheckState.Checked')
+        unchecked = _qt_enum(QtCore.Qt, 'Unchecked', 'CheckState.Unchecked')
+        flag_enabled = _qt_enum(QtCore.Qt, 'ItemIsEnabled', 'ItemFlag.ItemIsEnabled')
+        flag_checkable = _qt_enum(
+            QtCore.Qt, 'ItemIsUserCheckable', 'ItemFlag.ItemIsUserCheckable',
+        )
+        flag_selectable = _qt_enum(
+            QtCore.Qt, 'ItemIsSelectable', 'ItemFlag.ItemIsSelectable',
+        )
+        was_blocked = tw.blockSignals(True)
+        try:
+            tw.setRowCount(len(runs))
+            for i, run in enumerate(runs):
+                name_item = QtWidgets.QTableWidgetItem(run.name)
+                name_item.setData(user_role, run.run_id)
+                tw.setItem(i, self._RUNS_COL_NAME, name_item)
+
+                main_item = QtWidgets.QTableWidgetItem('')
+                main_item.setFlags(flag_enabled | flag_checkable | flag_selectable)
+                main_item.setCheckState(
+                    checked if run.run_id == main_id else unchecked,
+                )
+                main_item.setToolTip('Compare against this run')
+                tw.setItem(i, self._RUNS_COL_MAIN, main_item)
+
+                tw.setItem(
+                    i, self._RUNS_COL_DATE,
+                    QtWidgets.QTableWidgetItem(run.timestamp),
+                )
+                tw.setItem(
+                    i, self._RUNS_COL_DURATION,
+                    QtWidgets.QTableWidgetItem(
+                        _format_duration(run.duration_seconds),
+                    ),
+                )
+        finally:
+            tw.blockSignals(was_blocked)
         tw.resizeColumnsToContents()
+
+    # ------------------------------------------------------------------
+    # "Main" run (comparison baseline)
+    # ------------------------------------------------------------------
+    def _get_main_run_id(self) -> int | None:
+        """run_id of the user-designated main run, or ``None``."""
+        cached = getattr(self, '_main_run_id', None)
+        if cached is not None:
+            return int(cached)
+        try:
+            value = QSettings().value(MAIN_RUN_SETTING, None)
+        except Exception:  # nosec B110 B112
+            value = None
+        if value in (None, ''):
+            return None
+        try:
+            run_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        self._main_run_id = run_id
+        return run_id
+
+    def _set_main_run_id(self, run_id: int | None) -> None:
+        self._main_run_id = run_id
+        try:
+            settings = QSettings()
+            if run_id is None:
+                settings.remove(MAIN_RUN_SETTING)
+            else:
+                settings.setValue(MAIN_RUN_SETTING, int(run_id))
+        except Exception:  # nosec B110 B112
+            pass
+
+    def _main_run_meta(self):
+        """``RunMeta`` of the main run, or ``None`` (unset / deleted)."""
+        run_id = self._get_main_run_id()
+        if run_id is None:
+            return None
+        from omrat_utils.run_history import RunHistory
+        try:
+            run = RunHistory().get_run(run_id)
+        except Exception:  # nosec B110 B112
+            return None
+        if run is None:
+            self._set_main_run_id(None)
+        return run
+
+    def _on_previous_runs_item_changed(self, item) -> None:
+        """Checkbox in the Main column toggled -> exactly one main run."""
+        from qgis.PyQt import QtCore
+        if item is None or item.column() != self._RUNS_COL_MAIN:
+            return
+        tw = self.main_widget.TWPreviousRuns
+        user_role = _qt_enum(QtCore.Qt, 'UserRole', 'ItemDataRole.UserRole')
+        checked = _qt_enum(QtCore.Qt, 'Checked', 'CheckState.Checked')
+        unchecked = _qt_enum(QtCore.Qt, 'Unchecked', 'CheckState.Unchecked')
+        name_item = tw.item(item.row(), self._RUNS_COL_NAME)
+        run_id = name_item.data(user_role) if name_item is not None else None
+        if run_id is None:
+            return
+        run_id = int(run_id)
+        if item.checkState() == checked:
+            self._set_main_run_id(run_id)
+            was_blocked = tw.blockSignals(True)
+            try:
+                for row in range(tw.rowCount()):
+                    other = tw.item(row, self._RUNS_COL_MAIN)
+                    if other is not None and row != item.row():
+                        other.setCheckState(unchecked)
+            finally:
+                tw.blockSignals(was_blocked)
+        elif self._get_main_run_id() == run_id:
+            self._set_main_run_id(None)
+        # Re-fill the comparison columns against the new baseline.
+        self._on_previous_runs_selection_changed()
 
     def _selected_run_ids(self) -> list[int]:
         from qgis.PyQt.QtCore import Qt
@@ -621,20 +745,11 @@ class RunHistoryMixin:
         if not runs:
             return
 
-        current_baseline = self._capture_current_run_baseline(tw)
-        baseline_is_current = any(b is not None for b in current_baseline)
-        if not baseline_is_current and runs:
-            try:
-                first_totals = runs[0].totals_dict()
-            except Exception:  # nosec B110 B112
-                first_totals = {}
-            current_baseline = [
-                first_totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS
-            ]
-        delta_header = (
-            'Δ vs current %' if baseline_is_current
-            else f'Δ vs {getattr(runs[0], "name", "run 1")} %'
+        current_baseline, delta_header = self._comparison_baseline(tw, runs)
+        baseline_summary = summary_values(
+            dict(zip(self._ACCIDENT_TOTAL_KEYS, current_baseline)),
         )
+        n_accidents = len(self._ACCIDENT_TOTAL_KEYS)
 
         view_col = tw.columnCount() - 1
         for run_idx, run in enumerate(runs):
@@ -668,6 +783,50 @@ class RunHistoryMixin:
                         self._format_delta_pct(v, current_baseline[row]),
                     ),
                 )
+            for offset, v in enumerate(summary_values(totals)):
+                row = n_accidents + offset
+                if row >= tw.rowCount():
+                    break
+                self._set_bold_item(tw, row, prob_col, format_probability(v))
+                self._set_bold_item(
+                    tw, row, delta_col,
+                    self._format_delta_pct(v, baseline_summary[offset]),
+                )
+
+    def _comparison_baseline(self, tw, runs) -> tuple[list[float | None], str]:
+        """Pick the baseline the delta columns are computed against.
+
+        Priority: the user-designated *main* run (Main checkbox in
+        ``TWPreviousRuns``), then the current model's live values, then
+        the first selected run.
+        """
+        main_run = self._main_run_meta()
+        if main_run is not None:
+            try:
+                main_totals = main_run.totals_dict()
+            except Exception:  # nosec B110 B112
+                main_totals = {}
+            baseline = [main_totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS]
+            return baseline, f'Δ vs main ({main_run.name}) %'
+
+        baseline = self._capture_current_run_baseline(tw)
+        if any(b is not None for b in baseline):
+            return baseline, 'Δ vs current %'
+        try:
+            first_totals = runs[0].totals_dict()
+        except Exception:  # nosec B110 B112
+            first_totals = {}
+        baseline = [first_totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS]
+        return baseline, f'Δ vs {getattr(runs[0], "name", "run 1")} %'
+
+    @staticmethod
+    def _set_bold_item(tw, row: int, col: int, text: str) -> None:
+        from qgis.PyQt.QtWidgets import QTableWidgetItem
+        item = QTableWidgetItem(text)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        tw.setItem(row, col, item)
 
     def _capture_current_run_baseline(self, tw) -> list[float | None]:
         """Read the live LEP*-derived probabilities out of column 1."""
@@ -771,6 +930,8 @@ class RunHistoryMixin:
             return
         history = RunHistory()
         for run_id in run_ids:
+            if self._get_main_run_id() == run_id:
+                self._set_main_run_id(None)
             try:
                 history.delete_run(run_id, delete_gpkg=delete_gpkg)
             except Exception as exc:

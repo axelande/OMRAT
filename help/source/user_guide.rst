@@ -489,6 +489,17 @@ accident type, with a **View** drill-down button) and
 above them lists every run in the history; select one and click
 **Add selected run results to map** to load its GeoPackage.
 
+Below the nine accident rows the table carries three bold summary
+rows: **All grounding** (drifting + powered grounding), **All
+allision** (drifting + powered allision) and **All collisions** (the
+five ship-ship types).  They recompute whenever the rows above change
+and get their own probability / delta cells when previous runs are
+compared.
+
+The **View** button on a ship-ship collision row opens a per-leg (or
+per-leg-pair) table with the absolute probability and a **% of total**
+column, i.e. each leg's share of that accident type.
+
 Result fields
 -------------
 
@@ -695,10 +706,10 @@ below) when you want to look at them.
 The Previous runs table
 ------------------------
 
-The **Previous runs** table on the Run Analysis tab shows three
-columns: **Name**, **Date**, **Duration** -- enough to pick a run
-without scrolling.  The newest run is selected automatically after a
-calculation finishes.  Selecting rows adds columns to the
+The **Previous runs** table on the Run Analysis tab shows four
+columns: **Name**, **Main**, **Date**, **Duration** -- enough to pick a
+run without scrolling.  The newest run is selected automatically after
+a calculation finishes.  Selecting rows adds columns to the
 **Accident probabilities** table below:
 
 * **Single selection** -- one probability column for that run plus a
@@ -706,9 +717,13 @@ calculation finishes.  Selecting rows adds columns to the
 * **Multi-selection** -- one probability + ``Δ %`` column pair per
   selected run, side by side.
 
-The baseline is the currently displayed run if there is one;
-otherwise it is the first selected run, and the header says which
-(``Δ vs current %`` or ``Δ vs <run name> %``).
+The **Main** checkbox chooses the baseline: tick exactly one run and
+every ``Δ %`` column is computed against it (header ``Δ vs main
+(<run name>) %``).  The choice is remembered between sessions and is
+cleared automatically if that run is deleted from the history.  With
+no main run ticked the baseline is the currently displayed run if
+there is one, otherwise the first selected run, and the header says
+which (``Δ vs current %`` or ``Δ vs <run name> %``).
 
 Below the table is an **Add selected run results to map** button.
 Click it with a single row selected to load that run's per-run
@@ -793,14 +808,22 @@ Three tables fill in:
 
 * **Accident probabilities** -- A, B and the relative difference per
   accident type.
-* **Settings differences** -- which inputs actually changed between
-  the two snapshots (causation factors, drift settings, ship
-  categories, ...).
+* **Settings differences** -- every scalar under the ``drift``, ``pc``
+  (causation factors), ``traffic_scaling``, ``consequence`` and
+  ``ship_categories`` blocks that differs between the two snapshots,
+  plus per-leg **Width** changes.  A value present on only one side
+  shows an em-dash on the other.
 * **Route distance per leg** -- leg-by-leg lengths, so a geometry
   change shows up immediately.
 
-**Add both runs as map layers (red + blue)** overlays the two runs'
-geometries on the canvas in contrasting colours.
+**Add both models to QGIS (grouped: A = red, B = blue)**, right under
+the file pickers, creates one layer group per model in the Layers
+panel.  Each group holds the model's **Depth Areas**, **Structures**,
+**Legs** and **Tangent Lines** built from the ``.omrat`` snapshot, and
+-- when ``<name>.gpkg`` exists next to the snapshot -- that run's
+result layers on top.  Legs, tangent lines and result layers are
+tinted red for A and blue for B.  **Clear model** removes the groups
+again.
 
 
 Tips and best practices

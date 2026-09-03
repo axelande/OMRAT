@@ -218,57 +218,11 @@ class VisualizationMixin:
         from qgis.PyQt.QtWidgets import (
             QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, QHeaderView,
         )
+        from compute.collision_breakdown import build_breakdown_rows
         report = getattr(self, 'collision_report', None) or {}
 
         wanted = encounter_type
-        rows: list[tuple[str, ...]] = []
-        headers: list[str] = []
-
-        if wanted in ('crossing', 'merging'):
-            by_leg_pair: dict[str, dict[str, Any]] = (
-                report.get('by_leg_pair', {}) or {}
-            )
-            headers = ['Leg pair', 'Waypoint (lon lat)', 'Angle°', 'Probability']
-            for label, rec in by_leg_pair.items():
-                v = float(rec.get(wanted, 0.0) or 0.0)
-                if v <= 0.0:
-                    continue
-                rows.append((
-                    label,
-                    str(rec.get('waypoint', '')),
-                    f"{float(rec.get('angle_deg', 0.0) or 0.0):.1f}",
-                    f"{v:.3e}",
-                ))
-            # Sort descending by probability (last column).
-            rows.sort(key=lambda r: -float(r[-1]))
-        elif wanted == 'bend':
-            bend_by_pair: dict[str, dict[str, Any]] = (
-                report.get('bend_by_pair', {}) or {}
-            )
-            headers = ['Leg pair', 'Waypoint (lon lat)', 'Probability']
-            for label, rec in bend_by_pair.items():
-                v = float(rec.get('bend', 0.0) or 0.0)
-                if v <= 0.0:
-                    continue
-                rows.append((
-                    label,
-                    str(rec.get('waypoint', '')),
-                    f"{v:.3e}",
-                ))
-            rows.sort(key=lambda r: -float(r[-1]))
-        else:
-            # head_on / overtaking are single-leg phenomena.
-            by_leg: dict[str, dict[str, float]] = report.get('by_leg', {}) or {}
-            headers = ['Leg', 'Probability']
-            for leg_id, leg_vals in by_leg.items():
-                if not isinstance(leg_vals, dict):
-                    continue
-                v = float(leg_vals.get(wanted, 0.0) or 0.0)
-                if v <= 0.0:
-                    continue
-                rows.append((str(leg_id), f"{v:.3e}"))
-            rows.sort(key=lambda r: -float(r[-1]))
-
+        headers, rows = build_breakdown_rows(report, wanted)
         if not rows:
             return
 

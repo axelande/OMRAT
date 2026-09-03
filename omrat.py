@@ -26,7 +26,7 @@ from functools import partial
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QUrl
 from qgis.PyQt.QtGui import QIcon, QAction, QDesktopServices
 from qgis.PyQt.QtWidgets import QMenuBar, QWidget, QFileDialog, QToolBar, QMessageBox
-from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsProject)
+from qgis.core import (QgsVectorLayer, QgsFeature, QgsLineString, QgsPoint, QgsPointXY, QgsProject)
 from qgis.core import QgsMessageLog, Qgis, QgsApplication
 
 from qgis.gui import QgsMapToolPan, QgisInterface, QgsMapCanvas
@@ -146,6 +146,7 @@ class OMRAT(
         # cleared -- otherwise they linger in the layer panel after
         # a Plugin Reloader cycle.
         self._history_layers: list[QgsVectorLayer] = []
+        self._compare_groups: list = []
         # Strong reference to the active CalculationTask while it runs.
         # Cleared from ``_on_calculation_finished`` /
         # ``_on_calculation_failed``.  See ``run_calculation`` for why.
@@ -288,6 +289,18 @@ class OMRAT(
             except Exception:  # nosec B110 B112
                 pass
         self._history_layers.clear()
+        # Compare-tab groups ("Compare A: ..." / "Compare B: ...").
+        for group in list(getattr(self, '_compare_groups', []) or []):
+            try:
+                parent = group.parent()
+                if parent is not None:
+                    parent.removeChildNode(group)
+            except Exception:  # nosec B110 B112
+                pass
+        try:
+            self._compare_groups.clear()
+        except Exception:  # nosec B110 B112
+            pass
 
     def _remove_drift_corridor_layers(self) -> None:
         """Remove all drift corridor layers from the QGIS project and clear the list."""
@@ -666,6 +679,7 @@ class OMRAT(
             if not self._validate_and_wire_segment(vl, fet, fid, seg_data):
                 continue
             self.qgis_geoms.vector_layers.append(vl)
+            self._add_tangent_for_segment(fet, seg_data, fid)
             try:
                 self.qgis_geoms.leg_dirs[str(seg_data["Segment_Id"])] = list(seg_data.get("Dirs", []))
             except Exception:  # nosec B110 B112
@@ -686,6 +700,25 @@ class OMRAT(
             pass
         self.qgis_geoms.sync_drawing_spinboxes()
         self.iface.mapCanvas().refresh()
+
+    def _add_tangent_for_segment(self, fet, seg_data: dict, fid: int) -> None:
+        """Draw the perpendicular width marker ("tangent line") for a leg
+        rebuilt from file.  Interactive drawing and width edits already
+        create it; loading a project did not, so the layer was missing
+        until the user touched a width cell."""
+        try:
+            pts = fet.geometry().asPolyline()
+            if len(pts) < 2:
+                return
+            width = float(seg_data.get('Width', 5000) or 5000)
+            self.qgis_geoms.create_offset_lines(
+                QgsPointXY(pts[0]), QgsPointXY(pts[-1]), width / 2, fid,
+            )
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Could not draw tangent line for leg {fid}: {exc}",
+                'OMRAT', Qgis.MessageLevel.Warning,
+            )
 
     def reset_route_table(self) -> None:
         self.main_widget.twRouteList.setColumnCount(7)
