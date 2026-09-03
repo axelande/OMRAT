@@ -235,6 +235,18 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.label_drift_status.setMinimumHeight(28)
 
     def closeEvent(self, event):
+        # Give the plugin a chance to ask "save changes?" and veto the
+        # close (Cancel, or a cancelled Save-as dialog).
+        confirm = getattr(self.plugin, 'confirm_close', None)
+        if callable(confirm) and not confirm():
+            event.ignore()
+            return
+        # The dock and the map layers are one model: reopening the dock
+        # starts from an empty table, so leaving the layers behind would
+        # only show a picture of a model that no longer exists.
+        clear = getattr(self.plugin, 'clear_model_on_close', None)
+        if callable(clear):
+            clear()
         self.closingPlugin.emit()
         self.plugin.onClosePlugin()
         event.accept()

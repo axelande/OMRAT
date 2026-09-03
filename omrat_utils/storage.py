@@ -1,9 +1,12 @@
 from __future__ import annotations
 import json
 import os
+import re
+import stat
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
+from qgis.core import Qgis, QgsMessageLog
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QFileDialog
 
@@ -14,15 +17,27 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 
+# ``_YYYYMMDD_HHMMSS`` suffix that RunHistoryMixin appends to snapshot names.
+_RUN_STAMP_RE = re.compile(r'_\d{8}_\d{6}$')
+
+
 class Storage:
     def __init__(self, parent: OMRAT) -> None:
         self.p = parent
 
-    def store_all(self):
-        file_path = self.new_file_path(True, "Save Project", self.last_used_dir(),
-                                       "proj.omrat", "shapefiles (*.omrat *.OMRAT)")[0]
-        if file_path == "":
-            return
+    def store_all(self, file_path: str | None = None) -> str:
+        """Write the project to ``file_path``; ask for a path when ``None``.
+
+        Returns the path written, or ``''`` when the dialog was
+        cancelled.  The path is remembered on the plugin as
+        ``project_path`` so **File -> Save** can reuse it.
+        """
+        if not file_path:
+            start_dir, start_name = self._suggested_save_location()
+            file_path = self.new_file_path(True, "Save Project", start_dir,
+                                           start_name, "OMRAT project (*.omrat *.OMRAT)")[0]
+        if not file_path:
+            return ''
         gather = GatherData(self.p)
         data = gather.get_all_for_save()
         try:
@@ -30,8 +45,90 @@ class Storage:
         except ValidationError as e:
             # This should not happen when everything works
             print(e)
-        with open(file_path, 'w') as f:
-            f.write(json.dumps(data, indent=2))
+        try:
+            with open(file_path, 'w') as f:
+                f.write(json.dumps(data, indent=2))
+        except OSError as exc:
+            self._report_write_error(file_path, exc)
+            return ''
+        self._remember_project_path(file_path)
+        return file_path
+
+    @staticmethod
+    def is_writable_path(file_path: str | None) -> bool:
+        """True when ``file_path`` can be (over)written: an existing
+        writable file, or a new file in an existing directory.  Run
+        snapshots are written read-only, so a project loaded from one
+        must not be saved back onto it."""
+        if not file_path:
+            return False
+        if os.path.exists(file_path):
+            return os.path.isfile(file_path) and os.access(file_path, os.W_OK)
+        parent = os.path.dirname(file_path) or '.'
+        return os.path.isdir(parent) and os.access(parent, os.W_OK)
+
+    def _report_write_error(self, file_path: str, exc: Exception) -> None:
+        message = (
+            f"Could not write the project to {file_path}: {exc}. "
+            "The file may be read-only (for example a run snapshot) or locked; "
+            "use File -> Save as... to pick another name."
+        )
+        notifier = getattr(self.p, 'notifier', None)
+        if notifier is not None:
+            try:
+                notifier.display_message(message, level=Qgis.MessageLevel.Critical, duration=0)
+                return
+            except Exception:  # nosec B110 B112
+                pass
+        try:
+            QgsMessageLog.logMessage(message, 'OMRAT', Qgis.MessageLevel.Critical)
+        except Exception:  # nosec B110 B112
+            print(message)
+
+    def _suggested_save_location(self) -> tuple[str, str]:
+        """``(directory, file name)`` to pre-fill the Save-as dialog with:
+        the current project file when known, else the last used dir."""
+        current = getattr(self.p, 'project_path', None)
+        if isinstance(current, str) and current:
+            name = os.path.basename(current)
+            if not self.is_writable_path(current):
+                # Run snapshots are read-only: propose the stem without
+                # the run timestamp as the working file name.
+                name = self.strip_run_timestamp(name)
+            return os.path.dirname(current), name
+        return self.last_used_dir(), "proj.omrat"
+
+    @staticmethod
+    def strip_run_timestamp(file_name: str) -> str:
+        """``test14_20260827_232733.omrat -> test14.omrat``; other names
+        pass through unchanged."""
+        stem, ext = os.path.splitext(file_name)
+        stripped = _RUN_STAMP_RE.sub('', stem)
+        return (stripped or stem) + ext
+
+    @staticmethod
+    def make_writable(file_path: str) -> bool:
+        """Clear the read-only attribute; True when the file is writable
+        afterwards."""
+        try:
+            mode = os.stat(file_path).st_mode
+            os.chmod(file_path, mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+        except OSError:
+            return False
+        return os.access(file_path, os.W_OK)
+
+    def _remember_project_path(self, file_path: str) -> None:
+        try:
+            self.p.project_path = file_path
+        except Exception:  # nosec B110 B112
+            return
+        for hook in ('refresh_project_title', 'mark_project_saved'):
+            fn = getattr(self.p, hook, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:  # nosec B110 B112
+                    pass
 
     def select_file(self) -> str:
         """Open a file dialog to select a .omrat file (or use test path).
@@ -60,6 +157,7 @@ class Storage:
                 return
             gather = GatherData(self.p)
             gather.populate(data)
+        self._remember_project_path(file_path)
 
     def load_all(self):
         """Select a file and load it. Legacy convenience method."""
@@ -127,6 +225,7 @@ class Storage:
                 ('u_min1', 0.0), ('u_max1', 0.0), ('ai1', 0.0), ('u_min2', 0.0), ('u_max2', 0.0), ('ai2', 0.0),
                 ('Width', seg.get('Width', 0)),
                 ('Tangent_Pos', 0.5),
+                ('traffic_locked', False),
             ]:
                 seg.setdefault(key, default)
             seg.setdefault('dist1', [])

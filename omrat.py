@@ -33,6 +33,7 @@ from qgis.gui import QgsMapToolPan, QgisInterface, QgsMapCanvas
 import copy
 import gc
 import sys
+import json
 import os
 import os.path
 import time
@@ -90,6 +91,14 @@ class OMRAT(
         # Save reference to the QGIS interface
         self.iface = iface
         self.testing = testing
+        # Path of the .omrat file the model was loaded from / last saved
+        # to.  ``None`` until the first Save as... / Load.
+        self.project_path: str | None = None
+        # Serialised project as of the last Save / Load / Clear; the
+        # close prompt compares the live model against it.
+        self._saved_snapshot: str | None = None
+        # QML per layer type, see omrat_utils/layer_styles.py.
+        self.layer_styles: dict[str, str] = {}
         # initialize plugin directory
         self.plugin_dir = os.path.dirname(__file__)
         # Notifier (message-bar) wired up early so even early-init
@@ -437,6 +446,10 @@ class OMRAT(
     def _reset_data_structures(self) -> None:
         self.traffic_data = {}
         self.segment_data = {}
+        self.layer_styles = {}
+        # A cleared model is a new, unnamed project.
+        self.project_path = None
+        self.refresh_project_title()
         from omrat_utils.handle_traffic import _default_traffic_scaling
         self.traffic_scaling = _default_traffic_scaling()
         self.segments_imported = {}
@@ -510,7 +523,18 @@ class OMRAT(
         self._clear_distribution_canvas()
         self.traffic.run_update = True
         self.iface.mapCanvas().refresh()
+        self.mark_project_saved()
         QgsMessageLog.logMessage("Model cleared successfully", "OMRAT", Qgis.MessageLevel.Info)
+
+    def clear_model_on_close(self) -> None:
+        """Remove every OMRAT layer and reset the model when the dock is
+        closed (after the save prompt has been answered)."""
+        try:
+            self.clear_model()
+        except Exception as exc:  # nosec B110 B112
+            QgsMessageLog.logMessage(
+                f"Could not clear the model on close: {exc}", 'OMRAT', Qgis.MessageLevel.Warning,
+            )
 
     def onClosePlugin(self):
         """Cleanup necessary items here when plugin main_widget is closed"""
@@ -725,10 +749,10 @@ class OMRAT(
             )
 
     def reset_route_table(self) -> None:
-        self.main_widget.twRouteList.setColumnCount(8)
+        self.main_widget.twRouteList.setColumnCount(9)
         self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment_Id', 'Route_Id', 'Leg_name',
                                                                 'Start_Point', 'End_Point', 'Width',
-                                                                'Tangent (%)', 'Update AIS'])
+                                                                'Tangent (%)', 'Update AIS', 'AIS lock'])
         self.main_widget.twRouteList.setColumnWidth(0, 75)
         self.main_widget.twRouteList.setColumnWidth(1, 75)
         self.main_widget.twRouteList.setColumnWidth(2, 75)
@@ -737,6 +761,7 @@ class OMRAT(
         self.main_widget.twRouteList.setColumnWidth(5, 75)
         self.main_widget.twRouteList.setColumnWidth(6, 75)
         self.main_widget.twRouteList.setColumnWidth(7, 75)
+        self.main_widget.twRouteList.setColumnWidth(8, 60)
         self.main_widget.twRouteList.setRowCount(0)
 
     def run_traffic_module(self) -> None:
@@ -744,9 +769,138 @@ class OMRAT(
         self.traffic.fill_cbTrafficSelectSeg()
         self.traffic.update_direction_select()
 
-    def save_work(self):
-        store = Storage(self)
-        store.store_all()
+    def save_work(self) -> None:
+        """File -> Save: overwrite the current project file, or fall back
+        to Save as... when the model has no file yet."""
+        path = self.project_path
+        if not path:
+            self.save_work_as()
+            return
+        if not Storage.is_writable_path(path):
+            # Run snapshots are written read-only; Save means overwrite,
+            # so clear the flag.  If that fails store_all reports the
+            # error and we fall back to asking for a new name.
+            if not Storage.make_writable(path):
+                self.save_work_as()
+                return
+        written = Storage(self).store_all(path)
+        if written:
+            self._notify_saved(written)
+
+    def save_work_as(self) -> None:
+        """File -> Save as...: always ask for a file name."""
+        written = Storage(self).store_all()
+        if written:
+            self._notify_saved(written)
+
+    def _notify_saved(self, path: str) -> None:
+        notifier = getattr(self, 'notifier', None)
+        if notifier is None:
+            return
+        try:
+            notifier.display_message(self.tr("Project saved to {path}").format(path=path), duration=5)
+        except Exception:  # nosec B110 B112
+            pass
+
+    # ------------------------------------------------------------------
+    # Unsaved-changes tracking
+    # ------------------------------------------------------------------
+
+    def _serialize_project(self) -> str | None:
+        """Canonical JSON of the whole model, or ``None`` when the model
+        cannot be gathered (half-initialised UI)."""
+        try:
+            data = GatherData(self).get_all_for_save()
+            return json.dumps(data, sort_keys=True, default=str)
+        except Exception as exc:  # nosec B110 B112
+            QgsMessageLog.logMessage(
+                f"Could not serialise model for change tracking: {exc}", 'OMRAT', Qgis.MessageLevel.Warning,
+            )
+            return None
+
+    def mark_project_saved(self) -> None:
+        """Record the current model as the saved baseline."""
+        self._saved_snapshot = self._serialize_project()
+
+    def _model_has_data(self) -> bool:
+        try:
+            return (
+                len(self.segment_data) > 0
+                or len(self.traffic_data) > 0
+                or self.main_widget.twRouteList.rowCount() > 0
+                or self.main_widget.twDepthList.rowCount() > 0
+                or self.main_widget.twObjectList.rowCount() > 0
+            )
+        except Exception:  # nosec B110 B112
+            return False
+
+    def has_unsaved_changes(self) -> bool:
+        """True when the live model differs from the last saved / loaded
+        state.  Without a baseline, any data counts as unsaved."""
+        current = self._serialize_project()
+        if self._saved_snapshot is None or current is None:
+            return self._model_has_data()
+        return current != self._saved_snapshot
+
+    def _ask_save_on_close(self) -> str:
+        """Modal prompt; returns 'save', 'save_as', 'discard' or 'cancel'."""
+        msg_box = QMessageBox(self.main_widget)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle(self.tr('Unsaved changes'))
+        name = os.path.basename(self.project_path) if self.project_path else self.tr('the current model')
+        msg_box.setText(self.tr('Save changes to {name} before closing OMRAT?').format(name=name))
+        msg_box.setInformativeText(self.tr(
+            "Closing the dock keeps the layers on the map but the traffic, "
+            "distributions and settings are lost unless you save."
+        ))
+        btn_save = msg_box.addButton(self.tr('Save'), QMessageBox.ButtonRole.AcceptRole)
+        btn_save_as = msg_box.addButton(self.tr('Save as...'), QMessageBox.ButtonRole.ActionRole)
+        btn_discard = msg_box.addButton(self.tr("Don't save"), QMessageBox.ButtonRole.DestructiveRole)
+        msg_box.addButton(QMessageBox.StandardButton.Cancel)
+        msg_box.setDefaultButton(btn_save)
+        msg_box.exec()
+        clicked = msg_box.clickedButton()
+        if clicked is btn_save:
+            return 'save'
+        if clicked is btn_save_as:
+            return 'save_as'
+        if clicked is btn_discard:
+            return 'discard'
+        return 'cancel'
+
+    def confirm_close(self) -> bool:
+        """Called from the dock's ``closeEvent``.  Returns ``False`` to
+        keep the dock open (Cancel, or a save that did not happen)."""
+        if not self.has_unsaved_changes():
+            return True
+        choice = self._ask_save_on_close()
+        if choice == 'discard':
+            return True
+        if choice == 'save':
+            self.save_work()
+        elif choice == 'save_as':
+            self.save_work_as()
+        else:
+            return False
+        # A cancelled file dialog leaves the model unsaved: stay open.
+        return not self.has_unsaved_changes()
+
+    def refresh_project_title(self) -> None:
+        """Show the current project file name in the dock title."""
+        widget = getattr(self, 'main_widget', None)
+        if widget is None:
+            return
+        base = getattr(self, '_base_window_title', None)
+        if base is None:
+            base = widget.windowTitle() or 'OMRAT'
+            self._base_window_title = base
+        try:
+            if self.project_path:
+                widget.setWindowTitle(f"{base} - {os.path.basename(self.project_path)}")
+            else:
+                widget.setWindowTitle(base)
+        except Exception:  # nosec B110 B112
+            pass
 
     def load_work(self):
         store = Storage(self)
@@ -1071,6 +1225,7 @@ class OMRAT(
             self._init_results_ui(fileMenu)
             self.reset_route_table()
             self.run_traffic_module()
+            self.mark_project_saved()
             self.main_widget.show()
 
     def _connect_toolbar_buttons(self) -> None:
@@ -1079,6 +1234,8 @@ class OMRAT(
         self.main_widget.pbRemoveRoute.clicked.connect(self.qgis_geoms.remove_leg)
         if hasattr(self.main_widget, 'pbMoveTangent'):
             self.main_widget.pbMoveTangent.clicked.connect(self.qgis_geoms.start_move_tangent)
+        if hasattr(self.main_widget, 'pbCopyTraffic'):
+            self.main_widget.pbCopyTraffic.clicked.connect(self.qgis_geoms.open_copy_traffic_dialog)
         self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
         self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
         self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
@@ -1088,6 +1245,7 @@ class OMRAT(
         menubar.setMinimumSize(320, 20)
         fileMenu = menubar.addMenu('File')
         fileMenu.addAction("Save", self.save_work)
+        fileMenu.addAction("Save as...", self.save_work_as)
         fileMenu.addAction("Load", self.load_work)
         fileMenu.addSeparator()
         fileMenu.addAction("Export to IWRAP XML", self.export_to_iwrap)

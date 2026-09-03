@@ -606,3 +606,132 @@ class TestTangentPosDefault:
         data = {'segment_data': {'1': {'Tangent_Pos': 0.2}}}
         out = storage._normalize_legacy_to_schema(data)
         assert out['segment_data']['1']['Tangent_Pos'] == 0.2
+
+
+class TestStoreAllPath:
+    def _storage(self, tmp_path, monkeypatch, dialog_path: str):
+        from unittest.mock import MagicMock
+        import omrat_utils.storage as storage_mod
+        parent = MagicMock()
+        parent.testing = False
+        parent.project_path = None
+        s = Storage(parent)
+
+        class FakeGather:
+            def __init__(self, *a, **k):
+                pass
+
+            def get_all_for_save(self):
+                return {'pc': {}, 'drift': {'repair': {}}, 'segment_data': {},
+                        'traffic_data': {}, 'depths': [], 'objects': [], 'ship_categories': {}}
+
+        monkeypatch.setattr(storage_mod, 'GatherData', FakeGather)
+        calls = []
+
+        def fake_dialog(*a, **k):
+            calls.append(a)
+            return (dialog_path, '')
+
+        monkeypatch.setattr(s, 'new_file_path', fake_dialog)
+        monkeypatch.setattr(s, 'last_used_dir', lambda: str(tmp_path))
+        return s, parent, calls
+
+    def test_explicit_path_skips_dialog_and_remembers(self, tmp_path, monkeypatch):
+        target = str(tmp_path / 'model.omrat')
+        s, parent, calls = self._storage(tmp_path, monkeypatch, 'SHOULD_NOT_BE_USED')
+        assert s.store_all(target) == target
+        assert (tmp_path / 'model.omrat').exists()
+        assert calls == []
+        assert parent.project_path == target
+
+    def test_dialog_path_is_remembered(self, tmp_path, monkeypatch):
+        target = str(tmp_path / 'picked.omrat')
+        s, parent, _calls = self._storage(tmp_path, monkeypatch, target)
+        assert s.store_all() == target
+        assert parent.project_path == target
+
+    def test_cancel_returns_empty_and_keeps_old_path(self, tmp_path, monkeypatch):
+        s, parent, _calls = self._storage(tmp_path, monkeypatch, '')
+        parent.project_path = 'old.omrat'
+        assert s.store_all() == ''
+        assert parent.project_path == 'old.omrat'
+
+    def test_save_as_prefills_current_file(self, tmp_path, monkeypatch):
+        s, parent, calls = self._storage(tmp_path, monkeypatch, '')
+        parent.project_path = str(tmp_path / 'sub' / 'current.omrat')
+        s.store_all()
+        # new_file_path(save, title, dir, name, filter)
+        assert calls[0][2] == str(tmp_path / 'sub')
+        assert calls[0][3] == 'current.omrat'
+
+    def test_load_remembers_path(self, tmp_path, monkeypatch):
+        import json
+        from unittest.mock import MagicMock
+        import omrat_utils.storage as storage_mod
+        parent = MagicMock()
+        parent.testing = False
+        s = Storage(parent)
+        populated = []
+
+        class FakeGather:
+            def __init__(self, *a, **k):
+                pass
+
+            def populate(self, data):
+                populated.append(data)
+
+        monkeypatch.setattr(storage_mod, 'GatherData', FakeGather)
+        monkeypatch.setattr(storage_mod.RootModelSchema, 'model_validate', lambda data: None)
+        f = tmp_path / 'in.omrat'
+        f.write_text(json.dumps({'segment_data': {}, 'traffic_data': {}, 'depths': [], 'objects': []}))
+        s.load_from_path(str(f))
+        assert populated
+        assert parent.project_path == str(f)
+
+
+class TestStoreAllReadOnly:
+    def test_write_error_returns_empty_and_reports(self, tmp_path, monkeypatch):
+        import stat
+        from unittest.mock import MagicMock
+        import omrat_utils.storage as storage_mod
+        parent = MagicMock()
+        parent.testing = False
+        parent.project_path = None
+        reported = []
+        parent.notifier.display_message = lambda msg, **kw: reported.append(msg)
+        s = Storage(parent)
+
+        class FakeGather:
+            def __init__(self, *a, **k):
+                pass
+
+            def get_all_for_save(self):
+                return {'segment_data': {}}
+
+        monkeypatch.setattr(storage_mod, 'GatherData', FakeGather)
+        monkeypatch.setattr(storage_mod.RootModelSchema, 'model_validate', lambda data: None)
+        target = tmp_path / 'snapshot.omrat'
+        target.write_text('{}')
+        target.chmod(target.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        try:
+            assert s.store_all(str(target)) == ''
+            assert reported and 'read-only' in reported[0]
+            assert parent.project_path is None
+            assert target.read_text() == '{}'
+        finally:
+            target.chmod(target.stat().st_mode | stat.S_IWUSR)
+
+    def test_is_writable_path(self, tmp_path):
+        import stat
+        assert Storage.is_writable_path(None) is False
+        assert Storage.is_writable_path('') is False
+        assert Storage.is_writable_path(str(tmp_path / 'new.omrat')) is True
+        assert Storage.is_writable_path(str(tmp_path / 'nope' / 'new.omrat')) is False
+        ro = tmp_path / 'ro.omrat'
+        ro.write_text('{}')
+        ro.chmod(ro.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        try:
+            assert Storage.is_writable_path(str(ro)) is False
+        finally:
+            ro.chmod(ro.stat().st_mode | stat.S_IWUSR)
+        assert Storage.is_writable_path(str(tmp_path)) is False   # a directory, not a file

@@ -196,6 +196,11 @@ class AisUpdateTask(QgsTask):
 
     def _apply_leg_result(self, omrat: Any, leg_key: str, res: dict) -> None:
         ais = self.ais
+        seg_lock = (getattr(omrat, 'segment_data', None) or {}).get(leg_key)
+        if isinstance(seg_lock, dict) and seg_lock.get('traffic_locked') is True:
+            # Locked while the task ran (or reached us anyway): keep the
+            # copied traffic.
+            return
         omrat.traffic.traffic_data[leg_key] = res['traffic']
         ais.dist_data[leg_key] = {'line1': res['line1'], 'line2': res['line2']}
         line1, line2 = res['line1'], res['line2']

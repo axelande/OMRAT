@@ -5,7 +5,7 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 import numpy as np
-from qgis.core import QgsApplication
+from qgis.core import Qgis, QgsApplication, QgsMessageLog
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QMessageBox, QTableWidget
 from shapely import wkt
@@ -13,6 +13,7 @@ from shapely.geometry import Point
 
 from compute.database import DB
 from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
+from omrat_utils.copy_traffic import describe_targets, split_locked
 from omrat_utils.vessel_lookup import VesselLookupConfig
 from ui.ais_connection_widget import AISConnectionWidget
 
@@ -387,6 +388,28 @@ class AIS:
         multiplier = self._YEAR_SECONDS / coverage_s
         return multiplier, coverage_s, gap_s
 
+    def _report_locked_skipped(self, skipped: list[str], segment_data: dict, *, single: bool) -> None:
+        names = describe_targets(skipped, segment_data)
+        if single:
+            QMessageBox.information(
+                self.omrat.main_widget,
+                self.omrat.tr("Leg is locked"),
+                self.omrat.tr(
+                    "{names} is locked, so its traffic and distributions are kept.\n\n"
+                    "Untick 'AIS lock' in the route table to refresh it from AIS data."
+                ).format(names=names),
+            )
+            return
+        notifier = getattr(self.omrat, 'notifier', None)
+        msg = self.omrat.tr("Skipped {n} locked leg(s): {names}").format(n=len(skipped), names=names)
+        if notifier is not None:
+            try:
+                notifier.display_message(msg, duration=10)
+                return
+            except Exception:  # nosec B110 B112
+                pass
+        QgsMessageLog.logMessage(msg, 'OMRAT', Qgis.MessageLevel.Info)
+
     def _ensure_leg_dirs(self, legs: dict) -> dict[str, list[str]]:
         for leg_key in legs:
             if leg_key not in self.omrat.qgis_geoms.leg_dirs:
@@ -412,6 +435,14 @@ class AIS:
         )
         if not legs:
             return
+        # Locked legs keep their (copied / hand-edited) traffic.
+        segment_data = getattr(self.omrat, 'segment_data', None)
+        if isinstance(segment_data, dict):
+            legs, skipped = split_locked(legs, segment_data)
+            if skipped:
+                self._report_locked_skipped(skipped, segment_data, single=key is not None)
+            if not legs:
+                return
         leg_dirs = self._ensure_leg_dirs(legs)
         tw = self.omrat.main_widget.twTrafficData
         from omrat_utils.ais_update_task import AisUpdateTask

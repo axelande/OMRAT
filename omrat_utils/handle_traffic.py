@@ -72,10 +72,15 @@ class Traffic:
         """Sets the segment names in cbTrafficSelectSeg"""
         self.dw.cbTrafficSelectSeg.clear()
         nrs = self.dw.twRouteList.rowCount()
+        segment_data = getattr(self.omrat, 'segment_data', None)
         for i in range(nrs):
             seg_id = self.dw.twRouteList.item(i, 0).text()
             name_item = self.dw.twRouteList.item(i, 2)
             label = name_item.text() if name_item is not None else seg_id
+            if isinstance(segment_data, dict):
+                seg = segment_data.get(seg_id)
+                if isinstance(seg, dict) and seg.get('traffic_locked') is True:
+                    label = f"{label}  [locked]"
             self.dw.cbTrafficSelectSeg.addItem(label, seg_id)
         self.c_seg = self.dw.cbTrafficSelectSeg.currentData() or ''
 

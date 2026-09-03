@@ -322,9 +322,10 @@ class TestTangentTableColumn:
         return tbl
 
     def test_route_table_has_tangent_column(self, hqi, table_row):
-        assert table_row.columnCount() == 8
+        assert table_row.columnCount() == 9
         assert table_row.horizontalHeaderItem(6).text() == 'Tangent (%)'
         assert table_row.horizontalHeaderItem(7).text() == 'Update AIS'
+        assert table_row.horizontalHeaderItem(8).text() == 'AIS lock'
 
     def test_set_tangent_pos_mirrors_into_table(self, hqi, table_row):
         hqi.set_tangent_pos(77, 0.3, redraw=False)
@@ -440,3 +441,175 @@ class TestMoveTangentButton:
             hqi.tangent_layer.dataProvider().deleteFeatures([f.id()])
         hqi.start_move_tangent()
         assert triggered == []
+
+
+class TestAisLockColumn:
+    @pytest.fixture
+    def two_legs(self, hqi, leg77):
+        import copy
+        from omrat_utils.gather_data import GatherData
+        hqi.omrat.testing = True
+        sd = hqi.omrat.segment_data
+        sd['78'] = copy.deepcopy(sd['77'])
+        sd['78'].update({'Segment_Id': '78', 'Leg_name': 'LEG_1_78', 'Tangent_Pos': 0.5,
+                         'Start_Point': '14.200000 55.000000', 'End_Point': '14.400000 55.000000'})
+        sd['77'].update({'mean1_1': 12.5, 'std1_1': 3.0, 'mean2_1': -7.0, 'std2_1': 2.0, 'ai1': 150})
+        td = hqi.omrat.traffic_data
+        hqi.omrat.traffic.create_empty_dict('77', ['East going', 'West going'])
+        hqi.omrat.traffic.create_empty_dict('78', ['East going', 'West going'])
+        td['77']['East going']['Frequency (ships/year)'][0][0] = 42
+        hqi.omrat.reset_route_table()
+        hqi.suspend_route_table_signal()
+        tbl = hqi.omrat.main_widget.twRouteList
+        GatherData(hqi.omrat).populate_segment_tbl({'77': sd['77'], '78': sd['78']}, tbl)
+        yield tbl
+        sd.pop('78', None)
+        td.pop('77', None)
+        td.pop('78', None)
+
+    def test_table_has_lock_column(self, hqi, two_legs):
+        from qgis.PyQt.QtCore import Qt
+        tbl = two_legs
+        assert tbl.columnCount() == 9
+        assert tbl.horizontalHeaderItem(8).text() == 'AIS lock'
+        item = tbl.item(0, 8)
+        assert item is not None
+        assert item.checkState() == Qt.CheckState.Unchecked
+        assert bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+    def test_ticking_box_locks_leg(self, hqi, two_legs):
+        from qgis.PyQt.QtCore import Qt
+        tbl = two_legs
+        tbl.item(0, 8).setCheckState(Qt.CheckState.Checked)   # fires itemChanged
+        assert hqi.omrat.segment_data['77']['traffic_locked'] is True
+        tbl.item(0, 8).setCheckState(Qt.CheckState.Unchecked)
+        assert hqi.omrat.segment_data['77']['traffic_locked'] is False
+
+    def test_set_traffic_locked_mirrors_into_table(self, hqi, two_legs):
+        from qgis.PyQt.QtCore import Qt
+        tbl = two_legs
+        hqi.set_traffic_locked('78', True)
+        assert tbl.item(1, 8).checkState() == Qt.CheckState.Checked
+        assert hqi.omrat.segment_data['78']['traffic_locked'] is True
+
+    def test_apply_copy_copies_locks_and_refreshes(self, hqi, two_legs):
+        from qgis.PyQt.QtCore import Qt
+        from omrat_utils.copy_traffic_dialog import apply_copy
+        tbl = two_legs
+        done = apply_copy(hqi.omrat, '77', ['78', '77'])
+        assert done == ['78']
+        td = hqi.omrat.traffic_data
+        assert td['78']['East going']['Frequency (ships/year)'][0][0] == 42
+        sd = hqi.omrat.segment_data['78']
+        assert sd['mean1_1'] == 12.5 and sd['ai1'] == 150 and sd['traffic_source'] == '77'
+        assert sd['traffic_locked'] is True
+        assert tbl.item(1, 8).checkState() == Qt.CheckState.Checked
+        # Source untouched and unlocked.
+        assert hqi.omrat.segment_data['77'].get('traffic_locked') is not True
+
+    def test_apply_copy_without_lock(self, hqi, two_legs):
+        from omrat_utils.copy_traffic_dialog import apply_copy
+        apply_copy(hqi.omrat, '77', ['78'], lock=False, copy_distributions=False)
+        assert hqi.omrat.segment_data['78'].get('traffic_locked') is not True
+        assert hqi.omrat.segment_data['78'].get('mean1_1') != 12.5
+
+    def test_copy_button_wired(self, hqi):
+        btn = getattr(hqi.omrat.main_widget, 'pbCopyTraffic', None)
+        assert btn is not None
+        assert btn.receivers(btn.clicked) > 0
+
+    def test_traffic_selector_marks_locked(self, hqi, two_legs):
+        hqi.set_traffic_locked('78', True)
+        hqi.omrat.traffic.fill_cbTrafficSelectSeg()
+        cb = hqi.omrat.main_widget.cbTrafficSelectSeg
+        labels = [cb.itemText(i) for i in range(cb.count())]
+        assert any(lbl.endswith('[locked]') and 'LEG_1_78' in lbl for lbl in labels)
+        assert all('[locked]' not in lbl for lbl in labels if 'LEG_1_77' in lbl)
+
+
+class TestRouteTableSorting:
+    NAMES = {'3': 'LEG_1_10', '2': 'LEG_1_2', '1': 'LEG_1_1', '4': 'LEG_1_3_b', '5': 'LEG_1_3_a'}
+
+    @pytest.fixture
+    def legs(self, hqi):
+        import copy
+        hqi.omrat.testing = True
+        sd = hqi.omrat.segment_data
+        base = {
+            'Start_Point': '14.000000 55.000000', 'End_Point': '14.200000 55.000000',
+            'Width': 5000, 'Route_Id': 1, 'Dirs': ['East going', 'West going'],
+            'line_length': 12000.0, 'Tangent_Pos': 0.5,
+        }
+        for sid, name in self.NAMES.items():
+            sd[sid] = dict(copy.deepcopy(base), Segment_Id=sid, Leg_name=name)
+            hqi.omrat.traffic.create_empty_dict(sid, ['East going', 'West going'])
+        hqi.omrat.reset_route_table()
+        hqi.rebuild_route_table_rows(redraw_tangents=False)
+        hqi._route_sort = None
+        yield sd
+        for sid in self.NAMES:
+            sd.pop(sid, None)
+            hqi.omrat.traffic_data.pop(sid, None)
+
+    def _names(self, hqi):
+        tbl = hqi.omrat.main_widget.twRouteList
+        return [tbl.item(r, 2).text() for r in range(tbl.rowCount())]
+
+    def test_initial_order_is_insertion_order(self, hqi, legs):
+        assert self._names(hqi) == list(self.NAMES.values())
+
+    def test_click_leg_name_sorts_naturally(self, hqi, legs):
+        hqi.sort_route_table(2)
+        assert self._names(hqi) == ['LEG_1_1', 'LEG_1_2', 'LEG_1_3_a', 'LEG_1_3_b', 'LEG_1_10']
+        # segment_data follows, so a save keeps the order.
+        assert list(legs) == ['1', '2', '5', '4', '3']
+
+    def test_second_click_reverses(self, hqi, legs):
+        hqi.sort_route_table(2)
+        hqi.sort_route_table(2)
+        assert self._names(hqi) == ['LEG_1_10', 'LEG_1_3_b', 'LEG_1_3_a', 'LEG_1_2', 'LEG_1_1']
+        from qgis.PyQt.QtCore import Qt
+        header = hqi.omrat.main_widget.twRouteList.horizontalHeader()
+        assert header.sortIndicatorSection() == 2
+        assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+    def test_sort_by_segment_id_is_numeric(self, hqi, legs):
+        hqi.sort_route_table(0)
+        tbl = hqi.omrat.main_widget.twRouteList
+        assert [tbl.item(r, 0).text() for r in range(tbl.rowCount())] == ['1', '2', '3', '4', '5']
+
+    def test_non_sortable_column_is_ignored(self, hqi, legs):
+        before = self._names(hqi)
+        hqi.sort_route_table(5)
+        assert self._names(hqi) == before
+
+    def test_buttons_follow_their_leg(self, hqi, legs):
+        hqi.sort_route_table(2)
+        calls = []
+        hqi.omrat.ais.update_legs = lambda key=None: calls.append(key)
+        tbl = hqi.omrat.main_widget.twRouteList
+        for row in range(tbl.rowCount()):
+            tbl.cellWidget(row, 7).click()
+        assert calls == [tbl.item(r, 0).text() for r in range(tbl.rowCount())]
+        assert calls == ['1', '2', '5', '4', '3']
+
+    def test_traffic_selector_follows_table_order(self, hqi, legs):
+        hqi.sort_route_table(2)
+        cb = hqi.omrat.main_widget.cbTrafficSelectSeg
+        labels = [cb.itemText(i) for i in range(cb.count())]
+        assert labels == ['LEG_1_1', 'LEG_1_2', 'LEG_1_3_a', 'LEG_1_3_b', 'LEG_1_10']
+        assert [cb.itemData(i) for i in range(cb.count())] == ['1', '2', '5', '4', '3']
+
+    def test_edits_still_work_after_sort(self, hqi, legs):
+        hqi.sort_route_table(2)
+        tbl = hqi.omrat.main_widget.twRouteList
+        hqi.ensure_route_table_signal()
+        tbl.item(0, 5).setText('4321')          # row 0 is LEG_1_1 (id 1)
+        assert legs['1']['Width'] == 4321
+        tbl.item(4, 6).setText('25')            # row 4 is LEG_1_10 (id 3)
+        assert legs['3']['Tangent_Pos'] == pytest.approx(0.25)
+
+    def test_header_click_signal_is_wired(self, hqi, legs):
+        header = hqi.omrat.main_widget.twRouteList.horizontalHeader()
+        header.sectionClicked.emit(2)
+        assert self._names(hqi)[0] == 'LEG_1_1'

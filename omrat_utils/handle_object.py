@@ -188,6 +188,11 @@ class OObject:
             self._depth_edit_buffer = buf
 
         self.depth_layer = layer
+        try:
+            from omrat_utils.layer_styles import apply_stored_style
+            apply_stored_style(self.p, 'depths', layer)
+        except Exception:  # nosec B110 B112
+            pass
         return layer
 
     def _on_depth_geometry_changed(self, fid: int, geom: QgsGeometry) -> None:
@@ -345,6 +350,12 @@ class OObject:
         if pr is not None:
             pr.addFeature(fet)
         QgsProject.instance().addMapLayer(area)
+        if self.area_type == 'object':
+            try:
+                from omrat_utils.layer_styles import apply_stored_style
+                apply_stored_style(self.p, 'structures', area)
+            except Exception:  # nosec B110 B112
+                pass
         if not area.isEditable():
             area.startEditing()
         buf = area.editBuffer()

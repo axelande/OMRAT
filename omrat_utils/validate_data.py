@@ -223,3 +223,5 @@ class RootModelSchema(BaseModel):
     junctions: Optional[JunctionsModel] = None
     segments_imported: Optional[SegmentsImported] = None
     traffic_scaling: Optional[TrafficScalingModel] = None
+    # QGIS named styles (QML text) per layer type; see omrat_utils/layer_styles.py.
+    layer_styles: Optional[dict[str, str]] = None

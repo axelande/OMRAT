@@ -881,3 +881,56 @@ class TestGetPlTangentPosition:
         assert sql.count('ST_LineInterpolatePoint(') == 2
         assert sql.count(', 0.3)') == 2
         assert 'radians(90)' in sql and 'radians(270)' in sql
+
+
+class TestUpdateLegsSkipsLocked:
+    def _setup(self, ais, monkeypatch, segment_data):
+        import omrat_utils.handle_ais as mod
+        table = {
+            'L1': {'Start_Point': '14.0 55.0', 'End_Point': '14.1 55.0', 'Width': '1000'},
+            'L2': {'Start_Point': '14.1 55.0', 'End_Point': '14.2 55.0', 'Width': '1000'},
+        }
+        monkeypatch.setattr(ais, 'get_segment_data_from_table', lambda: table)
+        ais.omrat.tr = lambda text: text  # the plugin mock would swallow the message text
+        ais.omrat.segment_data = segment_data
+        ais.omrat.qgis_geoms.leg_dirs = {'L1': ['E', 'W'], 'L2': ['E', 'W']}
+        submitted = []
+
+        class FakeTask:
+            def __init__(self, **kw):
+                submitted.append(kw)
+
+        import omrat_utils.ais_update_task as task_mod
+        monkeypatch.setattr(task_mod, 'AisUpdateTask', FakeTask)
+        monkeypatch.setattr(mod.QgsApplication, 'taskManager', lambda: MagicMock())
+        return submitted
+
+    def test_bulk_update_drops_locked_legs(self, ais_with_mocks, monkeypatch):
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+        segs = {'L1': {'Dirs': ['E', 'W']}, 'L2': {'Dirs': ['E', 'W'], 'traffic_locked': True}}
+        submitted = self._setup(ais_with_mocks, monkeypatch, segs)
+        with patch.object(mod, 'QMessageBox'):
+            ais_with_mocks.update_legs()
+        assert len(submitted) == 1
+        assert list(submitted[0]['legs']) == ['L1']
+
+    def test_single_locked_leg_shows_message_and_no_task(self, ais_with_mocks, monkeypatch):
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+        segs = {'L1': {'Dirs': ['E', 'W']}, 'L2': {'Dirs': ['E', 'W'], 'traffic_locked': True}}
+        submitted = self._setup(ais_with_mocks, monkeypatch, segs)
+        with patch.object(mod, 'QMessageBox') as MockMsg:
+            ais_with_mocks.update_legs('L2')
+        MockMsg.information.assert_called_once()
+        assert 'locked' in MockMsg.information.call_args.args[2]
+        assert submitted == []
+
+    def test_unlocked_legs_unaffected(self, ais_with_mocks, monkeypatch):
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+        segs = {'L1': {'Dirs': ['E', 'W']}, 'L2': {'Dirs': ['E', 'W'], 'traffic_locked': False}}
+        submitted = self._setup(ais_with_mocks, monkeypatch, segs)
+        with patch.object(mod, 'QMessageBox'):
+            ais_with_mocks.update_legs()
+        assert sorted(submitted[0]['legs']) == ['L1', 'L2']

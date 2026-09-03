@@ -18,6 +18,9 @@ from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 
 
 from omrat_utils import PointTool
+from omrat_utils.copy_traffic import LOCK_KEY, SOURCE_KEY, is_locked, set_locked
+from omrat_utils.layer_styles import apply_stored_style
+from omrat_utils.leg_sort import SORTABLE_COLUMNS, sort_segment_data
 from geometries.tangent_position import (
     DEFAULT_TANGENT_POS, TANGENT_POS_KEY, fraction_from_percent, normalize_tangent_pos,
     percent_from_fraction, point_along, project_fraction,
@@ -66,7 +69,10 @@ class HandleQGISIface:
         # not be mistaken for user edits.
         self._tangent_guard = False
         self._table_sync_guard = False
+        # (column, descending) of the last header-click sort.
+        self._route_sort: tuple[int, bool] | None = None
         self.omrat.main_widget.twRouteList.cellClicked.connect(self.on_route_table_cell_clicked)
+        self._wire_route_table_header()
         # Spinboxes for current route / next-leg IDs (declared in the .ui).
         mw = self.omrat.main_widget
         if hasattr(mw, 'sbRouteId'):
@@ -235,8 +241,9 @@ class HandleQGISIface:
                 point.asWkt(),
                 f"LEG_{self.cur_route_id}_{self.segment_id}"  # Label value
             ])
-            # Style the layer
+            # Style the layer (project style if one is stored, else default)
             self.style_layer(vl)
+            apply_stored_style(self.omrat, 'legs', vl)
             fet.setId(self.segment_id)
 
             # Add the feature to the layer
@@ -625,27 +632,43 @@ class HandleQGISIface:
                 pass
             self.tangent_layer = None
 
-        # Disconnect itemChanged so the bulk repopulation below does
-        # not spam the width-change handler; reconnect after the
-        # rebuild.
-        prev_item_changed = self.item_changed_connected
-        if prev_item_changed:
-            try:
-                widget.twRouteList.itemChanged.disconnect(self.on_width_changed)
-            except TypeError:
-                pass
-            self.item_changed_connected = False
-        widget.twRouteList.setRowCount(0)
-
         segment_data = getattr(self.omrat, 'segment_data', {}) or {}
 
         # Rebuild the leg vector layers via the same path used on file
         # load -- one source of truth for the layer construction.
+        widget.twRouteList.setRowCount(0)
         self.omrat.load_lines({'segment_data': segment_data})
 
-        # Rebuild table rows directly, preserving width and leg name.
+        self.rebuild_route_table_rows()
+
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is not None:
+            canvas.refresh()
+
+    def rebuild_route_table_rows(self, *, redraw_tangents: bool = True) -> None:
+        """Rewrite every row of ``twRouteList`` from ``segment_data`` in
+        its current order -- data cells, Tangent (%) cell, Update AIS
+        button and AIS-lock box -- and reconnect the edit handler.
+
+        Used after reloads and sorts.  Rebuilding rather than moving rows
+        is what keeps the cell-widget buttons attached to the right leg:
+        Qt's own table sorting moves items but leaves cell widgets where
+        they were.
+        """
+        widget = self.omrat.main_widget
+        if widget is None:
+            return
+        segment_data = getattr(self.omrat, 'segment_data', {}) or {}
+
+        # Keep the edit handler quiet while rows are written.
+        prev_item_changed = self.item_changed_connected
+        self.suspend_route_table_signal()
+        widget.twRouteList.setRowCount(0)
+
         max_id = 0
         for seg_id, seg in segment_data.items():
+            if not isinstance(seg, dict):
+                continue
             sp = self._parse_wkt_xy(seg.get('Start_Point'))
             ep = self._parse_wkt_xy(seg.get('End_Point'))
             if sp is None or ep is None:
@@ -687,31 +710,75 @@ class HandleQGISIface:
                 lambda _checked=False, k=str(seg_id): self.omrat.ais.update_legs(k)
             )
             widget.twRouteList.setCellWidget(row_id, 7, btn)
+            widget.twRouteList.setItem(row_id, 8, self._make_lock_item(seg))
 
-            # Refresh the offset / tangent line for this leg.
-            try:
-                self.create_offset_lines(
-                    QgsPointXY(sp[0], sp[1]),
-                    QgsPointXY(ep[0], ep[1]),
-                    width / 2,
-                    fid,
-                )
-            except Exception:  # nosec B110 B112
-                pass
+            if redraw_tangents:
+                try:
+                    self.create_offset_lines(
+                        QgsPointXY(sp[0], sp[1]),
+                        QgsPointXY(ep[0], ep[1]),
+                        width / 2,
+                        fid,
+                    )
+                except Exception:  # nosec B110 B112
+                    pass
 
         # Bump the leg-id counter past the highest current id so future
         # interactive draws don't collide.
         self.segment_id = max(max_id, self.segment_id)
         self.sync_drawing_spinboxes()
 
-        # Reconnect the width-changed handler.
-        if prev_item_changed and not self.item_changed_connected:
-            widget.twRouteList.itemChanged.connect(self.on_width_changed)
-            self.item_changed_connected = True
+        if prev_item_changed:
+            self.ensure_route_table_signal()
 
-        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
-        if canvas is not None:
-            canvas.refresh()
+    # ------------------------------------------------------------------
+    # Sorting
+    # ------------------------------------------------------------------
+
+    def _wire_route_table_header(self) -> None:
+        try:
+            header = self.omrat.main_widget.twRouteList.horizontalHeader()
+            header.setSectionsClickable(True)
+            header.setSortIndicatorShown(False)
+            header.sectionClicked.connect(self.sort_route_table)
+        except Exception:  # nosec B110 B112
+            pass
+
+    def sort_route_table(self, column: int) -> None:
+        """Header click on Segment_Id / Route_Id / Leg_name: order the legs
+        naturally (``LEG_1_2`` before ``LEG_1_10``) by that column.
+
+        The order is applied to ``segment_data`` itself, so the route
+        table, the Traffic tab's leg selector and the saved project all
+        agree.  A second click on the same column reverses the order.
+        """
+        key = SORTABLE_COLUMNS.get(int(column))
+        if key is None:
+            return
+        prev_col, prev_rev = self._route_sort if self._route_sort else (None, True)
+        reverse = not prev_rev if prev_col == column else False
+        self._route_sort = (column, reverse)
+
+        sd = getattr(self.omrat, 'segment_data', None)
+        if not isinstance(sd, dict) or not sd:
+            return
+        ordered = sort_segment_data(sd, key, reverse=reverse)
+        sd.clear()
+        sd.update(ordered)
+
+        self.rebuild_route_table_rows(redraw_tangents=False)
+        try:
+            header = self.omrat.main_widget.twRouteList.horizontalHeader()
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(
+                column, Qt.SortOrder.DescendingOrder if reverse else Qt.SortOrder.AscendingOrder,
+            )
+        except Exception:  # nosec B110 B112
+            pass
+        # Traffic tab: the leg selector mirrors the table order.
+        run_traffic = getattr(self.omrat, 'run_traffic_module', None)
+        if callable(run_traffic):
+            run_traffic()
 
     def on_geometry_changed(self, fid: int, geom: QgsGeometry):
         """Handle geometry changes for a feature."""
@@ -864,6 +931,7 @@ class HandleQGISIface:
         btn_update_ais = QPushButton("Update AIS")
         btn_update_ais.clicked.connect(lambda: self.omrat.ais.update_legs(str(self.segment_id)))
         self.omrat.main_widget.twRouteList.setCellWidget(row_id, 7, btn_update_ais)
+        self.omrat.main_widget.twRouteList.setItem(row_id, 8, self._make_lock_item(None))
 
         self.ensure_route_table_signal()
 
@@ -917,7 +985,51 @@ class HandleQGISIface:
                     lambda _checked=False, k=seg_key: self.omrat.ais.update_legs(k)
                 )
                 table.setCellWidget(row, 7, btn)
+            if table.item(row, 8) is None:
+                seg = (getattr(self.omrat, 'segment_data', None) or {}).get(seg_key)
+                table.setItem(row, 8, self._make_lock_item(seg if isinstance(seg, dict) else None))
         self.ensure_route_table_signal()
+
+    # ------------------------------------------------------------------
+    # AIS lock column (col 8)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_lock_item(seg: dict | None) -> QTableWidgetItem:
+        """Checkbox cell mirroring ``segment_data[seg]['traffic_locked']``."""
+        item = QTableWidgetItem()
+        item.setFlags(
+            Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        )
+        locked = isinstance(seg, dict) and seg.get(LOCK_KEY) is True
+        item.setCheckState(Qt.CheckState.Checked if locked else Qt.CheckState.Unchecked)
+        tip = "Tick to keep this leg's traffic and distributions when AIS data are updated."
+        if isinstance(seg, dict) and seg.get(SOURCE_KEY):
+            tip += f"\nTraffic copied from leg {seg.get(SOURCE_KEY)}."
+        item.setToolTip(tip)
+        return item
+
+    def set_traffic_locked(self, segment_id: int | str, locked: bool) -> None:
+        """Store the lock flag and mirror it into the route table."""
+        set_locked(self.omrat.segment_data, str(segment_id), locked)
+        self.sync_lock_column(segment_id)
+
+    def sync_lock_column(self, segment_id: int | str) -> None:
+        """Redraw the lock checkbox of one row from ``segment_data``."""
+        row = self._tangent_row_for_segment(segment_id)
+        if row is None:
+            return
+        table = self.omrat.main_widget.twRouteList
+        seg = (getattr(self.omrat, 'segment_data', None) or {}).get(str(segment_id))
+        self._table_sync_guard = True
+        try:
+            table.setItem(row, 8, self._make_lock_item(seg if isinstance(seg, dict) else None))
+        finally:
+            self._table_sync_guard = False
+
+    def open_copy_traffic_dialog(self) -> None:
+        from omrat_utils import copy_traffic_dialog
+        copy_traffic_dialog.run(self.omrat)
 
     def start_move_tangent(self) -> None:
         """One-click entry point for dragging a tangent line.
@@ -1076,6 +1188,7 @@ class HandleQGISIface:
             # with QGIS's own Move Feature / vertex tools; we catch the
             # edit and snap the line back onto the leg.
             self.tangent_layer.geometryChanged.connect(self._on_tangent_geometry_changed)
+            apply_stored_style(self.omrat, 'tangent', self.tangent_layer)
         self.tangent_layer.startEditing()
 
     def ensure_tangent_fields(self):
@@ -1229,12 +1342,16 @@ class HandleQGISIface:
         if widget is None:
             return None
         table = widget.twRouteList
+        wanted = str(segment_id).strip()
         for row in range(table.rowCount()):
             item = table.item(row, 0)
             if item is None:
                 continue
+            text = item.text().strip()
+            if text == wanted:
+                return row
             try:
-                if int(item.text()) == int(segment_id):
+                if int(text) == int(wanted):
                     return row
             except ValueError:
                 continue
@@ -1375,6 +1492,17 @@ class HandleQGISIface:
                 start_point: QgsPointXY = start_point_geom.asPoint()
                 end_point: QgsPointXY = end_point_geom.asPoint()
                 self.create_offset_lines(start_point, end_point, width / 2, segment_id)
+
+        elif column == 8:  # AIS lock checkbox
+            locked = item.checkState() == Qt.CheckState.Checked
+            if locked != is_locked(self.omrat.segment_data, str(segment_id)):
+                set_locked(self.omrat.segment_data, str(segment_id), locked)
+                self._notify(
+                    self.omrat.tr("Leg {leg} is now {state} for AIS updates.").format(
+                        leg=segment_id, state=self.omrat.tr("locked") if locked else self.omrat.tr("unlocked"),
+                    ),
+                    duration=5,
+                )
 
         elif column == 6:  # Tangent position (%)
             t = fraction_from_percent(item.text())

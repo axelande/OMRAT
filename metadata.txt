@@ -24,7 +24,7 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
-  Version 0.14.3 (2026-09-03) - Made it possible to move the tangent along the leg.
+  Version 0.14.3 (2026-09-03) - Made it possible to move the tangent along the leg and fix saving and copying traffic.
   Version 0.14.2 (2026-09-02) - Improved result presentation and compare presentation.
   Version 0.14.1 (2026-09-02) - Now added tangent layer in QGIS when loading model
   Version 0.14.0 (2026-08-28) - Corrected the crossing and bend collision formulas IWRAP XML export now writes the project's own causation factors, instead of hardcoded constants Documentation reviewed end to end.

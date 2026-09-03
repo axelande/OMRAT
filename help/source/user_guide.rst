@@ -67,6 +67,12 @@ Each segment has:
   directions 1 and 2.  Used by the powered-grounding / allision
   calculations (:math:`N_{II} = P_c Q \cdot m \cdot \exp(-d/(a_i V))`).
 
+Click the **Segment_Id**, **Route_Id** or **Leg_name** column header to
+sort the table by that column; click again to reverse.  Names sort
+naturally, so ``LEG_1_2`` comes before ``LEG_1_10`` and ``LEG_5_12_a``
+before ``LEG_5_12_b``.  The leg selector on the Traffic tab follows the
+same order, and so does the saved project.
+
 Digitising a route
 ------------------
 
@@ -155,6 +161,50 @@ crossing, the sub-legs start at 50 % again.
    discards the raw drag and redraws the line itself; the layer is a
    temporary memory layer that is rebuilt from the project file.
 
+.. _copy-traffic:
+
+Copying traffic between legs and locking it
+-------------------------------------------
+
+When several routes cross each other the validation pass splits them
+into many short sub-legs (``LEG_5_12_a`` ... ``LEG_5_12_d``).  Some of
+those sit right in the crossing, where the AIS sample mixes in ships
+from the other routes.  Rather than accept that sample you can declare
+that a sub-leg carries the same traffic as a clean sibling, and protect
+that choice from the next AIS refresh.
+
+#. Click **Copy traffic...** under the route table.
+#. Pick the **source** leg (only legs that already hold traffic are
+   listed) and one or more **target** legs (Ctrl-click for several).
+#. Leave **Also copy the lateral distributions** ticked to copy the
+   mean / std / weight / uniform / AI parameters and the raw AIS
+   offsets used by the distribution plot.  Untick it to copy only the
+   traffic matrices.
+#. Tick **Swap directions** if the target leg was drawn the opposite
+   way to the source.  Direction 1 and 2 are exchanged and the lateral
+   axis is mirrored (means, samples and uniform bounds change sign),
+   because "left of the leg" flips with the drawing direction.  For
+   sub-legs of the same original leg leave it unticked.
+#. Leave **Lock target legs** ticked (default) and press OK.
+
+Every variable (Frequency, Speed, Draught, heights, beam and the
+Scaling matrix) is copied per direction, direction 1 to direction 1
+and 2 to 2, using the target leg's own direction labels.  If a target
+is already locked you are asked before it is overwritten.
+
+**AIS lock.**  The last column of the route table, **AIS lock**, is a
+checkbox.  A locked leg is skipped by both the per-leg **Update AIS**
+button (you get a message instead) and the global **Update all
+distributions** pass (skipped legs are listed in the message bar).
+The Traffic tab marks locked legs with ``[locked]`` in the leg
+selector.  You can tick or untick the box by hand at any time, for
+example to protect a leg whose matrices you edited manually.  The
+flag and the source leg are saved in the project file.
+
+Locking does not stop the leg's passages from being counted for the
+junction transition matrices; those still come from AIS (or your
+manual edits) as described below.
+
 Junctions, crossings and merging
 --------------------------------
 
@@ -181,6 +231,45 @@ hierarchy.
 
 Saving the route
 ----------------
+
+**File -> Save** writes the whole model back to the ``.omrat`` file it
+was loaded from or last saved to; the file name is shown in the dock
+title.  For a model that has no file yet it behaves like **Save
+as...**, which always asks for a file name (pre-filled with the current
+one, so "save a copy next to it" is a two-click job).  **Clear model**
+forgets the file, so the next Save asks again.
+
+The ``.omrat`` snapshot that **Run Model** writes next to each run is
+read-only on purpose, so it remains a faithful record of that run.  If
+you load such a snapshot and press **Save**, the read-only flag is
+cleared and the snapshot is overwritten; use **Save as...** to keep it
+and continue in a new file.  The suggested name is then the snapshot's
+stem without the run timestamp (``test14_20260827_232733.omrat``
+becomes ``test14.omrat``).
+
+Closing the OMRAT dock with unsaved changes brings up a prompt with
+**Save**, **Save as...**, **Don't save** and **Cancel**.  Cancel, or
+cancelling the file dialog behind Save as, keeps the dock open.  Once
+the dock closes, all OMRAT layers (legs, tangent lines, depths,
+structures, drift corridors and result layers) are removed from the
+QGIS project together with the model; reopen OMRAT and use **Load** to
+continue from the saved file.
+
+Layer styling
+~~~~~~~~~~~~~
+
+OMRAT's layers are memory layers rebuilt from the project file, so a
+QGIS project (``.qgz``) does not keep them.  Instead the QGIS style of
+each layer type is saved *inside* the ``.omrat`` file when you press
+Save and re-applied on Load: legs, the tangent lines, the depth layer
+and the structures.  Change colours, widths or labels in the QGIS
+Layers panel as usual; the style of the first leg (or structure)
+layer is used for all legs (structures).  A leg drawn after Load picks
+up the stored style too.  A style change counts as an unsaved change.
+
+Two limits: the depth layer's automatic colour ramp is re-applied when
+depth intervals are edited, and result layers from Run Model are not
+covered.
 
 The on-canvas leg layers in the QGIS Layers panel are *memory layers*
 and disappear when you close QGIS.  The persistent source of truth is

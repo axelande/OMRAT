@@ -61,6 +61,15 @@ class GatherData:
         self.data['pc'] = copy.deepcopy(self.p.causation_f.data)
         self.data['drift'] = copy.deepcopy(self.p.drift_values)
         self.p.distributions.change_dist_segment(self.p.distributions.last_id)  # Saves the current settings on the leg
+        # Cell edits on the Traffic tab live in the spinboxes until the
+        # user switches leg / direction / variable; flush them so a save
+        # (and the unsaved-changes check) sees the latest values.
+        traffic = getattr(self.p, 'traffic', None)
+        if traffic is not None and hasattr(traffic, 'save'):
+            try:
+                traffic.save()
+            except Exception:  # nosec B110 B112
+                pass
         self.data['traffic_data'] = copy.deepcopy(self.p.traffic_data)
         self.data['segment_data'] = copy.deepcopy(self.p.segment_data)
         for key, item in self.data['segment_data'].items():
@@ -73,6 +82,12 @@ class GatherData:
         self.copy_depths_and_objects()
         # Persist the ship category scheme (types and size intervals) used to build traffic tables
         self.data['ship_categories'] = self.get_ship_categories_for_save()
+        # QGIS styling of the OMRAT layers (legs, tangent, depths, structures).
+        try:
+            from omrat_utils.layer_styles import collect_styles
+            self.data['layer_styles'] = collect_styles(self.p)
+        except Exception:  # nosec B110 B112
+            self.data['layer_styles'] = {}
         # Persist the oil-spill consequence block.  Pulled from the
         # ``Consequence`` handler if the dialogs have been opened, otherwise
         # filled with category-aware defaults so the .omrat round-trips.
@@ -375,6 +390,18 @@ class GatherData:
                                     value=height_value, value_field='Height')
         self.p.load_lines(data)
 
+    def _apply_layer_styles(self, data: dict) -> None:
+        """Re-apply the QGIS styles stored in the project to the layers
+        that were just rebuilt.  Missing block -> OMRAT's coded defaults."""
+        styles = data.get('layer_styles')
+        if not isinstance(styles, dict):
+            return
+        try:
+            from omrat_utils.layer_styles import apply_styles
+            apply_styles(self.p, styles)
+        except Exception as exc:  # nosec B110 B112
+            print(f"Could not apply stored layer styles: {exc}")
+
     def _populate_consequence_and_junctions(self, data: dict) -> None:
         consequence_handler = getattr(self.p, 'consequence', None)
         if consequence_handler is not None:
@@ -398,6 +425,7 @@ class GatherData:
         self.populate_tbl(object_rows, self.p.main_widget.twObjectList)
         self._populate_objects_and_canvas(data, depth_rows, object_rows)
         self._populate_consequence_and_junctions(data)
+        self._apply_layer_styles(data)
 
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.
