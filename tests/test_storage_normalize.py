@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from omrat_utils.storage import Storage
+from omrat_utils.storage import Storage  # noqa: E402  (after sys.path setup)
 
 
 @pytest.fixture
@@ -380,11 +380,11 @@ class TestPublicMethods:
         }
 
         import omrat_utils.storage as storage_mod
-        import omrat_utils.gather_data as gd_mod
 
         class FakeGather:
             def __init__(self, *a, **k):
                 pass
+
             def get_all_for_save(self):
                 return fake_data
 
@@ -461,6 +461,7 @@ class TestPublicMethods:
         class FakeGather:
             def __init__(self, *a, **k):
                 pass
+
             def populate(self, data):
                 populated.append(data)
 
@@ -492,6 +493,7 @@ class TestPublicMethods:
         class FakeGather:
             def __init__(self, *a, **k):
                 pass
+
             def populate(self, data):
                 populated.append(data)
 
@@ -691,9 +693,9 @@ class TestStoreAllPath:
 
 class TestStoreAllReadOnly:
     def test_write_error_returns_empty_and_reports(self, tmp_path, monkeypatch):
-        import stat
         from unittest.mock import MagicMock
         import omrat_utils.storage as storage_mod
+        from tests.readonly_helper import make_read_only, restore_writable
         parent = MagicMock()
         parent.testing = False
         parent.project_path = None
@@ -712,26 +714,28 @@ class TestStoreAllReadOnly:
         monkeypatch.setattr(storage_mod.RootModelSchema, 'model_validate', lambda data: None)
         target = tmp_path / 'snapshot.omrat'
         target.write_text('{}')
-        target.chmod(target.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        make_read_only(target)      # skips as root, where chmod is not enforced
         try:
             assert s.store_all(str(target)) == ''
             assert reported and 'read-only' in reported[0]
             assert parent.project_path is None
             assert target.read_text() == '{}'
         finally:
-            target.chmod(target.stat().st_mode | stat.S_IWUSR)
+            restore_writable(target)
 
     def test_is_writable_path(self, tmp_path):
-        import stat
         assert Storage.is_writable_path(None) is False
         assert Storage.is_writable_path('') is False
         assert Storage.is_writable_path(str(tmp_path / 'new.omrat')) is True
         assert Storage.is_writable_path(str(tmp_path / 'nope' / 'new.omrat')) is False
+        assert Storage.is_writable_path(str(tmp_path)) is False   # a directory, not a file
+
+    def test_is_writable_path_read_only_file(self, tmp_path):
+        from tests.readonly_helper import make_read_only, restore_writable
         ro = tmp_path / 'ro.omrat'
         ro.write_text('{}')
-        ro.chmod(ro.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        make_read_only(ro)          # skips as root, where chmod is not enforced
         try:
             assert Storage.is_writable_path(str(ro)) is False
         finally:
-            ro.chmod(ro.stat().st_mode | stat.S_IWUSR)
-        assert Storage.is_writable_path(str(tmp_path)) is False   # a directory, not a file
+            restore_writable(ro)

@@ -161,14 +161,14 @@ class TestSaveOntoReadOnlySnapshot:
 
     @staticmethod
     def _read_only(path):
-        import stat
-        path.chmod(path.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        # Skips when permissions are not enforced (root in the CI container).
+        from tests.readonly_helper import make_read_only
+        make_read_only(path)
 
     @staticmethod
     def _restore(path):
-        import stat
-        if path.exists():
-            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+        from tests.readonly_helper import restore_writable
+        restore_writable(path)
 
     def test_save_overwrites_read_only_file_without_dialog(self, omrat, monkeypatch, tmp_path):
         import os
