@@ -70,6 +70,7 @@ header sniff and routes it to the right decoder:
 | `*.nm4`, `*.nmea` | (binary NMEA) | `aisdb.decode_msgs()` | ✓ from Type-5 messages |
 | `*.csv`, `*.csv.gz` with `Message_ID` / `Repeat_indicator` columns | aisdb's own CSV dump | `aisdb.decode_msgs()` | ✓ |
 | `*.csv`, `*.csv.gz` without those columns (Marine Cadastre, custom exports) | generic AIS CSV | `aissegments.read_csv_tracks()` + `read_csv_static_records()` | ✓ when static columns are present (Length/Width/Draft/IMO/...) |
+| `*.parquet` (DMA `aisdk` dumps, custom exports) | generic AIS columns (`# Timestamp` / `MMSI` / ... or the CSV aliases) | `aissegments.read_parquet_tracks()` + `read_parquet_static_records()` (needs `pyarrow`) | ✓ when static columns are present (Ship type/A/B/C/D/Draught/...) |
 
 For the **simple-CSV** path (Marine Cadastre and similar), AISsegments
 recognises a wide range of column-name aliases — `BaseDateTime` /
@@ -83,6 +84,24 @@ If the CSV also carries vessel-info columns (Marine Cadastre's
 and `states_YYYY` accordingly.  Length and Width get split half/half
 into AISdb's per-quadrant antenna offsets (`dim_a` = `dim_b` = Length/2
 and `dim_c` = `dim_d` = Width/2 — a centred-antenna approximation).
+
+The **Parquet** path (requires the optional `pyarrow` package) is built
+for the Danish Maritime Authority's monthly `aisdk` dumps but accepts the
+same column aliases as the CSV reader.  **OSGeo4W caveat**: QGIS loads
+its own `arrow.dll` (the `arrow-cpp` package) into the process, and
+Windows resolves DLLs by base name — the installed pyarrow version must
+match OSGeo4W's arrow-cpp version (check `C:\OSGeo4W\etc\setup\installed.db`,
+then e.g. `pip install pyarrow==25.0.0`), otherwise the import fails with
+"DLL load failed".  Differences from the CSV path:
+files are streamed one at a time in name order instead of merged in
+memory (a DMA month is ~135M pings — expect a few GB of RAM per file,
+not tens); rows whose `Type of mobile` is not Class A/B (base stations,
+AtoN) are dropped; DMA's decoded ship-type names (`Cargo`, `Tanker`, ...)
+are mapped back to numeric `type_and_cargo` codes (`Undefined` stays
+NULL); the per-quadrant antenna offsets `A`/`B`/`C`/`D` feed
+`dim_a`–`dim_d` directly (halved Length/Width is the fallback); and
+DMA's day-first `dd/mm/yyyy HH:MM:SS` timestamps are recognised
+alongside ISO 8601 and unix seconds.
 
 If the CSV is bare (just `mmsi`/`time`/`lon`/`lat`/`sog`/`cog`), the
 identity and voyage fields land as NULL placeholders.  Downstream AIS

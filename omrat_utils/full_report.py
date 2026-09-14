@@ -40,12 +40,21 @@ def _powered_section(
     by_obstacle = report.get("by_obstacle", {}) or {}
     by_obstacle_leg = report.get("by_obstacle_leg", {}) or {}
 
-    lines.append(
-        f"- Total: {_fmt(next(iter(totals.values()), 0.0))}"
+    # ``totals`` is ``{'grounding' | 'allision': total, 'cat1': .., 'cat2': ..}``;
+    # the accident total is the entry that is not a category split.
+    total_val = next(
+        (v for k, v in totals.items() if k not in ("cat1", "cat2")), 0.0,
     )
+    lines.append(f"- Total: {_fmt(total_val)}")
+    if "cat1" in totals or "cat2" in totals:
+        lines.append(f"- Category I (obstacle in lane): {_fmt(totals.get('cat1', 0.0))}")
+        lines.append(f"- Category II (missed turn): {_fmt(totals.get('cat2', 0.0))}")
     cf = report.get("causation_factor")
     if cf is not None:
         lines.append(f"- Causation factor: {_fmt(cf, '.4f')}")
+    cf1 = report.get("causation_factor_cat1")
+    if cf1 is not None:
+        lines.append(f"- Causation factor (Cat I): {_fmt(cf1, '.4f')}")
     lines.append("")
 
     # Per-obstacle breakdown.

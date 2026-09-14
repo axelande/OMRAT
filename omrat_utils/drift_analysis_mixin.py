@@ -9,8 +9,8 @@ This mixin owns everything that fires when the user clicks
   direction polygons coloured.
 
 The pure corridor-generation maths lives in
-:class:`compute.drift_corridor.DriftCorridorGenerator` and the QGIS
-task wrapper in :class:`compute.drift_corridor.DriftCorridorTask`.
+:class:`geometries.drift.DriftCorridorGenerator` and the QGIS
+task wrapper in :class:`geometries.drift_corridor_task_v2.DriftCorridorTask`.
 """
 from __future__ import annotations
 
@@ -58,10 +58,8 @@ class DriftAnalysisMixin:
     # ------------------------------------------------------------------
     def run_drift_analysis(self) -> None:
         """Run drift corridor analysis as a background task."""
-        from compute.drift_corridor import (
-            DriftCorridorGenerator,
-            DriftCorridorTask,
-        )
+        from geometries.drift import DriftCorridorGenerator
+        from geometries.drift_corridor_task_v2 import DriftCorridorTask
         try:
             self._clear_drift_corridor_layers()
 

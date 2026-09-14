@@ -34,6 +34,10 @@ class TestCausationFactorDefaults:
         assert d['bend'] == pytest.approx(1.3e-4)
         assert d['grounding'] == pytest.approx(1.6e-4)
         assert d['allision'] == pytest.approx(1.9e-4)
+        # Category I (obstacle already in the lane) -- IWRAP ships the same
+        # figure for both categories.
+        assert d['grounding_cat1'] == pytest.approx(1.6e-4)
+        assert d['allision_cat1'] == pytest.approx(1.9e-4)
 
 
 class TestFieldCoverage:
@@ -64,11 +68,12 @@ class TestFieldCoverage:
 
 class TestSetValuesAndCommitChanges:
     def test_set_values_writes_to_widgets(self, cf):
-        """set_values pushes the 9 values to the corresponding widgets."""
+        """set_values pushes the 11 values to the corresponding widgets."""
         cf.data = dict(
             p_pc=0.1, d_pc=0.2,
             headon=0.3, overtaking=0.4, crossing=0.5,
             merging=0.55, bend=0.6, grounding=0.7, allision=0.8,
+            grounding_cat1=0.75, allision_cat1=0.85,
         )
         cf.set_values()
         assert cf.cfw.lePoweredPc.text() == '0.1'
@@ -80,6 +85,8 @@ class TestSetValuesAndCommitChanges:
         assert cf.cfw.leBendCf.text() == '0.6'
         assert cf.cfw.leGroundingCf.text() == '0.7'
         assert cf.cfw.leAllisionCf.text() == '0.8'
+        assert cf.cfw.leGroundingCat1Cf.text() == '0.75'
+        assert cf.cfw.leAllisionCat1Cf.text() == '0.85'
 
     def test_commit_changes_reads_back_from_widgets(self, cf):
         """Commit reads back the current widget text and overwrites data."""
@@ -92,6 +99,8 @@ class TestSetValuesAndCommitChanges:
         cf.cfw.leBendCf.setText('0.66')
         cf.cfw.leGroundingCf.setText('0.77')
         cf.cfw.leAllisionCf.setText('0.88')
+        cf.cfw.leGroundingCat1Cf.setText('0.777')
+        cf.cfw.leAllisionCat1Cf.setText('0.888')
 
         cf.commit_changes()
         assert cf.data == {
@@ -99,6 +108,7 @@ class TestSetValuesAndCommitChanges:
             'headon': 0.33, 'overtaking': 0.44,
             'crossing': 0.55, 'merging': 0.555, 'bend': 0.66,
             'grounding': 0.77, 'allision': 0.88,
+            'grounding_cat1': 0.777, 'allision_cat1': 0.888,
         }
 
     def test_roundtrip_set_then_commit_preserves_data(self, cf):
@@ -107,7 +117,7 @@ class TestSetValuesAndCommitChanges:
             p_pc=0.00016, d_pc=1.0,
             headon=4.9e-5, overtaking=1.1e-4, crossing=1.3e-4,
             merging=1.3e-4, bend=1.3e-4, grounding=1.6e-4,
-            allision=1.9e-4,
+            allision=1.9e-4, grounding_cat1=1.6e-4, allision_cat1=1.9e-4,
         )
         cf.data = dict(original)
         cf.set_values()

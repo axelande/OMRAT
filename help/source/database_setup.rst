@@ -118,6 +118,12 @@ a header sniff and routes it to the right decoder:
      - generic AIS CSV
      - ``aissegments.read_csv_tracks()`` + ``read_csv_static_records()``
      - ✓ when static columns are present (Length/Width/Draft/IMO/…)
+   * - ``*.parquet`` (DMA ``aisdk`` dumps, custom exports)
+     - generic AIS columns (``# Timestamp`` / ``MMSI`` / … or the CSV
+       aliases)
+     - ``aissegments.read_parquet_tracks()`` +
+       ``read_parquet_static_records()`` (needs ``pyarrow``)
+     - ✓ when static columns are present (Ship type/A/B/C/D/Draught/…)
 
 For the **simple-CSV** path (Marine Cadastre and similar), AISsegments
 recognises a wide range of column-name aliases — ``BaseDateTime`` /
@@ -142,6 +148,41 @@ directly from the AIS Type-5 dimensions (``loa = dim_a + dim_b``,
 ``type_and_cargo`` field.  Air-draught distributions stay empty unless
 you supply a richer vessel registry of your own and reinstate a JOIN in
 ``omrat_utils/handle_ais.py``.
+
+The **Parquet** path (requires the optional ``pyarrow`` package) is
+built for the Danish Maritime Authority's monthly ``aisdk`` dumps but
+accepts the same column aliases as the CSV reader.
+
+.. warning::
+
+   On OSGeo4W/Windows, QGIS loads its own ``arrow.dll`` (the
+   ``arrow-cpp`` package) into the process before any plugin runs, and
+   Windows resolves DLLs by base name — so the installed **pyarrow
+   version must match OSGeo4W's arrow-cpp version** or the import fails
+   with *"DLL load failed: The specified procedure could not be
+   found"*.  Check the bundled version in
+   ``C:\OSGeo4W\etc\setup\installed.db`` (search for ``arrow-cpp``)
+   and install the matching wheel, e.g. ``pip install pyarrow==25.0.0``
+   into the OSGeo4W Python.  The ingestion log shows this exact advice
+   when the mismatch is detected.
+
+Details that differ from the CSV path:
+
+* Files are **streamed one at a time in name order** (chronological for
+  ``*-YYYY-MM`` monthly dumps) instead of merged in memory — a single
+  DMA month is ~135M pings, so a whole year cannot be held at once.
+  Pings are read in compact dtypes; expect a few GB of RAM per month
+  file, not tens.
+* Rows whose ``Type of mobile`` is not Class A or Class B (base
+  stations, AtoN) are dropped.
+* DMA's decoded ship-type *names* (``Cargo``, ``Tanker``, …) are mapped
+  back to numeric AIS ``type_and_cargo`` codes; ``Undefined`` stays
+  NULL and lands in OMRAT's "Other Type" category.
+* The per-quadrant antenna offsets ``A``/``B``/``C``/``D`` are used
+  directly for ``dim_a``–``dim_d`` when present (halved Length/Width is
+  the fallback), and timestamps in DMA's day-first
+  ``dd/mm/yyyy HH:MM:SS`` layout are recognised alongside ISO 8601 and
+  unix seconds.
 
 
 3. Walk the wizard
@@ -170,7 +211,8 @@ wizard…**.  The wizard has five pages:
 
 4. **Ingest AIS data (optional)** — the ingestion page:
 
-   * Pick AIS files (NMEA ``.nm4``, aisdb ``.csv``, gzipped variants).
+   * Pick AIS files (NMEA ``.nm4``, aisdb ``.csv``, gzipped variants,
+     or ``.parquet`` dumps).
    * Set ``min_sed_m`` (default **30 m**) and ``min_svd_kn`` (default
      **0.3 kn**) — these are the OMRAT-tuned TDKC threshold floors.
    * Set the target year and a source label.

@@ -17,7 +17,10 @@ Data model
 legs are skipped by :meth:`omrat_utils.handle_ais.AIS.update_legs` (both
 the bulk and the per-leg button).
 ``segment_data[seg]['traffic_source']``  the leg id the data was copied
-from -- provenance only, nothing reads it.
+from.  :func:`geometries.junctions.linked_partners` reads it: at a
+junction shared by the source and the target the transition matrix
+defaults to 100 % continuation between them (the two sub-legs are one
+route again).
 
 Direction mapping
 -----------------

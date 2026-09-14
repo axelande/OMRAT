@@ -56,6 +56,12 @@ class DB:
                 client_encoding="UTF8",
                 options="-c statement_timeout=" + str(self.time_out) + "000"
             )
+            # Every OMRAT query is a read-only SELECT.  Without autocommit
+            # psycopg2 opens a transaction on the first SELECT and leaves it
+            # idle between clicks; servers with
+            # ``idle_in_transaction_session_timeout`` kill such sessions,
+            # and any failed query poisons the connection until rollback.
+            self.conn.autocommit = True
         except psycopg2.OperationalError as e:
             raise Exception(f"Error connecting to database on '{self.db_host}'. {e!s}")
         except UnicodeDecodeError as e:
@@ -138,20 +144,31 @@ class DB:
         --------
         >>> execute_and_return("SELECT * FROM t WHERE id = %s", params=(123,))
         """
-        c = self.conn.cursor()
         try:
-            c.execute(sql, params)
-            data: list[list[Any]] = c.fetchall()
-            if return_error:
-                return True, data
-            else:
-                return data
-        except Exception as e:
-            self._reconnect()
-            if return_error:
-                return False, [[e]]
-            else:
+            data = self._fetch_all(sql, params)
+        except Exception:
+            # The connection may simply have gone stale while idle (server
+            # or firewall timeout, laptop sleep).  Reconnect and run the
+            # query once more before giving up, so the first click after a
+            # long pause does not fail for no visible reason.
+            try:
+                self._reconnect()
+                data = self._fetch_all(sql, params)
+            except Exception as e:
+                if return_error:
+                    return False, [[e]]
                 return [[False]]
+        if return_error:
+            return True, data
+        return data
+
+    def _fetch_all(self, sql: str | psycopg2.sql.Composable,
+                   params: tuple | list | dict | None) -> list[list[Any]]:
+        if self.conn is None:
+            raise psycopg2.InterfaceError("no database connection")
+        c = self.conn.cursor()
+        c.execute(sql, params)
+        return c.fetchall()
 
     def execute(self, sql: str, commit: bool = True, return_error: bool = False) -> None | tuple[bool, Exception]:
         """Execute the query

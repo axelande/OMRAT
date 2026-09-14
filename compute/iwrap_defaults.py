@@ -22,8 +22,16 @@ IWRAP_PC_DEFAULTS: dict[str, float] = {
     # a distinct entry so a project can calibrate it independently.
     'merging': 1.3e-4,
     'bend': 1.3e-4,
+    # Powered grounding / allision, Category II (missed turn) -- IWRAP
+    # ``p_*_no_turn_causation``.
     'grounding': 1.6e-4,
     'allision': 1.9e-4,
+    # Powered grounding / allision, Category I (obstacle already in the
+    # lane) -- IWRAP ``p_*_causation``.  IWRAP ships the same figure for
+    # both categories, hence the identical defaults; they are separate
+    # keys so a project can calibrate them independently.
+    'grounding_cat1': 1.6e-4,
+    'allision_cat1': 1.9e-4,
 }
 
 

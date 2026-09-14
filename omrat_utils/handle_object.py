@@ -562,7 +562,7 @@ class OObject:
             wkt_item = self.p.main_widget.twDepthList.item(row, 2)
             depth_item = self.p.main_widget.twDepthList.item(row, 1)
             if wkt_item is not None:
-                wkt = wkt_item.text()
+                wkt = wkt_item.data(_USER_ROLE) or wkt_item.text()
                 depth_val = float(depth_item.text()) if depth_item else 10.0
                 self._add_depth_feature(self.deph_id, depth_val, wkt, row)
             # Remove the temporary drawing layer from the project

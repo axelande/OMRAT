@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from geometries.drift.generator import DriftCorridorGenerator
+from geometries.drift.generator import DriftCorridorGenerator  # noqa: E402
 
 
 @pytest.fixture
@@ -265,7 +265,7 @@ class TestGetLegsFromRoutes:
 
         legs = gen._get_legs_from_routes()
         assert len(legs) == 2
-        assert all(isinstance(l, LineString) for l in legs)
+        assert all(isinstance(leg, LineString) for leg in legs)
 
     def test_null_geometry_skipped(self, gen):
         geom = MagicMock()
@@ -326,7 +326,7 @@ class TestGetDepthObstacles:
     def test_multipolygon_split(self, gen):
         tbl = _fake_table([
             ['m', '5', 'MULTIPOLYGON(((0 0, 1 0, 1 1, 0 1, 0 0)),'
-                      '((2 2, 3 2, 3 3, 2 3, 2 2)))'],
+                       '((2 2, 3 2, 3 3, 2 3, 2 2)))'],
         ])
         gen.plugin.main_widget.twDepthList = tbl
         # Depth=5 + bin_width=0 = 5. Threshold=10.
@@ -385,7 +385,7 @@ class TestGetStructureObstacles:
     def test_multipolygon_split(self, gen):
         tbl = _fake_table([
             ['m', '5', 'MULTIPOLYGON(((0 0, 1 0, 1 1, 0 1, 0 0)),'
-                      '((2 2, 3 2, 3 3, 2 3, 2 2)))'],
+                       '((2 2, 3 2, 3 3, 2 3, 2 2)))'],
         ])
         gen.plugin.main_widget.twObjectList = tbl
         out = gen._get_structure_obstacles(height_threshold=10.0)
@@ -486,3 +486,81 @@ class TestPrecollectData:
         assert 'anchor_zone' in d
         assert d['lateral_std'] == 50.0
         assert d['drift_speed'] == pytest.approx(1.94 * 1852 / 3600)
+
+
+# ---------------------------------------------------------------------------
+# UserRole WKT (tables show "Polygon(N pts)" and keep the WKT in UserRole)
+# ---------------------------------------------------------------------------
+
+def _fake_table_with_roles(rows: list[list[str | tuple[str, str] | None]]):
+    """Like ``_fake_table`` but a ``(display, user_role)`` tuple builds a cell
+    whose ``text()`` is the summary and ``data(256)`` the full payload --
+    mirroring ``omrat_utils.handle_object._wkt_table_item``."""
+    tbl = MagicMock()
+    tbl.rowCount.return_value = len(rows)
+
+    def item(r, c):
+        if r >= len(rows) or c >= len(rows[r]):
+            return None
+        cell = rows[r][c]
+        if cell is None:
+            return None
+        if isinstance(cell, tuple):
+            display, payload = cell
+            return SimpleNamespace(text=lambda d=display: d,
+                                   data=lambda role, p=payload: p if role == 256 else None)
+        return SimpleNamespace(text=lambda t=cell: t)
+
+    tbl.item.side_effect = item
+    return tbl
+
+
+class TestUserRoleWkt:
+    SQUARE = 'POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))'
+
+    def test_depth_obstacle_read_from_user_role(self, gen):
+        """Regression: the summary text is not WKT; the real geometry lives in
+        UserRole.  Before the fix every row failed to parse and the corridors
+        were never clipped at shallow water."""
+        tbl = _fake_table_with_roles([
+            ['d1', '5', ('Polygon(5 pts)', self.SQUARE)],
+        ])
+        gen.plugin.main_widget.twDepthList = tbl
+        out = gen._get_depth_obstacles(depth_threshold=10.0)
+        assert len(out) == 1
+        poly, depth = out[0]
+        assert poly.area == pytest.approx(1.0)
+        assert depth == 5.0
+
+    def test_structure_obstacle_read_from_user_role(self, gen):
+        tbl = _fake_table_with_roles([
+            ['s1', '5', ('Polygon(5 pts)', self.SQUARE)],
+        ])
+        gen.plugin.main_widget.twObjectList = tbl
+        out = gen._get_structure_obstacles(height_threshold=10.0)
+        assert len(out) == 1
+        assert out[0][0].area == pytest.approx(1.0)
+
+    def test_anchor_zone_read_from_user_role(self, gen):
+        tbl = _fake_table_with_roles([
+            ['d1', '5', ('Polygon(5 pts)', self.SQUARE)],
+        ])
+        gen.plugin.main_widget.twDepthList = tbl
+        zone = gen._get_anchor_zone(anchor_threshold=10.0)
+        assert zone.area == pytest.approx(1.0)
+
+    def test_plain_text_cell_still_works(self, gen):
+        """Cells without a UserRole payload (short WKT, legacy items) keep
+        reading the display text."""
+        tbl = _fake_table_with_roles([
+            ['d1', '5', self.SQUARE],
+        ])
+        gen.plugin.main_widget.twDepthList = tbl
+        assert len(gen._get_depth_obstacles(depth_threshold=10.0)) == 1
+
+    def test_empty_user_role_falls_back_to_text(self, gen):
+        tbl = _fake_table_with_roles([
+            ['d1', '5', (self.SQUARE, '')],
+        ])
+        gen.plugin.main_widget.twDepthList = tbl
+        assert len(gen._get_depth_obstacles(depth_threshold=10.0)) == 1

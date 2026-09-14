@@ -1,13 +1,14 @@
 .. _code-flow-powered:
 
-===================================================
-Code Flow: Powered Grounding & Allision (Cat II)
-===================================================
+=======================================================
+Code Flow: Powered Grounding & Allision (Cat I + II)
+=======================================================
 
-This chapter walks OMRAT's IWRAP **Category II** powered-grounding and
-powered-allision calculations one function at a time, in the order the
-calls fire when a user presses **Run model**.  Pair it with
-:ref:`powered`, which derives the Cat II formula
+This chapter walks OMRAT's IWRAP **Category I** and **Category II**
+powered-grounding and powered-allision calculations one function at a
+time, in the order the calls fire when a user presses **Run model**.
+Pair it with :ref:`powered`, which derives the Cat I formula
+:math:`N_I = P_c Q \cdot \mathrm{mass}` and the Cat II formula
 :math:`N_{II} = P_c Q \cdot \mathrm{mass} \cdot
 \exp(-d_\mathrm{mean}/(a_i V))` and explains the shadow model.
 
@@ -278,20 +279,61 @@ list of ``computation`` dicts:
                                        'obs', 'kind'}},
        'ray_data', 'offsets', 'pdf_vals',
        'start', 'end',
+       'cat1': {'origin', 'along_dir', 'length',
+                'summaries': {(kind, obs_id): {...same keys...}},
+                'ray_data'},
    }
 
-One entry per ``(leg, dir)`` that has obstacle hits.
+One entry per ``(leg, dir)`` that has obstacle hits in *either*
+category.  ``summaries`` / ``ray_data`` are the Cat II result (rays
+from the turning point onwards); the ``cat1`` block holds the Cat I
+result (rays along the leg itself).
 
 Setup per ``(leg, dir)``:
 
 * ``u, n, L = _leg_vectors(start, end)`` -- unit leg direction, unit
   perpendicular, leg length.
+* ``origin = start if dir_idx == 0 else end`` -- the waypoint the
+  ships come from; Cat I rays start here.
 * ``turn_pt = end if dir_idx == 0 else start`` -- ships fail to turn
-  at the downstream waypoint, so the ray origin is the turning point.
-* ``ext_dir = u`` for direction 0, ``-u`` for direction 1.
+  at the downstream waypoint, so the Cat II ray origin is the turning
+  point.
+* ``ext_dir = u`` for direction 0, ``-u`` for direction 1 (shared by
+  both categories).
 
 Then ``_compute_cat2_with_shadows(turn_pt, ext_dir, n, d['mean'],
-d['std'], d['ai'], d['speed_ms'], all_obstacles)`` does the work.
+d['std'], d['ai'], d['speed_ms'], all_obstacles)`` and
+``_compute_cat1_in_lane(origin, ext_dir, n, d['mean'], d['std'], L,
+all_obstacles)`` do the work.
+
+
+:func:`_compute_cat1_in_lane`
+=============================
+
+.. container:: source-code-ref pipeline
+
+   **Source:** ``geometries/get_powered_overlap.py`` -- `_compute_cat1_in_lane() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py>`__
+
+The Category-I counterpart of the function below.  It reuses
+:func:`_build_hit_matrix` and :func:`_accumulate_obs_hits` with two
+differences:
+
+* The rays start at the *origin* waypoint and ``max_range`` is the
+  **leg length**, so only obstacles between the two waypoints are
+  hit.  Anything past the turning point is left to Cat II, which
+  keeps the two categories disjoint.
+* :func:`_build_cat1_summaries` sets ``p_approx = p_integral = mass``:
+  there is no ``exp(-d / (a_i V))`` factor because the ship is already
+  on a collision course (Hansen eq. 4.15).  ``mean_dist`` is still
+  recorded (distance from the origin waypoint) for the visualiser.
+
+In :mod:`compute.powered_model`, :func:`_iter_hit_probs` yields
+``('cat2', key, mass * exp(-d_mean / recovery))`` for the Cat II
+summaries and ``('cat1', key, mass)`` for the Cat I ones; the caller
+multiplies by ``Q`` and by the category's causation factor
+(``pc['grounding']`` / ``pc['allision']`` for Cat II,
+``pc['grounding_cat1']`` / ``pc['allision_cat1']`` for Cat I) and the
+``_ContribAccumulator`` keeps the split under ``by_category``.
 
 
 :func:`_compute_cat2_with_shadows`

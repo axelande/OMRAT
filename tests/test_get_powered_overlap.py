@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -22,11 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from geometries.get_powered_overlap import (
+from geometries.get_powered_overlap import (  # noqa: E402
     SimpleProjector, _parse_point, _project_wkt_geom,
     _weighted_avg_speed_knots, _leg_vectors, _make_band_polygon,
     _get_all_coords, _ray_hit_distance, _project_to_local,
     _plot_geom, _powered_na, _compute_cat2_with_shadows,
+    _compute_cat1_in_lane, _total_p_for_comp,
     _extract_edges_local,
     _build_legs_and_obstacles, _run_all_computations,
     find_closest_computation_index,
@@ -338,6 +338,114 @@ class TestComputeCat2WithShadows:
 
 
 # ---------------------------------------------------------------------------
+# _compute_cat1_in_lane
+# ---------------------------------------------------------------------------
+
+class TestComputeCat1InLane:
+    """Cat I: obstacles between the two waypoints, no distance decay.
+
+    The leg runs from (0, 0) east to (L, 0); rays start at the origin
+    waypoint and are clipped at ``L`` so anything past the far waypoint is
+    left to Cat II.
+    """
+
+    SIGMA = 10.0
+    L = 1000.0
+
+    def _run(self, obstacles, mean=0.0, sigma=SIGMA, length=L):
+        return _compute_cat1_in_lane(
+            origin=np.array([0.0, 0.0]),
+            along_dir=np.array([1.0, 0.0]),
+            perp=np.array([0.0, 1.0]),
+            mean_offset=mean, sigma=sigma, leg_length=length,
+            obstacles=obstacles,
+        )
+
+    def test_no_obstacles_returns_empty(self):
+        summaries, ray_data, offsets, pdf_vals = self._run([])
+        assert summaries == {}
+        assert len(ray_data) == N_RAYS
+        assert all(r[2] is None and r[3] is None for r in ray_data)
+
+    def test_zero_length_leg_returns_empty(self):
+        obs = {'id': 'a', 'geom': box(400, -5, 600, 15)}
+        summaries, ray_data, _, _ = self._run([(obs, 'depth')], length=0.0)
+        assert summaries == {}
+        assert len(ray_data) == N_RAYS
+
+    def test_in_lane_box_mass_matches_normal_cdf(self):
+        """Hansen eq. 4.15: mass = Phi((z_max-mu)/s) - Phi((z_min-mu)/s)."""
+        from scipy.stats import norm
+        obs = {'id': 'a', 'geom': box(400, -5, 600, 15)}   # lateral [-5, 15]
+        summaries, _, _, _ = self._run([(obs, 'depth')])
+        key = ('depth', 'a')
+        assert key in summaries
+        expected = norm.cdf(15, 0, self.SIGMA) - norm.cdf(-5, 0, self.SIGMA)
+        assert summaries[key]['mass'] == pytest.approx(expected, abs=0.01)
+        # Every ray meets the near face at along = 400 m.
+        assert summaries[key]['mean_dist'] == pytest.approx(400.0)
+        # No decay: p_approx is the mass itself.
+        assert summaries[key]['p_approx'] == pytest.approx(summaries[key]['mass'])
+        assert summaries[key]['p_integral'] == pytest.approx(summaries[key]['mass'])
+
+    def test_obstacle_beyond_far_waypoint_is_ignored(self):
+        """Past the turning point is Cat II territory."""
+        obs = {'id': 'far', 'geom': box(1100, -50, 1200, 50)}
+        summaries, ray_data, _, _ = self._run([(obs, 'object')])
+        assert summaries == {}
+        assert all(r[2] is None for r in ray_data)
+
+    def test_obstacle_straddling_far_waypoint_counts(self):
+        """The near face is inside the leg, so the ship reaches it before
+        the turning point."""
+        obs = {'id': 'edge', 'geom': box(900, -50, 1200, 50)}
+        summaries, _, _, _ = self._run([(obs, 'object')])
+        key = ('object', 'edge')
+        assert key in summaries
+        assert summaries[key]['mass'] > 0.99
+        assert summaries[key]['mean_dist'] == pytest.approx(900.0)
+
+    def test_nearer_obstacle_shadows_farther_one(self):
+        from scipy.stats import norm
+        near = {'id': 'near', 'geom': box(300, -5, 350, 5)}
+        far = {'id': 'far', 'geom': box(600, -50, 650, 50)}
+        summaries, _, _, _ = self._run([(near, 'depth'), (far, 'depth')])
+        m_near = summaries[('depth', 'near')]['mass']
+        m_far = summaries[('depth', 'far')]['mass']
+        assert m_near == pytest.approx(
+            norm.cdf(5, 0, self.SIGMA) - norm.cdf(-5, 0, self.SIGMA), abs=0.01)
+        # The wide far box catches everything the near one did not.
+        assert m_near + m_far == pytest.approx(1.0, abs=0.01)
+        assert m_far == pytest.approx(1.0 - m_near, abs=0.01)
+
+    def test_mean_offset_shifts_the_distribution(self):
+        """An obstacle on the starboard side only catches ships whose
+        lateral mean puts them there."""
+        obs = {'id': 'a', 'geom': box(400, 20, 600, 60)}
+        centred, _, _, _ = self._run([(obs, 'depth')], mean=0.0)
+        shifted, _, _, _ = self._run([(obs, 'depth')], mean=40.0)
+        assert centred.get(('depth', 'a'), {}).get('mass', 0.0) < 0.05
+        assert shifted[('depth', 'a')]['mass'] > 0.9
+
+
+# ---------------------------------------------------------------------------
+# _total_p_for_comp
+# ---------------------------------------------------------------------------
+
+class TestTotalPForComp:
+    def test_sums_cat2_and_cat1(self):
+        comp = {
+            'summaries': {('depth', 'a'): {'p_approx': 0.2}},
+            'cat1': {'summaries': {('depth', 'b'): {'p_approx': 0.3}}},
+        }
+        assert _total_p_for_comp(comp) == pytest.approx(0.5)
+
+    def test_missing_cat1_block_is_fine(self):
+        comp = {'summaries': {('depth', 'a'): {'p_approx': 0.2}}}
+        assert _total_p_for_comp(comp) == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
 # _build_legs_and_obstacles
 # ---------------------------------------------------------------------------
 
@@ -599,6 +707,57 @@ class TestRunAllComputations:
         assert len(comps) == 1
         assert comps[0]['seg_id'] == '1'
         assert comps[0]['dir_idx'] == 0
+        # Past the turning point: Cat II only, the Cat I block is empty.
+        assert ('object', 'obs') in comps[0]['summaries']
+        assert comps[0]['cat1']['summaries'] == {}
+        assert comps[0]['cat1']['length'] == pytest.approx(100.0)
+
+    def _east_leg(self, length=1000.0):
+        return {
+            '1': {
+                'start': np.array([0.0, 0.0]),
+                'end': np.array([length, 0.0]),
+                'name': 'L1',
+                'start_wkt': '0 0',
+                'end_wkt': f'{length} 0',
+                'dirs': [
+                    {'name': 'E', 'speed_ms': 5.0, 'ai': 180,
+                     'mean': 0, 'std': 10, 'speed_kn': 10},
+                    {'name': 'W', 'speed_ms': 5.0, 'ai': 180,
+                     'mean': 0, 'std': 10, 'speed_kn': 10},
+                ],
+            },
+        }
+
+    def test_in_lane_obstacle_produces_cat1_only_computation(self):
+        """An obstacle between the waypoints is behind both turning points,
+        so Cat II sees nothing and only the Cat I block is populated."""
+        obs = {'id': 'mid', 'geom': box(400, -50, 600, 50)}
+        comps = _run_all_computations(self._east_leg(), [(obs, 'depth')])
+        assert len(comps) == 2
+        for comp in comps:
+            assert comp['summaries'] == {}
+            assert ('depth', 'mid') in comp['cat1']['summaries']
+            assert comp['cat1']['summaries'][('depth', 'mid')]['mass'] > 0.99
+        # Direction 0 sails east from the start, direction 1 west from the end.
+        east, west = sorted(comps, key=lambda c: c['dir_idx'])
+        assert east['cat1']['summaries'][('depth', 'mid')]['mean_dist'] == pytest.approx(400.0)
+        assert west['cat1']['summaries'][('depth', 'mid')]['mean_dist'] == pytest.approx(400.0)
+        np.testing.assert_allclose(east['cat1']['origin'], [0.0, 0.0])
+        np.testing.assert_allclose(west['cat1']['origin'], [1000.0, 0.0])
+        np.testing.assert_allclose(east['cat1']['along_dir'], east['ext_dir'])
+
+    def test_cat1_and_cat2_never_share_an_obstacle_on_one_direction(self):
+        """The leg [0, L] and the extension (L, inf) are disjoint, so an
+        obstacle counted by Cat I for a direction is not counted again by
+        Cat II for the same direction."""
+        mid = {'id': 'mid', 'geom': box(400, -50, 600, 50)}
+        past = {'id': 'past', 'geom': box(1100, -50, 1300, 50)}
+        comps = _run_all_computations(self._east_leg(), [(mid, 'depth'), (past, 'depth')])
+        east = next(c for c in comps if c['dir_idx'] == 0)
+        assert set(east['summaries']) == {('depth', 'past')}
+        # The in-lane box shadows the whole distribution along the leg.
+        assert set(east['cat1']['summaries']) == {('depth', 'mid')}
 
 
 # ---------------------------------------------------------------------------

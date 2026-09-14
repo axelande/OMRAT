@@ -36,6 +36,7 @@ from qgis.core import (
     QgsRectangle,
 )
 
+from geometries.junctions import linked_partners
 from omrat_utils.widgets import NoWheelDoubleSpinBox
 
 if TYPE_CHECKING:
@@ -250,7 +251,14 @@ class JunctionMatrixDialog(QDialog):
         handler = self.omrat.junctions
         jid = self._junction_ids[index]
         j = handler.registry[jid]
-        self.lbl_source.setText(f"Source: {j.source}")
+        src_txt = f"Source: {j.source}"
+        links = linked_partners(j, getattr(self.omrat, 'segment_data', None) or {})
+        if links:
+            pairs = sorted({tuple(sorted((a, b))) for a, ps in links.items() for b in ps})
+            src_txt += "   (linked traffic: " + ", ".join(
+                f"{self._name_for(a)} <-> {self._name_for(b)}" for a, b in pairs
+            ) + ")"
+        self.lbl_source.setText(src_txt)
         leg_ids = sorted(j.legs.keys())
         populate_table(self.table, leg_ids, j.transitions, self._name_for)
 

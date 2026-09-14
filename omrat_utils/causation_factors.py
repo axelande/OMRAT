@@ -27,9 +27,12 @@ class CausationFactors:
         self.data['merging'] = float(self.cfw.leMergingCf.text())
         self.data['bend'] = float(self.cfw.leBendCf.text())
 
-        # Grounding and allision causation factors
+        # Grounding and allision causation factors (Cat II = missed turn,
+        # Cat I = obstacle already in the lane)
         self.data['grounding'] = float(self.cfw.leGroundingCf.text())
         self.data['allision'] = float(self.cfw.leAllisionCf.text())
+        self.data['grounding_cat1'] = float(self.cfw.leGroundingCat1Cf.text())
+        self.data['allision_cat1'] = float(self.cfw.leAllisionCat1Cf.text())
 
     def set_values(self):
         # Powered and drifting causation factors
@@ -46,6 +49,8 @@ class CausationFactors:
         # Grounding and allision causation factors
         self.cfw.leGroundingCf.setText(f"{self.data['grounding']}")
         self.cfw.leAllisionCf.setText(f"{self.data['allision']}")
+        self.cfw.leGroundingCat1Cf.setText(f"{self.data['grounding_cat1']}")
+        self.cfw.leAllisionCat1Cf.setText(f"{self.data['allision_cat1']}")
 
     def run(self):
         self.cfw.show()

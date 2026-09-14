@@ -102,7 +102,8 @@ def _pc_section(pc: dict[str, Any]) -> list[str]:
     lines = ["### Causation factors (pc)"]
     lines.append("| Factor | This run | IWRAP default | Δ |")
     lines.append("|---|---:|---:|---:|")
-    order = ['headon', 'overtaking', 'crossing', 'bend', 'grounding', 'allision', 'p_pc', 'd_pc']
+    order = ['headon', 'overtaking', 'crossing', 'merging', 'bend',
+             'grounding', 'allision', 'grounding_cat1', 'allision_cat1', 'p_pc', 'd_pc']
     any_delta = False
     for key in order:
         cur = pc.get(key, IWRAP_PC_DEFAULTS.get(key))

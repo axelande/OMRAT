@@ -16,6 +16,13 @@ The matrix has three possible provenances:
 * ``"user"`` — entered or edited via the matrix UI; the validation pass
   preserves these and never overwrites them.
 
+Legs whose traffic was *copied* from one another (``segment_data[leg]
+['traffic_source']``, see :mod:`omrat_utils.copy_traffic`) are treated as
+one continuous route: at any junction they share, the ``"ais"`` and
+``"geometry"`` defaults give them a 100 % continuation row instead of the
+deflection heuristic or the (polluted) AIS count.  ``"user"`` rows still
+win.
+
 This module is QGIS-free so the matrix-derivation logic can be tested
 under the standalone interpreter.
 """
@@ -248,6 +255,44 @@ def _leg_outward_bearing(
     return None
 
 
+def traffic_link_root(segment_data: dict[str, Any], leg_id: str) -> str:
+    """Follow ``traffic_source`` back to the leg the traffic came from.
+
+    A leg without a source is its own root.  A cycle (``a`` copied from
+    ``b`` and ``b`` from ``a``) resolves to the smallest id in the cycle
+    so every member gets the same root.
+    """
+    chain = [str(leg_id)]
+    while True:
+        seg = (segment_data or {}).get(chain[-1])
+        src = seg.get('traffic_source') if isinstance(seg, dict) else None
+        if not src:
+            return chain[-1]
+        src = str(src)
+        if src in chain:
+            return min(chain[chain.index(src):])
+        chain.append(src)
+
+
+def linked_partners(
+    junction: Junction, segment_data: dict[str, Any],
+) -> dict[str, list[str]]:
+    """Per leg at ``junction``: the *other* legs there sharing its traffic root.
+
+    Only legs with at least one partner appear in the result.  Two
+    sub-legs of a split route whose traffic was copied one from the
+    other (or both from a common parent) are partners; unrelated legs
+    are not.
+    """
+    roots = {leg: traffic_link_root(segment_data, leg) for leg in junction.legs}
+    out: dict[str, list[str]] = {}
+    for leg, root in roots.items():
+        partners = sorted(o for o, r in roots.items() if o != leg and r == root)
+        if partners:
+            out[leg] = partners
+    return out
+
+
 def compute_geometric_transition_matrix(
     junction: Junction,
     segment_data: dict[str, Any],
@@ -264,6 +309,10 @@ def compute_geometric_transition_matrix(
     Special case: if the junction has exactly two legs, the result is
     the trivial 100/100 matrix regardless of the bearings — there's
     only one place to go.
+
+    Linked traffic (:func:`linked_partners`): an inbound leg with exactly
+    one partner at the junction sends 100 % to it; with several partners
+    the deflection heuristic runs over the partners only.
     """
     bearings: dict[str, float] = {}
     for leg_id in junction.legs:
@@ -281,11 +330,16 @@ def compute_geometric_transition_matrix(
         matrix[a] = {b: 1.0}
         matrix[b] = {a: 1.0}
         return matrix
+    links = linked_partners(junction, segment_data)
     for in_leg in leg_ids:
+        targets = [p for p in links.get(in_leg, []) if p in bearings]
+        if len(targets) == 1:
+            matrix[in_leg] = {targets[0]: 1.0}
+            continue
+        if not targets:
+            targets = [o for o in leg_ids if o != in_leg]
         scores: dict[str, float] = {}
-        for out_leg in leg_ids:
-            if out_leg == in_leg:
-                continue
+        for out_leg in targets:
             d = deflection_deg(bearings[in_leg], bearings[out_leg])
             scores[out_leg] = exp(-d / max(deflection_scale_deg, 1e-3))
         total = sum(scores.values())
@@ -358,6 +412,10 @@ def apply_ais_defaults(
     raw transition-count tables emitted by :func:`AIS.junction_counts`
     (or whichever AIS query the host plugin uses).  Junctions without
     any rows are left untouched so the geometric default still applies.
+
+    Legs with linked traffic (:func:`linked_partners`) keep their
+    100 % continuation row whatever the counts say -- the AIS sample at
+    that junction is exactly what the traffic copy was meant to replace.
     """
     updated = 0
     for jid, j in junctions.items():
@@ -380,6 +438,9 @@ def apply_ais_defaults(
                 merged[leg_id] = row_ais
             else:
                 merged[leg_id] = geo.get(leg_id, {})
+        for leg_id in linked_partners(j, segment_data):
+            if leg_id in geo:
+                merged[leg_id] = geo[leg_id]
         j.transitions = merged
         j.source = 'ais'
         updated += 1

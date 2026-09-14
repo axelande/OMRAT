@@ -113,11 +113,15 @@ def get_pl(
         f" ST_Project({anchor}, {half}, {azimuth} + radians(270))::geometry))"
     )
     ok, res = cast(tuple[bool, list[list[Any]]], db.execute_and_return(sql, return_error=True))
-    if ok:
-        pl: str = res[0][0]
-    else:
-        pl = ""
-    return pl
+    if not ok:
+        # Surface the real database error.  Returning '' here used to make
+        # the follow-up passage query fail with a misleading PostGIS
+        # "parse error - invalid geometry" on an empty string.
+        raise RuntimeError(f"Could not build the AIS passage line: {res[0][0]}")
+    pl = res[0][0] if res and res[0] else None
+    if not pl:
+        raise RuntimeError("Could not build the AIS passage line: database returned no geometry")
+    return str(pl)
 
 
 def get_type(toc: float) -> int:
@@ -636,14 +640,14 @@ class AIS:
         end_p = wkt.loads(f"Point ({leg_d['End_Point']})")
         if not isinstance(start_p, Point) or not isinstance(end_p, Point):
             return {}
-        pl = get_pl(
-            self.db,
-            lat1=start_p.y, lat2=end_p.y,
-            lon1=start_p.x, lon2=end_p.x,
-            l_width=float(leg_d.get('Width', 5000)),
-            tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
-        )
         try:
+            pl = get_pl(
+                self.db,
+                lat1=start_p.y, lat2=end_p.y,
+                lon1=start_p.x, lon2=end_p.x,
+                l_width=float(leg_d.get('Width', 5000)),
+                tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
+            )
             self.run_sql(pl)
         except Exception:
             return {}

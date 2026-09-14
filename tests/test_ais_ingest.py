@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -528,6 +528,11 @@ class TestFormatDetection:
             g.write("mmsi,time,lon,lat,sog,cog\n100,0,12,55,10,90\n")
         assert IngestionPipeline._detect_format(f) == "simple_csv"
 
+    def test_parquet_extension(self, tmp_path):
+        f = tmp_path / "aisdk-kattegat-2025-01.parquet"
+        f.write_bytes(b"PAR1")  # extension is enough; no header sniff
+        assert IngestionPipeline._detect_format(f) == "parquet"
+
 
 class TestFilterToYear:
     def _make_track(self, timestamps):
@@ -864,7 +869,6 @@ class TestBatchLoadCaches:
 class TestWatermark:
     def test_filter_passes_track_through_when_no_watermark(self):
         from aissegments import Track
-        import numpy as np
         track = Track.from_arrays(
             mmsi=1, t=[0, 60, 120], lon=[0, 0.001, 0.002],
             lat=[55, 55, 55], sog=[10, 10, 10], cog=[90, 90, 90],
@@ -959,7 +963,7 @@ class TestRunDefensive:
         pipeline = _pipeline()
         with patch.object(pipeline, "_ingest_simple_csv_files") as mock_simple, \
              patch.object(pipeline, "_ingest_aisdb_files") as mock_aisdb, \
-             patch("omrat_utils.handle_ais_ingest.Migrator") as mock_migrator:
+             patch("omrat_utils.handle_ais_ingest.Migrator"):
             pipeline.run([f], year=2021, create_indexes_after=False)
         mock_simple.assert_called_once()
         mock_aisdb.assert_not_called()
@@ -976,7 +980,7 @@ class TestRunDefensive:
         pipeline = _pipeline()
         with patch.object(pipeline, "_ingest_simple_csv_files") as mock_simple, \
              patch.object(pipeline, "_ingest_aisdb_files") as mock_aisdb, \
-             patch("omrat_utils.handle_ais_ingest.Migrator") as mock_migrator:
+             patch("omrat_utils.handle_ais_ingest.Migrator"):
             pipeline.run([f], year=2021, create_indexes_after=False)
         mock_aisdb.assert_called_once()
         mock_simple.assert_not_called()
@@ -1057,6 +1061,176 @@ class TestRunDefensive:
 
         assert len(captured) == 1
         assert captured[0] is None  # _ensure_static handles None correctly
+
+
+# ---------------------------------------------------------------------------
+# Parquet path (DMA aisdk dumps) — streamed, per-file ingestion
+# ---------------------------------------------------------------------------
+
+
+# pyarrow is optional (and on OSGeo4W its version must match the bundled
+# arrow-cpp).  Skip only the parquet tests when it is unusable, not the
+# whole module.
+try:
+    import pyarrow as pa
+except ImportError:  # pragma: no cover - depends on environment
+    pa = None
+
+T2025 = datetime(2025, 6, 1, 12, 0, tzinfo=timezone.utc).timestamp()
+
+
+def _write_dma_parquet(path, *, mmsi=219000001, t0=T2025, n=3, extra_cols=None):
+    """Write a minimal DMA-aisdk-layout parquet file with one vessel track."""
+    import pyarrow.parquet as pq
+
+    stamps = [
+        datetime.fromtimestamp(t0 + i * 60, tz=timezone.utc).strftime(
+            "%d/%m/%Y %H:%M:%S"
+        )
+        for i in range(n)
+    ]
+    cols = {
+        "# Timestamp": stamps,
+        "Type of mobile": ["Class A"] * n,
+        "MMSI": [mmsi] * n,
+        "Latitude": [55.0 + i * 0.001 for i in range(n)],
+        "Longitude": [12.0 + i * 0.001 for i in range(n)],
+        "SOG": [10.0] * n,
+        "COG": [45.0] * n,
+        "Ship type": ["Tanker"] * n,
+        "IMO": ["9999999"] * n,
+        "Draught": [7.5] * n,
+        "A": [90.0] * n,
+        "B": [20.0] * n,
+        "C": [8.0] * n,
+        "D": [8.0] * n,
+    }
+    if extra_cols:
+        cols.update(extra_cols)
+    pq.write_table(pa.table(cols), path)
+    return path
+
+
+@pytest.mark.skipif(pa is None, reason="pyarrow not importable")
+class TestParquetIngestion:
+    def test_run_dispatches_parquet_to_correct_path(self, tmp_path):
+        from unittest.mock import patch
+
+        f = _write_dma_parquet(tmp_path / "aisdk-2025-01.parquet")
+        pipeline = _pipeline()
+        with patch.object(pipeline, "_ingest_parquet_files") as mock_parquet, \
+             patch.object(pipeline, "_ingest_simple_csv_files") as mock_simple, \
+             patch.object(pipeline, "_ingest_aisdb_files") as mock_aisdb, \
+             patch("omrat_utils.handle_ais_ingest.Migrator"):
+            pipeline.run([f], year=2025, create_indexes_after=False)
+        mock_parquet.assert_called_once()
+        mock_simple.assert_not_called()
+        mock_aisdb.assert_not_called()
+
+    def test_parquet_statics_flow_into_ingest_one_track(self, tmp_path):
+        """DMA statics (TOC-mapped ship type, A/B/C/D dims) must reach
+        ``_ingest_one_track``, and the track must be year-filtered."""
+        from unittest.mock import patch
+
+        f = _write_dma_parquet(tmp_path / "aisdk-2025-01.parquet")
+        captured: list[tuple] = []
+
+        def capture(cur, track, rec, year, result):
+            captured.append((track, rec))
+
+        pipeline = _pipeline()
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        with patch("omrat_utils.handle_ais_ingest.psycopg2.connect") as mock_connect, \
+             patch.object(pipeline, "_ingest_one_track", side_effect=capture):
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = IngestionResult()
+            pipeline._ingest_parquet_files(
+                [f], year=2025, result=result, incremental=True,
+            )
+
+        assert len(captured) == 1
+        track, rec = captured[0]
+        assert track.mmsi == 219000001
+        assert len(track) == 3
+        assert rec is not None
+        assert rec["ship_type"] == 80  # "Tanker" mapped to TOC
+        assert rec["imo"] == 9999999
+        assert rec["draught"] == 7.5
+        assert (rec["dim_bow"], rec["dim_stern"]) == (90.0, 20.0)
+        assert not result.errors
+
+    def test_parquet_track_outside_year_is_skipped(self, tmp_path):
+        from unittest.mock import patch
+
+        f = _write_dma_parquet(tmp_path / "aisdk-2025-01.parquet")
+        pipeline = _pipeline()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = MagicMock()
+        with patch("omrat_utils.handle_ais_ingest.psycopg2.connect") as mock_connect, \
+             patch.object(pipeline, "_ingest_one_track") as mock_ingest:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = IngestionResult()
+            pipeline._ingest_parquet_files(
+                [f], year=2021, result=result, incremental=True,
+            )
+        mock_ingest.assert_not_called()
+        assert result.n_tracks_skipped_year == 1
+
+    def test_parquet_watermark_advances_across_files(self, tmp_path):
+        """A vessel present in two files must not re-ingest pings the first
+        file already covered — the in-memory watermark advances per track."""
+        from unittest.mock import patch
+
+        f1 = _write_dma_parquet(
+            tmp_path / "aisdk-2025-01.parquet", t0=T2025, n=3,
+        )
+        # Second file overlaps the first by two pings (t0 + 60, t0 + 120).
+        f2 = _write_dma_parquet(
+            tmp_path / "aisdk-2025-02.parquet", t0=T2025 + 60, n=4,
+        )
+        captured: list = []
+
+        def capture(cur, track, rec, year, result):
+            captured.append(track)
+
+        pipeline = _pipeline()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = MagicMock()
+        with patch("omrat_utils.handle_ais_ingest.psycopg2.connect") as mock_connect, \
+             patch.object(pipeline, "_ingest_one_track", side_effect=capture), \
+             patch.object(pipeline, "_load_watermarks", return_value={}):
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = IngestionResult()
+            # Deliberately passed in reverse order: the path must sort them.
+            pipeline._ingest_parquet_files(
+                [f2, f1], year=2025, result=result, incremental=True,
+            )
+
+        assert len(captured) == 2
+        first, second = captured
+        assert first.t[-1] == T2025 + 120  # file 1 ingested first (sorted)
+        # File 2's overlapping pings were watermark-filtered away.
+        assert second.t[0] > first.t[-1]
+        assert len(second) == 2
+
+    def test_parquet_reader_errors_are_recorded_not_fatal(self, tmp_path):
+        from unittest.mock import patch
+
+        bad = tmp_path / "broken.parquet"
+        bad.write_bytes(b"this is not a parquet file")
+        pipeline = _pipeline()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = MagicMock()
+        with patch("omrat_utils.handle_ais_ingest.psycopg2.connect") as mock_connect:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            result = IngestionResult()
+            pipeline._ingest_parquet_files(
+                [bad], year=2025, result=result, incremental=True,
+            )
+        assert any("broken.parquet" in e for e in result.errors)
+        assert result.n_tracks == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1548,6 +1722,7 @@ class TestTruncateYear:
         cur = MagicMock()
         # Every TRUNCATE raises UndefinedTable; SAVEPOINT/RELEASE/ROLLBACK
         # and the final watermark DELETE all succeed (return None).
+
         def execute(sql, *args, **kwargs):
             if "TRUNCATE" in sql:
                 raise psycopg2.errors.UndefinedTable("nope")

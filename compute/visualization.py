@@ -95,11 +95,12 @@ class VisualizationMixin:
         dialog.exec()
 
     def run_powered_allision_visualization(self, data: dict[str, Any]) -> None:
-        """Show an interactive Cat II powered allision visualisation dialog.
+        """Show an interactive powered allision visualisation dialog.
 
         Uses the same ``ShowGeomRes`` dialog as the drifting visualisation but
-        populates it with shadow-aware Cat II ray-casting plots showing how
-        ships that miss a turn may hit objects (structures).
+        populates it with shadow-aware ray-casting plots: Cat I rays along the
+        leg for structures inside the lane and Cat II rays from the turning
+        point for ships that miss a turn.
         """
         if not data.get('traffic_data') or not data.get('segment_data'):
             return
@@ -116,11 +117,12 @@ class VisualizationMixin:
         dialog.exec()
 
     def run_powered_grounding_visualization(self, data: dict[str, Any]) -> None:
-        """Show an interactive Cat II powered grounding visualisation dialog.
+        """Show an interactive powered grounding visualisation dialog.
 
         Uses the same ``ShowGeomRes`` dialog as the drifting visualisation but
-        populates it with shadow-aware Cat II ray-casting plots showing how
-        ships that miss a turn may run aground on shallow depth areas.
+        populates it with shadow-aware ray-casting plots: Cat I rays along the
+        leg for shallow areas inside the lane and Cat II rays from the turning
+        point for ships that miss a turn.
         """
         if not data.get('traffic_data') or not data.get('segment_data'):
             return

@@ -313,6 +313,14 @@ class IngestionPipeline:
           Downstream AIS queries derive loa/beam directly from
           ``dim_a + dim_b`` / ``dim_c + dim_d`` (AIS Type-5) and use the
           ``type_and_cargo`` column for ship-type classification.
+        - ``*.parquet`` (e.g. the Danish Maritime Authority's ``aisdk``
+          dumps) → streamed through ``aissegments.read_parquet_tracks`` /
+          ``read_parquet_static_records`` (requires the optional
+          ``pyarrow`` dependency).  Files are processed one at a time in
+          name order (chronological for monthly dumps) so a year of
+          100M-ping months never has to fit in memory at once; statics
+          (ship type, dimensions, draught, IMO) are fully populated when
+          the file carries them.
 
         Parameters
         ----------
@@ -355,6 +363,7 @@ class IngestionPipeline:
 
         aisdb_files: list[Path] = []
         simple_csv_files: list[Path] = []
+        parquet_files: list[Path] = []
         for f in files:
             try:
                 fmt = self._detect_format(f)
@@ -363,16 +372,21 @@ class IngestionPipeline:
                 continue
             if fmt == "simple_csv":
                 simple_csv_files.append(f)
+            elif fmt == "parquet":
+                parquet_files.append(f)
             else:
                 aisdb_files.append(f)
         self._log(
-            f"Format split: {len(aisdb_files)} aisdb, {len(simple_csv_files)} simple-CSV"
+            f"Format split: {len(aisdb_files)} aisdb, "
+            f"{len(simple_csv_files)} simple-CSV, {len(parquet_files)} Parquet"
         )
 
         if aisdb_files:
             self._ingest_aisdb_files(aisdb_files, year, source_tag, result, incremental)
         if simple_csv_files and not self._is_cancelled():
             self._ingest_simple_csv_files(simple_csv_files, year, result, incremental)
+        if parquet_files and not self._is_cancelled():
+            self._ingest_parquet_files(parquet_files, year, result, incremental)
 
         if self._is_cancelled():
             result.cancelled = True
@@ -395,10 +409,12 @@ class IngestionPipeline:
 
     @staticmethod
     def _detect_format(path: Path) -> str:
-        """Return ``"aisdb_nmea"``, ``"aisdb_csv"``, or ``"simple_csv"``."""
+        """Return ``"aisdb_nmea"``, ``"aisdb_csv"``, ``"simple_csv"``, or ``"parquet"``."""
         suffix = path.suffix.lower()
         if suffix in (".nm4", ".nmea"):
             return "aisdb_nmea"
+        if suffix == ".parquet":
+            return "parquet"
         # Pull the header line.
         if suffix == ".gz":
             import gzip
@@ -609,6 +625,148 @@ class IngestionPipeline:
                             f" — {result.n_segments} segments so far"
                         )
                         conn.commit()
+            conn.commit()
+
+    def _ingest_parquet_files(
+        self,
+        files: list[Path],
+        year: int,
+        result: IngestionResult,
+        incremental: bool,
+    ) -> None:
+        """Streamed ingestion for Parquet AIS dumps (DMA ``aisdk`` and similar).
+
+        Unlike the simple-CSV path, files are NOT merged into one in-memory
+        track set — a single DMA month is ~135M pings, and a year of them
+        cannot fit in RAM.  Instead files are processed one at a time in
+        sorted name order (chronological for ``*-YYYY-MM`` monthly dumps),
+        and the in-memory watermark map is advanced after every track so a
+        vessel spanning several files is still deduplicated within the run.
+        A track crossing a file boundary is TDKC-compressed per file — the
+        same behaviour as month-partitioned legacy data.
+        """
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError as e:
+            # Two distinct failure modes deserve distinct advice: pyarrow
+            # absent entirely, vs the OSGeo4W DLL clash — QGIS loads its own
+            # arrow.dll (the arrow-cpp package) into the process, and a
+            # pyarrow wheel of a different major version then fails with
+            # "DLL load failed".  The fix is to install the pyarrow release
+            # matching OSGeo4W's arrow-cpp version (see installed.db).
+            if "DLL load failed" in str(e):
+                msg = (
+                    "pyarrow could not be loaded inside QGIS: its version must "
+                    "match the arrow-cpp package bundled with OSGeo4W (check "
+                    r"'grep arrow C:\OSGeo4W\etc\setup\installed.db' and "
+                    "pip install pyarrow==<that version>). "
+                    f"Original error: {e}"
+                )
+            else:
+                msg = (
+                    "Parquet ingestion requires the optional pyarrow package: "
+                    "pip install pyarrow (into the QGIS/OSGeo4W Python, matching "
+                    f"the OSGeo4W arrow-cpp version). Original error: {e}"
+                )
+            result.errors.append(msg)
+            self._log(msg)
+            return
+        from aissegments import read_parquet_static_records, read_parquet_tracks
+
+        files = sorted(files)
+        self._log(
+            f"Pre-scanning {len(files)} Parquet file(s) for static info "
+            f"(full file pass; a 100M-ping month takes a few minutes)..."
+        )
+        statics_by_mmsi: dict[int, dict[str, Any]] = {}
+        for idx, f in enumerate(files, start=1):
+            if self._is_cancelled():
+                return
+            t_pre = time_mod.monotonic()
+            try:
+                file_statics = read_parquet_static_records(f)
+            except Exception as e:
+                result.errors.append(f"read_parquet_static_records {f.name}: {e}")
+                self._log(
+                    f"  [{idx}/{len(files)}] static-scan {f.name} FAILED: {e}"
+                )
+                continue
+            self._log(
+                f"  [{idx}/{len(files)}] static-scan {f.name}: "
+                f"{len(file_statics)} MMSIs in {time_mod.monotonic() - t_pre:.1f}s"
+            )
+            for mmsi, rec in file_statics.items():
+                prev = statics_by_mmsi.get(mmsi)
+                if prev is None or rec.get("time", 0) >= prev.get("time", 0):
+                    statics_by_mmsi[mmsi] = rec
+        if statics_by_mmsi:
+            self._log(
+                f"Extracted static records for {len(statics_by_mmsi)} MMSIs "
+                f"from Parquet input"
+            )
+
+        with psycopg2.connect(**self.profile.to_dsn()) as conn:
+            with conn.cursor() as cur:
+                self._load_latest_statics(cur, self.profile.schema, year)
+                self._load_latest_states(cur, self.profile.schema, year)
+                self._log(
+                    f"Dedup caches: {len(self._statics_cache)} statics, "
+                    f"{len(self._states_cache)} states pre-loaded"
+                )
+                watermarks = self._load_watermarks(cur) if incremental else {}
+                if incremental:
+                    self._log(
+                        f"Incremental mode: {len(watermarks)} MMSIs have a watermark"
+                    )
+                n_in_batch = 0
+                n_visited = 0
+                t_loop = time_mod.monotonic()
+                for idx, f in enumerate(files, start=1):
+                    if self._is_cancelled():
+                        conn.commit()
+                        return
+                    self._log(
+                        f"  [{idx}/{len(files)}] reading {f.name} "
+                        f"(streamed; track count unknown up front)..."
+                    )
+                    try:
+                        track_iter = read_parquet_tracks(f)
+                        for track in track_iter:
+                            if self._is_cancelled():
+                                conn.commit()
+                                return
+                            n_visited += 1
+                            in_year = self._filter_to_year(track, year)
+                            if in_year is None:
+                                result.n_tracks_skipped_year += 1
+                                continue
+                            in_year = self._filter_after_watermark(
+                                in_year, watermarks.get(int(track.mmsi))
+                            )
+                            if in_year is None:
+                                result.n_tracks_skipped_watermark += 1
+                                continue
+                            rec = statics_by_mmsi.get(int(track.mmsi))
+                            self._ingest_one_track(cur, in_year, rec, year, result)
+                            if incremental:
+                                # Advance the in-memory watermark so this
+                                # vessel's track in the NEXT file starts
+                                # where this one ended (the DB watermark is
+                                # only re-read at run start).
+                                watermarks[int(track.mmsi)] = float(in_year.t[-1])
+                            n_in_batch += 1
+                            if n_in_batch % 200 == 0:
+                                self._log(
+                                    f"Progress: "
+                                    f"{self._format_progress(n_visited, 0, t_loop)}"
+                                    f" — {result.n_segments} segments so far"
+                                )
+                                conn.commit()
+                    except Exception as e:
+                        result.errors.append(f"read_parquet_tracks {f.name}: {e}")
+                        self._log(f"  [{idx}/{len(files)}] read {f.name} FAILED: {e}")
+                        continue
+                    conn.commit()
             conn.commit()
 
     @staticmethod

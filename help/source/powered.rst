@@ -101,6 +101,48 @@ position. The causation factor :math:`P_C = 1.6 \times 10^{-4}` means
 that roughly 1 in 6,000 geometric encounter candidates results in an
 actual accident.
 
+Implementation: in-lane ray casting
+-----------------------------------
+
+OMRAT evaluates the integral numerically with the same ray caster as
+Category II (see :ref:`shadow-ray-casting` below), so shadowing and
+arbitrary polygon shapes come for free:
+
+1. For each leg and direction, cast ``N_RAYS = 500`` rays *parallel to
+   the leg* from the waypoint the ships come from, each carrying the
+   mass :math:`m_i = f(z_i)\,\Delta z` of its lateral offset.
+2. Clip every ray at the leg length.  An obstacle past the far
+   waypoint is Category II territory for this leg; an obstacle whose
+   near face lies inside the leg is hit before the turn and counts
+   here.  The two categories therefore never score the same water
+   twice.
+3. Keep the first obstacle each ray hits.  A shoal lying behind
+   another shoal along the leg only receives the rays the nearer one
+   let through.
+4. Per obstacle, ``mass`` is the sum of intercepted ray masses and
+
+   .. math::
+
+      N_I = P_{C,I} \times Q \times \text{mass}
+
+   with **no distance term** -- the ship is already on a collision
+   course, and neither its speed nor the position-check interval
+   enters.  For grounding the draught filter (depth :math:`\le` ship
+   draught) and for allision the clearance check (ship height
+   :math:`\ge` structure height) apply exactly as for Category II.
+
+.. container:: source-code-ref
+
+   ``geometries/get_powered_overlap.py`` -- `_compute_cat1_in_lane() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py>`__ |
+   ``compute/powered_model.py`` -- `_iter_hit_probs() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py>`__
+
+.. tip::
+
+   A wind farm placed *alongside* a straight leg, well inside its
+   lateral spread, is a pure Category-I case: no bend is involved, so
+   the Category-II model sees nothing.  Check the ``Category I`` line
+   in the results Markdown when comparing with IWRAP.
+
 
 Category II: Missed Turn at Bend
 ================================
@@ -112,14 +154,16 @@ original course.
 
 .. note::
 
-   This is the **only** powered category OMRAT computes;
-   ``run_powered_grounding_model`` and
-   ``run_powered_allision_model`` are both Category II.  It is why
-   ``pc['grounding']`` and ``pc['allision']`` map to IWRAP's
-   ``p_*_no_turn_causation`` attributes rather than the plain ones --
-   see :ref:`iwrap-causation-mapping`.  An IWRAP model of the same
-   waterway will report a higher powered total than OMRAT because it
-   adds the Category-I contribution on top.
+   ``run_powered_grounding_model`` and ``run_powered_allision_model``
+   compute **both** categories and report their sum as the powered
+   total; the split is kept in the report under ``totals['cat1']`` /
+   ``totals['cat2']`` and in the Markdown results file.  Each category
+   has its own causation factor: ``pc['grounding']`` /
+   ``pc['allision']`` are the Category-II factors (IWRAP
+   ``p_*_no_turn_causation``) and ``pc['grounding_cat1']`` /
+   ``pc['allision_cat1']`` the Category-I ones (IWRAP
+   ``p_*_causation``) -- see :ref:`iwrap-causation-mapping`.  Before
+   v0.15.0 OMRAT computed Category II only.
 
 The probability decreases **exponentially** with distance from the bend,
 because the crew has more opportunities to detect and correct the course
@@ -202,6 +246,8 @@ waypoint should change course, but some fraction of ships (weighted by
 crew's progressive awareness: at each position check interval, they have
 a chance to notice they are off course and correct.
 
+
+.. _shadow-ray-casting:
 
 Shadow-Aware Ray Casting
 ========================
@@ -384,14 +430,16 @@ Grounding Pipeline
       c. Run _run_all_computations():
          For each (leg, direction):
            - Determine turning point and extension direction
-           - Cast 500 rays across lateral distribution
+           - Cat II: cast 500 rays from the turning point onwards
+           - Cat I:  cast 500 rays along the leg, clipped at its length
            - First-hit logic assigns each ray to nearest obstacle
-           - Accumulate mass and mean distance per obstacle
+           - Accumulate mass and mean distance per obstacle and category
    4. For each (leg, direction, LOA class, ship type):
       a. Get ship frequency Q, speed V, draught T, check interval ai
       b. Look up shadow results for closest draught bracket
       c. For each obstacle hit:
-         total += Pc * Q * mass * exp(-d_mean / (ai * V))
+         Cat II: total += Pc_II * Q * mass * exp(-d_mean / (ai * V))
+         Cat I:  total += Pc_I  * Q * mass
 
 Allision Pipeline
 ------------------
@@ -402,11 +450,13 @@ The allision pipeline is simpler because no draft filtering is needed:
 
    1. Build equirectangular projector from first segment
    2. Build projected obstacle list (all objects, ignore depths)
-   3. Run _run_all_computations() once for all obstacles
+   3. Run _run_all_computations() once for all obstacles (Cat I + II)
    4. For each (leg, direction, LOA class, ship type):
-      a. Get ship frequency Q, speed V, check interval ai
-      b. For each obstacle hit:
-         total += Pc * Q * mass * exp(-d_mean / (ai * V))
+      a. Get ship frequency Q, speed V, check interval ai, ship height
+      b. Skip obstacles the ship clears (ship height < structure height)
+      c. For each obstacle hit:
+         Cat II: total += Pc_II * Q * mass * exp(-d_mean / (ai * V))
+         Cat I:  total += Pc_I  * Q * mass
 
 Per-Ship-Type Parameters
 -------------------------
@@ -574,12 +624,18 @@ Causation Factor Summary
    * - Accident Type
      - Default :math:`P_C`
      - Source
-   * - Powered grounding
+   * - Powered grounding, Cat II (``grounding``)
      - :math:`1.6 \times 10^{-4}`
      - IALA / Fujii
-   * - Powered allision
+   * - Powered grounding, Cat I (``grounding_cat1``)
+     - :math:`1.6 \times 10^{-4}`
+     - IALA (same figure as Cat II)
+   * - Powered allision, Cat II (``allision``)
      - :math:`1.9 \times 10^{-4}`
      - Fujii et al. 1974
+   * - Powered allision, Cat I (``allision_cat1``)
+     - :math:`1.9 \times 10^{-4}`
+     - IALA (same figure as Cat II)
    * - Drifting (all types)
      - :math:`1.0`
      - N/A (powerless)

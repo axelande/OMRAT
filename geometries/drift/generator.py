@@ -22,6 +22,36 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 
+# Qt.UserRole -- the depth / structure tables display a compact WKT summary
+# ("Polygon(1234 pts)") and keep the full geometry text in this role (see
+# ``omrat_utils.handle_object._wkt_table_item``).  The literal is used so this
+# module stays importable without the QGIS bindings.
+_WKT_USER_ROLE = 256
+
+
+def _item_wkt(item) -> str | None:
+    """Return the full WKT stored on a table cell.
+
+    Prefers the UserRole payload (full geometry) and falls back to the
+    display text for plain items or the lightweight table stubs used in
+    tests.  Returns ``None`` when the cell is empty.
+    """
+    if item is None:
+        return None
+    wkt = None
+    get_data = getattr(item, 'data', None)
+    if callable(get_data):
+        try:
+            wkt = get_data(_WKT_USER_ROLE)
+        except Exception:  # nosec B110 B112
+            wkt = None
+    if not isinstance(wkt, str) or not wkt.strip():
+        wkt = item.text()
+    if wkt is None or not wkt.strip():
+        return None
+    return wkt
+
+
 def _expand_poly_geoms(geom, value: float) -> list:
     if isinstance(geom, Polygon):
         return [(geom, value)]
@@ -188,11 +218,11 @@ class DriftCorridorGenerator:
         depth = self._parse_depth_value(depth_item.text().strip(), bin_width)
         if depth is None:
             return None, None
-        wkt_item = table.item(row, 2)
-        if wkt_item is None or not (wkt_item.text() or '').strip():
+        wkt = _item_wkt(table.item(row, 2))
+        if wkt is None:
             return None, None
         from shapely import wkt as shapely_wkt
-        return depth, shapely_wkt.loads(wkt_item.text())
+        return depth, shapely_wkt.loads(wkt)
 
     def _unpack_data(self, depth_threshold: float, height_threshold: float) -> tuple:
         if self._precollected_data is not None:
@@ -327,10 +357,10 @@ class DriftCorridorGenerator:
                 height = float(height_item.text())
                 if height > height_threshold:
                     continue
-                wkt_item = table.item(row, 2)
-                if wkt_item is None:
+                wkt = _item_wkt(table.item(row, 2))
+                if wkt is None:
                     continue
-                obstacles.extend(_expand_poly_geoms(shapely_wkt.loads(wkt_item.text()), height))
+                obstacles.extend(_expand_poly_geoms(shapely_wkt.loads(wkt), height))
             except Exception as e:
                 QgsMessageLog.logMessage(f"Error parsing structure row {row}: {e}", "OMRAT", Qgis.MessageLevel.Warning)
         return obstacles

@@ -1,18 +1,35 @@
 """Powered grounding and allision model calculations.
 
-Extracted from run_calculations.py -- Category II IWRAP models where ships
-fail to turn at a bend and continue straight, using shadow-aware ray casting.
+Extracted from run_calculations.py -- IWRAP Category I and Category II
+powered models, both evaluated with shadow-aware ray casting:
+
+* **Category I** (in-lane): the obstacle lies between the leg's two
+  waypoints inside the lateral spread.  ``N_I = Pc_I * Q * mass`` where
+  ``mass`` is the fraction of the lateral distribution the obstacle
+  intercepts along the leg (Hansen eq. 4.15).  No distance decay.
+* **Category II** (missed turn): ships fail to turn at the leg's end and
+  continue straight.  ``N_II = Pc_II * Q * mass * exp(-d_mean / (ai * V))``
+  (Hansen eq. 4.16-4.17).
+
+The two categories cover disjoint stretches of water (the leg itself vs.
+the extension past the turning point), so their sum never double counts.
+Each has its own causation factor: ``pc['grounding_cat1']`` /
+``pc['allision_cat1']`` for Category I and ``pc['grounding']`` /
+``pc['allision']`` for Category II.
 """
 
 from numpy import exp
-from typing import Any
+from typing import Any, Iterator
 
+from compute.iwrap_defaults import IWRAP_PC_DEFAULTS
 from geometries.get_powered_overlap import (
     SimpleProjector as _PoweredProjector,
     _build_legs_and_obstacles,
     _parse_point,
     _run_all_computations,
 )
+
+CATEGORIES: tuple[str, str] = ('cat1', 'cat2')
 
 
 def _depth_bin_key(draught: float, unique_depths: list[float]) -> float | None:
@@ -46,6 +63,94 @@ def _extract_nonneg(array, row_i: int, col_j: int, default: float) -> float:
     return default
 
 
+def _iter_hit_probs(comp: dict, recovery: float) -> Iterator[tuple[str, tuple, float]]:
+    """Yield ``(category, (kind, obs_id), p_hit)`` for every obstacle *comp* hit.
+
+    * ``'cat2'``: ``p_hit = mass * exp(-d_mean / recovery)`` -- skipped when
+      the recovery distance ``ai * V`` is not positive.
+    * ``'cat1'``: ``p_hit = mass`` -- the ship is already on course for the
+      obstacle, so there is no distance term.
+    """
+    for obs_key, s in comp["summaries"].items():
+        mass, d_mean = s["mass"], s["mean_dist"]
+        if mass <= 0 or d_mean <= 0 or recovery <= 0:
+            continue
+        yield 'cat2', obs_key, mass * exp(-d_mean / recovery)
+    for obs_key, s in ((comp.get("cat1") or {}).get("summaries") or {}).items():
+        mass = s["mass"]
+        if mass <= 0:
+            continue
+        yield 'cat1', obs_key, mass
+
+
+class _ContribAccumulator:
+    """Per-obstacle / per-leg / per-cell / per-category running totals.
+
+    ``by_obstacle``, ``by_obstacle_leg`` and ``by_cell`` sum both
+    categories (they feed the result layers and the consequence
+    module); ``by_category`` keeps the Cat I / Cat II split for the
+    report and the IWRAP comparison.
+    """
+
+    def __init__(self) -> None:
+        self.total = 0.0
+        self.by_obstacle: dict[str, float] = {}
+        self.by_obstacle_leg: dict[str, dict[str, float]] = {}
+        self.by_cell: dict[str, float] = {}
+        self.by_category: dict[str, dict[str, Any]] = {
+            cat: {'total': 0.0, 'by_obstacle': {}} for cat in CATEGORIES
+        }
+
+    def add(self, category: str, c: float, obs_id: Any, dir_key: str, cell_key: str) -> None:
+        self.total += c
+        k = str(obs_id)
+        self.by_obstacle[k] = self.by_obstacle.get(k, 0.0) + c
+        leg_map = self.by_obstacle_leg.setdefault(k, {})
+        leg_map[dir_key] = leg_map.get(dir_key, 0.0) + c
+        self.by_cell[cell_key] = self.by_cell.get(cell_key, 0.0) + c
+        cat = self.by_category[category]
+        cat['total'] += c
+        cat['by_obstacle'][k] = cat['by_obstacle'].get(k, 0.0) + c
+
+    def report(self, total_key: str, pc_cat2: float, pc_cat1: float) -> dict[str, Any]:
+        return {
+            'totals': {
+                total_key: float(self.total),
+                'cat1': float(self.by_category['cat1']['total']),
+                'cat2': float(self.by_category['cat2']['total']),
+            },
+            'by_obstacle': self.by_obstacle,
+            'by_obstacle_leg': self.by_obstacle_leg,
+            'by_cell': self.by_cell,
+            'by_category': self.by_category,
+            'causation_factor': pc_cat2,
+            'causation_factor_cat1': pc_cat1,
+        }
+
+
+def _empty_report(total_key: str) -> dict[str, Any]:
+    return {
+        'totals': {total_key: 0.0, 'cat1': 0.0, 'cat2': 0.0},
+        'by_obstacle': {}, 'by_obstacle_leg': {}, 'by_cell': {},
+        'by_category': {cat: {'total': 0.0, 'by_obstacle': {}} for cat in CATEGORIES},
+    }
+
+
+def _pc_pair(pc_vals: dict, kind: str) -> tuple[float, float]:
+    """``(Cat II factor, Cat I factor)`` for ``kind`` in ``('grounding', 'allision')``.
+
+    Category II keeps its historical keys (``grounding`` with the legacy
+    ``p_pc`` alias, ``allision``); Category I reads ``<kind>_cat1`` and
+    falls back to the IWRAP default when the project has no such key.
+    """
+    if kind == 'grounding':
+        pc_cat2 = float(pc_vals.get('grounding', pc_vals.get('p_pc', IWRAP_PC_DEFAULTS['grounding'])))
+    else:
+        pc_cat2 = float(pc_vals.get('allision', IWRAP_PC_DEFAULTS['allision']))
+    pc_cat1 = float(pc_vals.get(f'{kind}_cat1', IWRAP_PC_DEFAULTS[f'{kind}_cat1']))
+    return pc_cat2, pc_cat1
+
+
 class PoweredModelMixin:
     """Mixin providing powered grounding and allision model methods.
 
@@ -57,10 +162,7 @@ class PoweredModelMixin:
     # Grounding helpers
 
     def _emit_empty_grounding(self, total: float) -> float:
-        self.powered_grounding_report = {
-            'totals': {'grounding': 0.0}, 'by_obstacle': {},
-            'by_obstacle_leg': {}, 'by_cell': {},
-        }
+        self.powered_grounding_report = _empty_report('grounding')
         try:
             self.p.main_widget.LEPPoweredGrounding.setText(f"{total:.3e}")
         except Exception:  # nosec B110 B112
@@ -122,12 +224,11 @@ class PoweredModelMixin:
 
     def _sum_grounding_contribs(
         self, traffic_data: dict, segment_data: dict,
-        bin_results: dict, unique_depths: list[float], pc_grounding: float,
-    ) -> tuple[float, dict, dict, dict]:
-        total = 0.0
-        by_obstacle: dict[str, float] = {}
-        by_obstacle_leg: dict[str, dict[str, float]] = {}
-        by_cell: dict[str, float] = {}
+        bin_results: dict, unique_depths: list[float],
+        pc_grounding: float, pc_grounding_cat1: float,
+    ) -> _ContribAccumulator:
+        pc_by_cat = {'cat2': pc_grounding, 'cat1': pc_grounding_cat1}
+        acc = _ContribAccumulator()
         for leg_key, leg_dirs in traffic_data.items():
             seg_info = segment_data.get(leg_key, {})
             ai_per_dir = [float(seg_info.get('ai1', 180.0)), float(seg_info.get('ai2', 180.0))]
@@ -151,33 +252,19 @@ class PoweredModelMixin:
                         for comp in bin_results.get(_depth_bin_key(draught, unique_depths), []):
                             if comp["seg_id"] != leg_key or comp["dir_idx"] != dir_idx:
                                 continue
-                            for (_, obs_id), s in comp["summaries"].items():
-                                mass, d_mean = s["mass"], s["mean_dist"]
-                                recovery = ai * speed_ms
-                                if mass <= 0 or d_mean <= 0 or recovery <= 0:
-                                    continue
-                                c = pc_grounding * q * mass * exp(-d_mean / recovery)
-                                total += c
-                                k = str(obs_id)
-                                by_obstacle[k] = by_obstacle.get(k, 0.0) + c
-                                _leg_map = by_obstacle_leg.setdefault(k, {})
-                                dir_key = f"{leg_key}:{dir_idx}"
-                                _leg_map[dir_key] = _leg_map.get(dir_key, 0.0) + c
-                                ck = f"{loa_i}_{type_j}"
-                                by_cell[ck] = by_cell.get(ck, 0.0) + c
-        return total, by_obstacle, by_obstacle_leg, by_cell
+                            dir_key = f"{leg_key}:{dir_idx}"
+                            cell_key = f"{loa_i}_{type_j}"
+                            for category, (_, obs_id), p_hit in _iter_hit_probs(comp, ai * speed_ms):
+                                acc.add(category, pc_by_cat[category] * q * p_hit,
+                                        obs_id, dir_key, cell_key)
+        return acc
 
     def _finalize_grounding(
-        self, total: float, by_obstacle: dict, by_obstacle_leg: dict,
-        by_cell: dict, pc_grounding: float, segment_data: dict,
+        self, acc: _ContribAccumulator, pc_grounding: float,
+        pc_grounding_cat1: float, segment_data: dict,
     ) -> None:
-        self.powered_grounding_report = {
-            'totals': {'grounding': float(total)},
-            'by_obstacle': by_obstacle,
-            'by_obstacle_leg': by_obstacle_leg,
-            'by_cell': by_cell,
-            'causation_factor': pc_grounding,
-        }
+        total = acc.total
+        self.powered_grounding_report = acc.report('grounding', pc_grounding, pc_grounding_cat1)
         try:
             from geometries.result_layers import create_powered_grounding_layer
             depths_meta = (
@@ -200,10 +287,7 @@ class PoweredModelMixin:
     # Allision helpers
 
     def _emit_empty_allision(self, total: float) -> float:
-        self.powered_allision_report = {
-            'totals': {'allision': 0.0}, 'by_obstacle': {},
-            'by_obstacle_leg': {}, 'by_cell': {},
-        }
+        self.powered_allision_report = _empty_report('allision')
         try:
             self.p.main_widget.LEPPoweredAllision.setText(f"{total:.3e}")
         except Exception:  # nosec B110 B112
@@ -222,12 +306,10 @@ class PoweredModelMixin:
 
     def _sum_allision_contribs(
         self, computations: list, traffic_data: dict,
-        obj_heights: dict, pc_allision: float,
-    ) -> tuple[float, dict, dict, dict]:
-        total = 0.0
-        by_obstacle: dict[str, float] = {}
-        by_obstacle_leg: dict[str, dict[str, float]] = {}
-        by_cell: dict[str, float] = {}
+        obj_heights: dict, pc_allision: float, pc_allision_cat1: float,
+    ) -> _ContribAccumulator:
+        pc_by_cat = {'cat2': pc_allision, 'cat1': pc_allision_cat1}
+        acc = _ContribAccumulator()
         for comp in computations:
             seg_id, dir_idx = comp["seg_id"], comp["dir_idx"]
             ai = comp["dir_info"]["ai"]
@@ -251,35 +333,24 @@ class PoweredModelMixin:
                         continue
                     speed_ms = _extract_positive(spd_arr, loa_i, type_j, 10.0) * 1852.0 / 3600.0
                     ship_h = _extract_nonneg(hgt_arr, loa_i, type_j, 0.0)
-                    for (kind, obs_id), s in comp["summaries"].items():
-                        mass, d_mean = s["mass"], s["mean_dist"]
-                        recovery = ai * speed_ms
-                        if mass <= 0 or d_mean <= 0 or recovery <= 0:
-                            continue
+                    dir_key = f"{seg_id}:{dir_idx}"
+                    cell_key = f"{loa_i}_{type_j}"
+                    for category, (kind, obs_id), p_hit in _iter_hit_probs(comp, ai * speed_ms):
+                        # Clearance check applies to both categories: a ship
+                        # lower than the structure passes under it whether it
+                        # is in the lane or has missed the turn.
                         if kind == "object" and ship_h < obj_heights.get(str(obs_id), 0.0):
                             continue
-                        c = pc_allision * q * mass * exp(-d_mean / recovery)
-                        total += c
-                        k = str(obs_id)
-                        by_obstacle[k] = by_obstacle.get(k, 0.0) + c
-                        _seg_map = by_obstacle_leg.setdefault(k, {})
-                        dir_key = f"{seg_id}:{dir_idx}"
-                        _seg_map[dir_key] = _seg_map.get(dir_key, 0.0) + c
-                        ck = f"{loa_i}_{type_j}"
-                        by_cell[ck] = by_cell.get(ck, 0.0) + c
-        return total, by_obstacle, by_obstacle_leg, by_cell
+                        acc.add(category, pc_by_cat[category] * q * p_hit,
+                                obs_id, dir_key, cell_key)
+        return acc
 
     def _finalize_allision(
-        self, total: float, by_obstacle: dict, by_obstacle_leg: dict,
-        by_cell: dict, pc_allision: float, segment_data: dict,
+        self, acc: _ContribAccumulator, pc_allision: float,
+        pc_allision_cat1: float, segment_data: dict,
     ) -> None:
-        self.powered_allision_report = {
-            'totals': {'allision': float(total)},
-            'by_obstacle': by_obstacle,
-            'by_obstacle_leg': by_obstacle_leg,
-            'by_cell': by_cell,
-            'causation_factor': pc_allision,
-        }
+        total = acc.total
+        self.powered_allision_report = acc.report('allision', pc_allision, pc_allision_cat1)
         try:
             from geometries.result_layers import create_powered_allision_layer
             structs_meta = getattr(self, '_last_powered_allision_structs', None) or []
@@ -301,9 +372,13 @@ class PoweredModelMixin:
     def run_powered_grounding_model(self, data: dict[str, Any]) -> float:
         """Calculate powered grounding probability using shadow-aware ray casting.
 
+        Category I: shallow areas inside the leg's lateral spread.
+        N_I = Pc_I * Q * mass
         Category II: ships fail to turn at a bend and continue straight,
-        potentially running aground on shallow depth areas.
-        N_II = Pc * Q * mass * exp(-d_mean / (ai * V))
+        potentially running aground on shallow depth areas beyond it.
+        N_II = Pc_II * Q * mass * exp(-d_mean / (ai * V))
+        The returned total is N_I + N_II; the report keeps the split under
+        ``totals['cat1']`` / ``totals['cat2']`` and ``by_category``.
         """
         total = 0.0
         traffic_data = data.get('traffic_data', {})
@@ -314,7 +389,7 @@ class PoweredModelMixin:
         if not traffic_data or not segment_data or not depths_list:
             return self._emit_empty_grounding(total)
 
-        pc_grounding = float(pc_vals.get('grounding', pc_vals.get('p_pc', 1.6e-4)))
+        pc_grounding, pc_grounding_cat1 = _pc_pair(pc_vals, 'grounding')
         try:
             first_seg = segment_data[list(segment_data.keys())[0]]
             lon0, lat0 = _parse_point(first_seg["Start_Point"])
@@ -325,18 +400,23 @@ class PoweredModelMixin:
         draught_set = self._collect_draught_set(traffic_data)
         unique_depths = self._build_unique_depths(depths_list)
         bin_results = self._precompute_bin_results(draught_set, unique_depths, data, proj)
-        total, by_obs, by_obs_leg, by_cell = self._sum_grounding_contribs(
-            traffic_data, segment_data, bin_results, unique_depths, pc_grounding,
+        acc = self._sum_grounding_contribs(
+            traffic_data, segment_data, bin_results, unique_depths,
+            pc_grounding, pc_grounding_cat1,
         )
-        self._finalize_grounding(total, by_obs, by_obs_leg, by_cell, pc_grounding, segment_data)
-        return total
+        self._finalize_grounding(acc, pc_grounding, pc_grounding_cat1, segment_data)
+        return acc.total
 
     def run_powered_allision_model(self, data: dict[str, Any]) -> float:
         """Calculate powered allision probability using shadow-aware ray casting.
 
+        Category I: structures inside the leg's lateral spread.
+        N_I = Pc_I * Q * mass
         Category II: ships fail to turn at a bend and continue straight,
-        potentially hitting structures (objects).
-        N_II = Pc * Q * mass * exp(-d_mean / (ai * V))
+        potentially hitting structures (objects) beyond it.
+        N_II = Pc_II * Q * mass * exp(-d_mean / (ai * V))
+        The returned total is N_I + N_II; the report keeps the split under
+        ``totals['cat1']`` / ``totals['cat2']`` and ``by_category``.
         """
         total = 0.0
         traffic_data = data.get('traffic_data', {})
@@ -347,7 +427,7 @@ class PoweredModelMixin:
         if not traffic_data or not segment_data or not objects_list:
             return self._emit_empty_allision(total)
 
-        pc_allision = float(pc_vals.get('allision', 1.9e-4))
+        pc_allision, pc_allision_cat1 = _pc_pair(pc_vals, 'allision')
         try:
             first_seg = segment_data[list(segment_data.keys())[0]]
             lon0, lat0 = _parse_point(first_seg["Start_Point"])
@@ -391,8 +471,8 @@ class PoweredModelMixin:
         self._last_powered_allision_structs = structs_meta_for_layer
 
         computations = _run_all_computations(legs, all_obstacles)
-        total, by_obs, by_obs_leg, by_cell = self._sum_allision_contribs(
-            computations, traffic_data, obj_heights, pc_allision,
+        acc = self._sum_allision_contribs(
+            computations, traffic_data, obj_heights, pc_allision, pc_allision_cat1,
         )
-        self._finalize_allision(total, by_obs, by_obs_leg, by_cell, pc_allision, segment_data)
-        return total
+        self._finalize_allision(acc, pc_allision, pc_allision_cat1, segment_data)
+        return acc.total

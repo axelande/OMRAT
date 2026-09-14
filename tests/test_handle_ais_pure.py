@@ -134,11 +134,21 @@ class TestGetPl:
         assert '14.0' in call_sql and '55.0' in call_sql
         assert '500.0' in call_sql  # l_width / 2
 
-    def test_returns_empty_when_db_query_fails(self):
-        """When the DB reports an error (ok=False), get_pl returns ''."""
+    def test_raises_with_db_error_when_query_fails(self):
+        """A failed DB query raises with the real error instead of returning ''.
+
+        Returning '' let the follow-up passage query fail with a
+        misleading PostGIS 'parse error - invalid geometry'."""
         mock_db = MagicMock()
-        mock_db.execute_and_return.return_value = [False, 'error msg']
-        assert get_pl(mock_db, 55.0, 56.0, 14.0, 15.0, l_width=500) == ''
+        mock_db.execute_and_return.return_value = [False, [['server closed the connection']]]
+        with pytest.raises(RuntimeError, match='server closed the connection'):
+            get_pl(mock_db, 55.0, 56.0, 14.0, 15.0, l_width=500)
+
+    def test_raises_when_db_returns_no_geometry(self):
+        mock_db = MagicMock()
+        mock_db.execute_and_return.return_value = [True, [[None]]]
+        with pytest.raises(RuntimeError, match='no geometry'):
+            get_pl(mock_db, 55.0, 56.0, 14.0, 15.0, l_width=500)
 
     def test_buffer_uses_width(self):
         """Different widths produce different half-widths in the SQL."""

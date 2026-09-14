@@ -29,6 +29,8 @@ def _custom_pc() -> dict:
         'bend': 5.5e-4,
         'grounding': 6.6e-4,
         'allision': 8.8e-4,
+        'grounding_cat1': 1.1e-4,
+        'allision_cat1': 2.2e-4,
         'grounding_drifting_rf': 0.5,
         'allision_drifting_rf': 0.25,
         'mean_time_between_checks': 180.0,
@@ -54,9 +56,9 @@ class TestExportUsesProjectValues:
         ('p_crossing_causation', 'crossing'),
         ('p_merging_causation', 'merging'),
         ('p_bend_causation', 'bend'),
-        ('p_grounding_causation', 'grounding'),
+        ('p_grounding_causation', 'grounding_cat1'),
         ('p_grounding_no_turn_causation', 'grounding'),
-        ('p_allision_causation', 'allision'),
+        ('p_allision_causation', 'allision_cat1'),
         ('p_allision_no_turn_causation', 'allision'),
         ('p_grounding_drifting_causation', 'grounding_drifting_rf'),
         ('p_allision_drifting_causation', 'allision_drifting_rf'),
@@ -181,12 +183,15 @@ class TestPoweredCategoryMapping:
 
     ``p_*_causation`` is Category I (obstacle already in the lane) and
     ``p_*_no_turn_causation`` is Category II (a turn was required and the
-    ship failed to make it).  OMRAT models only Category II, so its
-    ``grounding`` / ``allision`` factors must reach the ``_no_turn``
-    attributes -- before v0.14.0 they only reached the Category-I ones.
+    ship failed to make it).  OMRAT models both: ``grounding`` /
+    ``allision`` are the Category-II factors and ``grounding_cat1`` /
+    ``allision_cat1`` the Category-I ones, and each must reach its own
+    attribute -- before v0.14.0 the Category-II factors only reached the
+    Category-I attributes, and before Category I was modelled both
+    attributes carried the Category-II value.
     """
 
-    def test_no_turn_attributes_carry_the_project_factors(self):
+    def test_no_turn_attributes_carry_the_cat2_factors(self):
         pc = _custom_pc()
         attrs = _causation_attrs(_export({'pc': pc}))
         assert float(attrs['p_grounding_no_turn_causation']) == pytest.approx(
@@ -194,24 +199,35 @@ class TestPoweredCategoryMapping:
         assert float(attrs['p_allision_no_turn_causation']) == pytest.approx(
             pc['allision'])
 
+    def test_plain_attributes_carry_the_cat1_factors(self):
+        pc = _custom_pc()
+        attrs = _causation_attrs(_export({'pc': pc}))
+        assert float(attrs['p_grounding_causation']) == pytest.approx(
+            pc['grounding_cat1'])
+        assert float(attrs['p_allision_causation']) == pytest.approx(
+            pc['allision_cat1'])
+
     def test_no_turn_attributes_are_not_the_old_constant(self):
         attrs = _causation_attrs(_export({'pc': _custom_pc()}))
         assert attrs['p_grounding_no_turn_causation'] != '0.000155'
         assert attrs['p_allision_no_turn_causation'] != '0.000155'
 
-    def test_both_categories_get_the_same_value(self):
-        """OMRAT has no separate Category-I input, so exporting a stale
-        constant there would score geometry IWRAP computes anyway with a
-        factor the user never chose."""
-        attrs = _causation_attrs(_export({'pc': _custom_pc()}))
+    def test_cat1_falls_back_to_the_cat2_value_without_a_cat1_key(self):
+        """A project saved before the ``*_cat1`` keys existed must not
+        export a stale constant on the Category-I attribute -- IWRAP scores
+        the Category-I geometry whatever we write there."""
+        pc = _custom_pc()
+        del pc['grounding_cat1']
+        del pc['allision_cat1']
+        attrs = _causation_attrs(_export({'pc': pc}))
         assert (attrs['p_grounding_causation']
                 == attrs['p_grounding_no_turn_causation'])
         assert (attrs['p_allision_causation']
                 == attrs['p_allision_no_turn_causation'])
 
-    def test_no_turn_wins_when_an_iwrap_file_sets_both(self):
-        """Reading a hand-tuned IWRAP file: the turn-failure factor is the
-        one OMRAT's powered models apply, so it must take precedence."""
+    def test_import_splits_the_two_categories(self):
+        """Reading a hand-tuned IWRAP file: each factor lands on the key
+        the matching powered category reads."""
         root = ET.Element('riskmodel')
         gs = ET.SubElement(root, 'global_settings')
         cf = ET.SubElement(gs, 'causation_factors')
@@ -223,10 +239,13 @@ class TestPoweredCategoryMapping:
         _parse_global_settings_el(gs, result, debug=False)
         assert result['pc']['grounding'] == pytest.approx(9e-4)
         assert result['pc']['allision'] == pytest.approx(8e-4)
+        assert result['pc']['grounding_cat1'] == pytest.approx(1e-4)
+        assert result['pc']['allision_cat1'] == pytest.approx(2e-4)
 
     def test_category_one_alone_is_still_read(self):
         """An IWRAP file that only sets the Category-I attribute should
-        still give OMRAT a value rather than falling back to a default."""
+        still give the Category-II model a value rather than falling back
+        to a default."""
         root = ET.Element('riskmodel')
         gs = ET.SubElement(root, 'global_settings')
         cf = ET.SubElement(gs, 'causation_factors')
@@ -234,6 +253,19 @@ class TestPoweredCategoryMapping:
         result = {'pc': {}, 'segment_data': {}}
         _parse_global_settings_el(gs, result, debug=False)
         assert result['pc']['grounding'] == pytest.approx(3.3e-4)
+        assert result['pc']['grounding_cat1'] == pytest.approx(3.3e-4)
+
+    def test_cat1_factors_survive_a_round_trip(self):
+        pc = _custom_pc()
+        root = _export({'pc': pc})
+        result = {'pc': {}, 'segment_data': {}}
+        _parse_global_settings_el(
+            root.find('global_settings'), result, debug=False,
+        )
+        assert result['pc']['grounding_cat1'] == pytest.approx(pc['grounding_cat1'])
+        assert result['pc']['allision_cat1'] == pytest.approx(pc['allision_cat1'])
+        assert result['pc']['grounding'] == pytest.approx(pc['grounding'])
+        assert result['pc']['allision'] == pytest.approx(pc['allision'])
 
     def test_p_pc_is_kept_in_step_with_grounding(self):
         """``p_pc`` is the dialog's Powered field and a fallback the

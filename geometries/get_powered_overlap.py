@@ -1,5 +1,15 @@
 """
-Powered grounding/allision visualization -- IWRAP Category II with shadow effects.
+Powered grounding/allision geometry -- IWRAP Category I and II with shadow effects.
+
+Category I: Obstacle already inside the lane.
+  Ships follow the leg on their lateral offset; any obstacle that lies
+  between the leg's start and end within the lateral spread is hit unless
+  the navigator reacts.
+  P(hit obstacle) = mass
+    - mass: fraction of lateral distribution intercepted by the obstacle
+      along the leg itself (first hit wins, so an obstacle shadowed by a
+      nearer one along the leg receives only the uncovered rays)
+    - No distance decay: the ship is already on a collision course.
 
 Category II: Ships failing to turn at a bend.
   Ships continue past the turning point on the previous heading.
@@ -265,18 +275,26 @@ def _build_hit_matrix(
     turn_pt: np.ndarray,
     ext_dir: np.ndarray,
     perp: np.ndarray,
+    max_range: float = MAX_RANGE,
 ) -> np.ndarray:
+    """Along-track distance from ``turn_pt`` to each obstacle, per ray.
+
+    Rays start at ``turn_pt + offset * perp`` and travel along ``ext_dir``.
+    Hits closer than ``0`` or at/after ``max_range`` are ignored; Cat II
+    passes the default 50 km, Cat I passes the leg length so only the
+    stretch between the two waypoints counts.
+    """
     n_rays = len(offsets)
     hit_matrix = np.full((n_rays, len(obstacles)), np.inf, dtype=float)
     ray_ys = offsets[:, None]
     for obs_idx, (obs, _kind) in enumerate(obstacles):
-        # Bounding-box pre-filter: skip obstacles entirely behind turning point
-        # or beyond MAX_RANGE to keep performance with many split sub-polygons.
+        # Bounding-box pre-filter: skip obstacles entirely behind the origin
+        # or beyond max_range to keep performance with many split sub-polygons.
         geom_b = obs["geom"]
         bx0, by0, bx1, by1 = geom_b.bounds
         corners = np.array([[bx0, by0], [bx0, by1], [bx1, by0], [bx1, by1]])
         alongs = (corners - turn_pt) @ ext_dir
-        if alongs.max() <= 0 or alongs.min() >= MAX_RANGE:
+        if alongs.max() <= 0 or alongs.min() >= max_range:
             continue
         edges = _extract_edges_local(obs["geom"], turn_pt, ext_dir, perp)
         if edges is None or edges.shape[0] == 0:
@@ -290,7 +308,7 @@ def _build_hit_matrix(
         with np.errstate(divide='ignore', invalid='ignore'):
             t = (ray_ys - y0[None, :]) / dy
             along = x0[None, :] + t * (x1 - x0)[None, :]
-        valid = crosses & (along > 0) & (along < MAX_RANGE)
+        valid = crosses & (along > 0) & (along < max_range)
         hit_matrix[:, obs_idx] = np.min(np.where(valid, along, np.inf), axis=1)
     return hit_matrix
 
@@ -376,21 +394,96 @@ def _compute_cat2_with_shadows(
 
 
 # ---------------------------------------------------------------------------
+# Shadow-aware Cat I computation (obstacle inside the lane)
+# ---------------------------------------------------------------------------
+
+def _build_cat1_summaries(obs_accum: dict) -> dict:
+    """Per-obstacle Cat I summary.
+
+    Same keys as :func:`_build_summaries` so the two categories can be
+    consumed by one loop; ``p_approx`` is the intercepted mass itself
+    because Cat I has no distance decay (Hansen eq. 4.15,
+    ``N_I = Pc * Q * mass``).  ``p_integral`` equals ``mass`` for the
+    same reason.
+    """
+    summaries: dict = {}
+    for key, oa in obs_accum.items():
+        mean_dist = oa["weighted_dist"] / oa["mass"] if oa["mass"] > 0 else 0.0
+        summaries[key] = {
+            "mass": oa["mass"],
+            "mean_dist": mean_dist,
+            "p_integral": oa["mass"],
+            "p_approx": oa["mass"],
+            "n_rays": oa["n_rays"],
+            "ray_offsets": oa["ray_offsets"],
+            "ray_dists": oa["ray_dists"],
+            "obs": oa["obs"],
+            "kind": oa["kind"],
+        }
+    return summaries
+
+
+def _compute_cat1_in_lane(
+    origin: np.ndarray,
+    along_dir: np.ndarray,
+    perp: np.ndarray,
+    mean_offset: float,
+    sigma: float,
+    leg_length: float,
+    obstacles: list[tuple[dict, str]],
+) -> tuple[dict, list, np.ndarray, np.ndarray]:
+    """Compute Cat I (in-lane) intercepted mass per obstacle (vectorised).
+
+    Casts ``N_RAYS`` rays parallel to the leg from ``origin`` (the
+    waypoint the ships *come from*) and keeps, per ray, the first
+    obstacle hit within ``leg_length``.  Obstacles beyond the far
+    waypoint belong to Cat II of this leg and are ignored here, so the
+    two categories never count the same water twice.
+
+    The intercepted mass per obstacle is the numerical form of
+    ``Phi((z_max - mu) / sigma) - Phi((z_min - mu) / sigma)`` from the
+    Cat I formula, evaluated with shadowing along the leg.
+
+    Returns ``(summaries, ray_data, offsets, pdf_vals)`` with the same
+    layout as :func:`_compute_cat2_with_shadows`; ``ray_data`` holds
+    ``(offset, mass, hit_key | None, along_dist | None)`` tuples where
+    the distance is measured from ``origin``.
+    """
+    offsets = np.linspace(mean_offset - 4 * sigma, mean_offset + 4 * sigma, N_RAYS)
+    dx = offsets[1] - offsets[0]
+    pdf_vals = norm.pdf(offsets, mean_offset, sigma)
+    masses = pdf_vals * dx
+    n_rays = len(offsets)
+    if not obstacles or leg_length <= 0:
+        return ({}, [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
+                offsets, pdf_vals)
+    hit_matrix = _build_hit_matrix(offsets, obstacles, origin, along_dir, perp,
+                                   max_range=leg_length)
+    ray_data, obs_accum = _accumulate_obs_hits(offsets, masses, hit_matrix, obstacles, 0.0)
+    return _build_cat1_summaries(obs_accum), ray_data, offsets, pdf_vals
+
+
+# ---------------------------------------------------------------------------
 # Data extraction helpers
 # ---------------------------------------------------------------------------
 
 def _total_p_for_comp(comp: dict) -> float:
     """Sum the per-obstacle ``p_approx`` values for a computation.
 
-    Used to rank the sidebar list so the highest-probability
-    (Leg, Direction) pairs float to the top.
+    Covers both the Cat II summaries and the Cat I block (when
+    present) so the sidebar ranks (Leg, Direction) pairs by their full
+    powered contribution.
     """
     total = 0.0
-    for s in (comp.get("summaries") or {}).values():
-        try:
-            total += float(s.get("p_approx", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
+    blocks = [comp.get("summaries") or {}]
+    cat1 = comp.get("cat1") or {}
+    blocks.append(cat1.get("summaries") or {})
+    for block in blocks:
+        for s in block.values():
+            try:
+                total += float(s.get("p_approx", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
     return total
 
 
@@ -518,7 +611,14 @@ def _run_all_computations(
     legs: dict[str, dict],
     all_obstacles: list[tuple[dict, str]],
 ) -> list[dict]:
-    """Run the shadow-aware Cat II computation for every leg/direction."""
+    """Run the shadow-aware Cat I and Cat II computations for every leg/direction.
+
+    Each returned computation carries the Cat II result in ``summaries`` /
+    ``ray_data`` (rays from the turning point onwards) and the Cat I
+    result under ``cat1`` (rays from the origin waypoint along the leg,
+    clipped at the turning point).  A (leg, direction) pair is included
+    when either category hits at least one obstacle.
+    """
     computations: list[dict] = []
     for seg_id, leg in legs.items():
         start, end = leg["start"], leg["end"]
@@ -529,9 +629,11 @@ def _run_all_computations(
                 continue
 
             if di == 0:
+                origin = start.copy()
                 turn_pt = end.copy()
                 ext_dir = u.copy()
             else:
+                origin = end.copy()
                 turn_pt = start.copy()
                 ext_dir = (-u).copy()
 
@@ -539,8 +641,11 @@ def _run_all_computations(
                 turn_pt, ext_dir, n, d["mean"], d["std"],
                 d["ai"], d["speed_ms"], all_obstacles,
             )
+            cat1_summaries, cat1_ray_data, _, _ = _compute_cat1_in_lane(
+                origin, ext_dir, n, d["mean"], d["std"], L, all_obstacles,
+            )
 
-            if summaries:
+            if summaries or cat1_summaries:
                 computations.append({
                     "seg_id": seg_id,
                     "leg": leg,
@@ -555,6 +660,13 @@ def _run_all_computations(
                     "pdf_vals": pdf_vals,
                     "start": start,
                     "end": end,
+                    "cat1": {
+                        "origin": origin,
+                        "along_dir": ext_dir,
+                        "length": L,
+                        "summaries": cat1_summaries,
+                        "ray_data": cat1_ray_data,
+                    },
                 })
     return computations
 
@@ -564,7 +676,7 @@ def _run_all_computations(
 # ---------------------------------------------------------------------------
 
 class PoweredOverlapVisualizer:
-    """Interactive visualizer for powered (Cat II) allision/grounding geometry.
+    """Interactive visualizer for powered (Cat I + Cat II) allision/grounding geometry.
 
     Embeds three matplotlib panels inside a ``ShowGeomRes`` dialog:
 
@@ -617,6 +729,7 @@ class PoweredOverlapVisualizer:
         all_obs_keys: set[tuple] = set()
         for comp in computations:
             all_obs_keys.update(comp["summaries"].keys())
+            all_obs_keys.update(((comp.get("cat1") or {}).get("summaries") or {}).keys())
         cmap = plt.cm.tab10
         self.obs_color_map: dict[tuple, Any] = {
             key: cmap(i % 10)
@@ -645,8 +758,9 @@ class PoweredOverlapVisualizer:
         ax = self.axes["overview"]
         mode_label = "Allision" if self.mode == "allision" else "Grounding"
         ax.set_title(
-            f"Powered {mode_label} -- Cat II Overview\n"
-            "Rays from turning points (shadow-aware)",
+            f"Powered {mode_label} -- Cat I + Cat II Overview\n"
+            "Cat I: rays along the leg (in-lane obstacles).  "
+            "Cat II: rays from turning points (missed turn).  Both shadow-aware",
             fontsize=11,
         )
 
@@ -700,6 +814,25 @@ class PoweredOverlapVisualizer:
                     ax.plot([origin[0], end_pt[0]], [origin[1], end_pt[1]],
                             ":", color=dc, alpha=0.08, linewidth=0.3)
 
+        # Cat I rays: from the origin waypoint along the leg to the first
+        # in-lane obstacle.  Drawn thicker than the Cat II fan because the
+        # full intercepted mass counts (no distance decay).
+        for comp in self.computations:
+            cat1 = comp.get("cat1") or {}
+            if not cat1.get("summaries"):
+                continue
+            c1_origin = cat1["origin"]
+            c1_dir = cat1["along_dir"]
+            n = comp["perp"]
+            for off, m_i, hit_key, hit_dist in cat1["ray_data"][::20]:
+                if hit_key is None:
+                    continue
+                origin = c1_origin + off * n
+                end_pt = origin + hit_dist * c1_dir
+                obs_c = "steelblue" if hit_key[0] == "depth" else "darkred"
+                ax.plot([origin[0], end_pt[0]], [origin[1], end_pt[1]],
+                        "-", color=obs_c, alpha=0.35, linewidth=0.9)
+
         # Mark computations as clickable circles -- we keep the
         # selected computation's marker around for ``_highlight_selected``
         # to override its style when the user clicks elsewhere.
@@ -730,6 +863,11 @@ class PoweredOverlapVisualizer:
         for di, dc in enumerate(self.dir_colors[:2]):
             legend_items.append(Patch(facecolor=dc, alpha=0.3,
                                       label=f"Dir {di + 1} band ({N_SIGMA}s)"))
+        if any((c.get("cat1") or {}).get("summaries") for c in self.computations):
+            legend_items.append(plt.Line2D([0], [0], color="grey", lw=0.9,
+                                           alpha=0.6, label="Cat I in-lane rays"))
+            legend_items.append(plt.Line2D([0], [0], color="grey", lw=0.5,
+                                           alpha=0.4, label="Cat II missed-turn rays"))
         for seg_id in self.legs:
             legend_items.append(plt.Line2D([0], [0], color=self.leg_colors[seg_id],
                                            lw=2, label=f"Leg {seg_id}"))
@@ -757,14 +895,47 @@ class PoweredOverlapVisualizer:
         ray_data = comp["ray_data"]
         summaries = comp["summaries"]
         recovery = d_info["ai"] * d_info["speed_ms"]
+        cat1 = comp.get("cat1") or {}
+        cat1_summaries = cat1.get("summaries") or {}
+        leg_len = float(cat1.get("length", 0.0) or 0.0)
+        cat1_mass = sum(float(s.get("mass", 0.0) or 0.0) for s in cat1_summaries.values())
 
         ax.set_title(
             f"LEG {comp['seg_id']} {d_info['name']}   "
             f"mean={d_info['mean']:+.0f}m  std={d_info['std']:.0f}m  "
-            f"recovery={recovery:.0f}m\n"
-            "Local frame: leg rotated so along-track = +x, perpendicular = y",
+            f"recovery={recovery:.0f}m   Cat I in-lane mass={cat1_mass:.4f}\n"
+            "Local frame: leg rotated so along-track = +x, perpendicular = y; "
+            "x<0 is the leg itself (Cat I), x>0 is past the turning point (Cat II)",
             fontsize=8, fontweight="bold",
         )
+
+        # Cat I rays: the leg occupies x in [-L, 0]; a ray that hits an
+        # in-lane obstacle at along-track distance d from the origin
+        # waypoint is drawn from x=-L to x=d-L.
+        if cat1_summaries and leg_len > 0:
+            step_c1 = max(1, N_RAYS // 80)
+            for off, m_i, hit_key, hit_dist in (cat1.get("ray_data") or [])[::step_c1]:
+                if hit_key is None:
+                    continue
+                c = self.obs_color_map.get(hit_key, "#888888")
+                ax.plot([-leg_len, hit_dist - leg_len], [off, off],
+                        color=c, alpha=0.35, linewidth=0.7)
+            ax.axvline(-leg_len, color="black", linewidth=0.6, linestyle=":")
+            for key, s in cat1_summaries.items():
+                kind, obs_id = key
+                tag = f"D#{obs_id}" if kind == "depth" else f"O#{obs_id}"
+                c = self.obs_color_map.get(key, "#888888")
+                ray_offs = s["ray_offsets"]
+                mid_lat = (min(ray_offs) + max(ray_offs)) / 2 if ray_offs else 0.0
+                ax.annotate(
+                    f"Cat I {tag}\nmass={s['mass']:.4f}",
+                    xy=(s["mean_dist"] - leg_len, mid_lat),
+                    xytext=(-4, 4), textcoords="offset points",
+                    fontsize=6, color=c, fontweight="bold",
+                    ha="right", va="bottom",
+                    bbox=dict(fc="white", alpha=0.9, ec=c, pad=2,
+                              boxstyle="round,pad=0.3"),
+                )
 
         # Project obstacles to local coordinates
         for obs, kind in self.all_obstacles:
@@ -882,8 +1053,12 @@ class PoweredOverlapVisualizer:
         ax.set_xlabel("Along-track distance from turning point (m)", fontsize=7)
         ax.set_ylabel("Lateral offset from centreline (m)", fontsize=7)
         max_obs_dist = max((s["mean_dist"] for s in summaries.values()), default=10000)
-        # Extra room on the right so the staggered labels fit.
-        ax.set_xlim(-MAX_RANGE * 0.06, max(30000, max_obs_dist * 1.4))
+        # Extra room on the right so the staggered labels fit; when Cat I
+        # hits exist the whole leg is shown to the left of the turning point.
+        x_left = -MAX_RANGE * 0.06
+        if cat1_summaries and leg_len > 0:
+            x_left = min(x_left, -leg_len * 1.05)
+        ax.set_xlim(x_left, max(30000, max_obs_dist * 1.4))
         ax.grid(True, alpha=0.2)
         ax.tick_params(labelsize=6)
 
@@ -1256,7 +1431,7 @@ class PoweredOverlapVisualizer:
             sidebar.selectRow(0)
 
         mode_label = "Powered Allision" if mode == "allision" else "Powered Grounding"
-        dialog.setWindowTitle(f"OMRAT - {mode_label} Cat II Visualization")
+        dialog.setWindowTitle(f"OMRAT - {mode_label} Cat I + Cat II Visualization")
 
         fig.tight_layout()
         canvas.draw()

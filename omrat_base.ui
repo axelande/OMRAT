@@ -1860,11 +1860,42 @@ QToolTip {
               </widget>
              </item>
              <item>
-              <widget class="QLabel" name="lblAccidentResults">
-               <property name="text">
-                <string>Accident probabilities</string>
-               </property>
-              </widget>
+              <layout class="QHBoxLayout" name="hlAccidentResultsHeader">
+               <item>
+                <widget class="QLabel" name="lblAccidentResults">
+                 <property name="text">
+                  <string>Accident probabilities</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="spAccidentResultsHeader">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>10</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QLabel" name="lblResultDisplayMode">
+                 <property name="text">
+                  <string>Show as</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QComboBox" name="cbResultDisplayMode">
+                 <property name="toolTip">
+                  <string>Present the results as annual frequency (accidents per year) or as the mean number of years between incidents (1 / frequency). Stored values are unchanged; only the presentation differs.</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
              </item>
              <item>
               <widget class="QTableWidget" name="TWAccidentResults">

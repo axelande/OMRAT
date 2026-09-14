@@ -15,8 +15,10 @@ from geometries.junctions import (
     deflection_deg,
     deserialize_junctions,
     junction_id_for_point,
+    linked_partners,
     refresh_junction_registry,
     serialize_junctions,
+    traffic_link_root,
     transition_matrix_from_counts,
     transition_share,
     validate_junctions,
@@ -374,3 +376,109 @@ def test_refresh_drops_user_matrix_when_legs_disappeared():
             # If preserved, the row must not reference the removed leg.
             for row in rj.transitions.values():
                 assert '3' not in row
+
+
+# ---------------------------------------------------------------------------
+# Linked traffic (copy traffic / AIS lock)
+# ---------------------------------------------------------------------------
+
+
+def _x_junction_segments() -> dict:
+    """Two routes crossing at (15, 55), each already split into two sub-legs."""
+    return {
+        'a': _seg("14.0 55.0", "15.0 55.0"),    # W arm, junction at end
+        'd': _seg("15.0 55.0", "16.0 55.0"),    # E arm, junction at start
+        'b1': _seg("14.5 55.5", "15.0 55.0"),   # NW arm, junction at end
+        'b2': _seg("15.0 55.0", "15.5 54.5"),   # SE arm, junction at start
+    }
+
+
+def _only_junction(segment_data: dict) -> Junction:
+    junctions = build_junctions(segment_data)
+    assert len(junctions) == 1
+    return next(iter(junctions.values()))
+
+
+def test_x_junction_without_links_spreads_traffic():
+    sd = _x_junction_segments()
+    m = compute_geometric_transition_matrix(_only_junction(sd), sd)
+    assert set(m['a']) == {'d', 'b1', 'b2'}
+    assert 0.0 < m['a']['d'] < 1.0
+    assert m['a']['d'] > m['a']['b1']
+
+
+def test_linked_legs_get_full_continuation():
+    sd = _x_junction_segments()
+    sd['d']['traffic_source'] = 'a'
+    sd['b2']['traffic_source'] = 'b1'
+    j = _only_junction(sd)
+    assert linked_partners(j, sd) == {'a': ['d'], 'd': ['a'], 'b1': ['b2'], 'b2': ['b1']}
+    m = compute_geometric_transition_matrix(j, sd)
+    assert m['a'] == {'d': 1.0}
+    assert m['d'] == {'a': 1.0}
+    assert m['b1'] == {'b2': 1.0}
+    assert m['b2'] == {'b1': 1.0}
+
+
+def test_partial_link_leaves_other_rows_to_geometry():
+    sd = _x_junction_segments()
+    sd['d']['traffic_source'] = 'a'
+    m = compute_geometric_transition_matrix(_only_junction(sd), sd)
+    assert m['a'] == {'d': 1.0}
+    assert m['d'] == {'a': 1.0}
+    assert set(m['b1']) == {'a', 'd', 'b2'}
+    assert math.isclose(sum(m['b1'].values()), 1.0)
+    assert m['b1']['b2'] > m['b1']['a']
+
+
+def test_common_parent_links_siblings():
+    """Both sub-legs copied from a third leg count as linked to each other."""
+    sd = _x_junction_segments()
+    sd['parent'] = _seg("10.0 50.0", "11.0 50.0")
+    sd['a']['traffic_source'] = 'parent'
+    sd['d']['traffic_source'] = 'parent'
+    j = build_junctions(sd)[junction_id_for_point((15.0, 55.0))]
+    m = compute_geometric_transition_matrix(j, sd)
+    assert m['a'] == {'d': 1.0}
+    assert m['d'] == {'a': 1.0}
+
+
+def test_traffic_link_root_follows_chain_and_stops_on_cycle():
+    sd = {'a': {}, 'b': {'traffic_source': 'a'}, 'c': {'traffic_source': 'b'}}
+    assert traffic_link_root(sd, 'c') == 'a'
+    assert traffic_link_root(sd, 'a') == 'a'
+    assert traffic_link_root(sd, 'missing') == 'missing'
+    # Mutual copy (a from b, b from a) must still make them partners.
+    cyc = {'a': {'traffic_source': 'b'}, 'b': {'traffic_source': 'a'}}
+    assert traffic_link_root(cyc, 'a') == 'a'
+    assert traffic_link_root(cyc, 'b') == 'a'
+    tail = {'x': {'traffic_source': 'a'}, 'a': {'traffic_source': 'b'}, 'b': {'traffic_source': 'a'}}
+    assert traffic_link_root(tail, 'x') == 'a'
+
+
+def test_linked_rows_override_ais_counts():
+    sd = _x_junction_segments()
+    sd['d']['traffic_source'] = 'a'
+    junctions = build_junctions(sd)
+    jid = next(iter(junctions))
+    counts = {jid: {
+        'a': {'d': 10.0, 'b1': 40.0, 'b2': 50.0},
+        'b1': {'a': 5.0, 'd': 5.0, 'b2': 90.0},
+    }}
+    assert apply_ais_defaults(junctions, counts, sd) == 1
+    j = junctions[jid]
+    assert j.source == 'ais'
+    assert j.transitions['a'] == {'d': 1.0}
+    assert j.transitions['d'] == {'a': 1.0}
+    assert math.isclose(j.transitions['b1']['b2'], 0.9)
+
+
+def test_linked_rows_do_not_touch_user_matrix():
+    sd = _x_junction_segments()
+    sd['d']['traffic_source'] = 'a'
+    junctions = build_junctions(sd)
+    j = next(iter(junctions.values()))
+    j.transitions = {'a': {'b1': 1.0}}
+    j.source = 'user'
+    assert apply_geometric_defaults(junctions, sd) == 0
+    assert j.transitions == {'a': {'b1': 1.0}}

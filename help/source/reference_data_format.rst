@@ -59,6 +59,8 @@ project reopens with its last result visible.
      "bend": 1.3e-4,
      "grounding": 1.6e-4,
      "allision": 1.9e-4,
+     "grounding_cat1": 1.6e-4,
+     "allision_cat1": 1.9e-4,
      "allision_drifting_rf": 1.0,
      "grounding_drifting_rf": 1.0
    }
@@ -85,6 +87,14 @@ project reopens with its last result visible.
        export writes them to ``p_grounding_no_turn_causation`` /
        ``p_allision_no_turn_causation`` -- see
        :ref:`iwrap-causation-mapping`.
+   * - ``grounding_cat1``, ``allision_cat1``
+     - float
+     - The same two models, as the :math:`P_c` in the **Category I**
+       (obstacle already in the lane) term :math:`N_I = P_c Q m`.
+       Added in v0.15.0; a project file without the keys uses the
+       IWRAP default (identical to the Cat II figure).  IWRAP export
+       writes them to ``p_grounding_causation`` /
+       ``p_allision_causation``.
    * - ``allision_drifting_rf``, ``grounding_drifting_rf``
      - float
      - Risk-reduction factor applied to drifting totals after the
@@ -120,17 +130,21 @@ each with its own causation factor:
      - **Category II** -- a turn *was* required at a waypoint and
        the ship failed to make it.
 
-OMRAT models only Category II (see :ref:`powered`), so ``grounding``
-and ``allision`` are Category-II factors:
+OMRAT models both categories (see :ref:`powered`).  ``grounding`` and
+``allision`` are the Category-II factors, ``grounding_cat1`` and
+``allision_cat1`` the Category-I ones:
 
-* **Export** writes them to *both* attributes.  The Category-I one
-  gets the same value rather than a constant, because IWRAP computes
+* **Export** writes each to its own attribute.  A project file that
+  predates the ``*_cat1`` keys exports its Category-II value on the
+  Category-I attribute rather than a constant, because IWRAP computes
   the Category-I geometry regardless of what we write -- scoring it
   with a factor nobody chose is how the pre-v0.14.0 exporter
-  produced unaccountable numbers.  Zero those two attributes by hand
-  if you want IWRAP to score only what OMRAT models.
-* **Import** reads both, and the ``_no_turn`` value wins when a file
-  sets them differently.
+  produced unaccountable numbers.
+* **Import** puts ``p_*_causation`` on ``*_cat1`` and
+  ``p_*_no_turn_causation`` on ``grounding`` / ``allision``.  The
+  Category-II keys also accept the Category-I attribute as a fallback
+  when a file sets only that one, with ``_no_turn`` winning when both
+  are present.
 
 The two directions are driven by ``_CF_EXPORT_MAP`` and
 ``_CF_IMPORT_MAP`` in ``compute/iwrap_convertion.py``; a test

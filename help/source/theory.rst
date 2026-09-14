@@ -46,8 +46,9 @@ and give sources for :math:`P_C`:
      - Head-on, overtaking, crossing, bend collisions (Hansen eq.
        4.2-4.4, Pedersen).
    * - :ref:`powered`
-     - IWRAP Category II powered grounding + allision
-       (:math:`N_{II} = P_c Q m \exp(-d/(a_i V))`).
+     - IWRAP Category I + II powered grounding + allision
+       (:math:`N_I = P_c Q m` in the lane,
+       :math:`N_{II} = P_c Q m \exp(-d/(a_i V))` past the bend).
 
 
 Default causation factors

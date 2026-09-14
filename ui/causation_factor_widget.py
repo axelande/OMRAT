@@ -23,8 +23,10 @@ class CausationFactorsWidget(QtWidgets.QDialog, FORM_CLASS):
         self.leCrossingCf: QtWidgets.QLineEdit
         self.leMergingCf: QtWidgets.QLineEdit
         self.leBendCf: QtWidgets.QLineEdit
-        self.leGroundingCf: QtWidgets.QLineEdit
-        self.leAllisionCf: QtWidgets.QLineEdit
+        self.leGroundingCf: QtWidgets.QLineEdit        # Cat II (missed turn)
+        self.leAllisionCf: QtWidgets.QLineEdit         # Cat II (missed turn)
+        self.leGroundingCat1Cf: QtWidgets.QLineEdit    # Cat I (obstacle in lane)
+        self.leAllisionCat1Cf: QtWidgets.QLineEdit     # Cat I (obstacle in lane)
 
         # Dialog buttons
         self.buttonBox: QtWidgets.QDialogButtonBox

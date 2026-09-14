@@ -185,6 +185,38 @@ class TestExecuteAndReturn:
         assert ok is False
         assert isinstance(data[0][0], RuntimeError)
 
+    def test_retries_once_after_reconnect(self):
+        """A stale connection fails once, reconnects and the retry succeeds."""
+        db = DB()
+        cursor = MagicMock()
+        cursor.execute.side_effect = [RuntimeError('server closed the connection'), None]
+        cursor.fetchall.return_value = [['LINESTRING(0 0, 1 1)']]
+        db.conn = MagicMock()
+        db.conn.cursor.return_value = cursor
+        db._reconnect = MagicMock()
+        ok, data = db.execute_and_return('SELECT 1', return_error=True)
+        assert ok is True
+        assert data == [['LINESTRING(0 0, 1 1)']]
+        db._reconnect.assert_called_once()
+        assert cursor.execute.call_count == 2
+
+    def test_reconnect_failure_is_reported_not_raised(self):
+        db = DB()
+        cursor = MagicMock()
+        cursor.execute.side_effect = RuntimeError('server closed the connection')
+        db.conn = MagicMock()
+        db.conn.cursor.return_value = cursor
+        db._reconnect = MagicMock(side_effect=Exception('Error connecting to database'))
+        ok, data = db.execute_and_return('SELECT 1', return_error=True)
+        assert ok is False
+        assert 'Error connecting to database' in str(data[0][0])
+
+    def test_connect_enables_autocommit(self):
+        with patch('compute.database.psycopg2.connect') as mock_connect:
+            mock_connect.return_value = MagicMock()
+            db = DB(db_host='myhost')
+        assert db.conn.autocommit is True
+
 
 # ---------------------------------------------------------------------------
 # execute_and_get_pd

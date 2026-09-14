@@ -199,6 +199,8 @@ _SETTING_LABELS: dict[str, str] = {
     "pc.bend": "Causation factor bend",
     "pc.grounding": "Causation factor powered grounding",
     "pc.allision": "Causation factor powered allision",
+    "pc.grounding_cat1": "Causation factor powered grounding (Cat I, in lane)",
+    "pc.allision_cat1": "Causation factor powered allision (Cat I, in lane)",
     "traffic_scaling.global_percent": "Global traffic scaling (%)",
 }
 

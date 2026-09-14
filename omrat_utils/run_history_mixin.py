@@ -3,7 +3,8 @@
 Owns everything tied to "what happens after **Run Model** finishes":
 
 * writing the per-run GeoPackage, ``.omrat`` snapshot, combined Markdown
-  report, and JSON sidecars (collision / drifting reports);
+  report, and JSON sidecars (collision / drifting / consequence
+  reports);
 * the **Run Analysis** tab's previous-runs table (load / refresh /
   context menu / row selection -> compare columns);
 * the output-folder picker and the Run-Model-button gate.
@@ -29,7 +30,7 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
 from omrat_utils.accident_summary import (
-    ACCIDENT_TOTAL_KEYS, format_probability, summary_values,
+    ACCIDENT_TOTAL_KEYS, summary_values,
 )
 
 if TYPE_CHECKING:
@@ -40,13 +41,38 @@ if TYPE_CHECKING:
 MAIN_RUN_SETTING = 'omrat/main_run_id'
 
 
-def _fmt(v: float | None) -> str:
-    """Format a probability total for the previous-runs / accident tables."""
-    if v is None:
-        return ''
-    if v == 0:
-        return '0'
-    return f'{v:.3e}'
+def consequence_sidecar_path(run) -> Path | None:
+    """``<gpkg stem>.consequence.json`` for ``run`` (a ``RunMeta``), or
+    ``None`` when the run has no GeoPackage path recorded."""
+    try:
+        gpkg_path = run.gpkg_path() if hasattr(run, 'gpkg_path') else None
+    except Exception:  # nosec B110 B112
+        gpkg_path = None
+    if gpkg_path is None:
+        return None
+    stem = Path(gpkg_path).with_suffix('')
+    return Path(str(stem) + '.consequence.json')
+
+
+def load_consequence_sidecar(run) -> dict | None:
+    """Read the catastrophe-exceedance result saved next to ``run``.
+
+    Returns the ``compute_catastrophe_exceedance`` dict, or ``None`` when
+    the sidecar is missing (runs recorded before it was written) or
+    unreadable.
+    """
+    path = consequence_sidecar_path(run)
+    if path is None or not path.is_file():
+        return None
+    try:
+        with path.open('r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception as exc:
+        QgsMessageLog.logMessage(
+            f"Could not read {path}: {exc}", 'OMRAT', Qgis.MessageLevel.Warning,
+        )
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -164,6 +190,9 @@ class RunHistoryMixin:
         self._safe_write_drifting_sidecar(
             calc_object, Path(out_dir), filename,
         )
+        self._safe_write_consequence_sidecar(
+            calc_object, Path(out_dir), filename,
+        )
 
         self._log_run_save_summary(
             name=name, run_id=run_id, gpkg_path=gpkg_path,
@@ -255,6 +284,21 @@ class RunHistoryMixin:
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f"Drifting-report sidecar write failed: {exc}",
+                'OMRAT', Qgis.MessageLevel.Warning,
+            )
+
+    def _safe_write_consequence_sidecar(
+        self, calc_object, out_dir, filename,
+    ) -> None:
+        try:
+            self._write_consequence_report_sidecar(
+                calc_object=calc_object,
+                out_dir=out_dir,
+                base_filename=filename,
+            )
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Consequence-report sidecar write failed: {exc}",
                 'OMRAT', Qgis.MessageLevel.Warning,
             )
 
@@ -379,6 +423,21 @@ class RunHistoryMixin:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('w', encoding='utf-8') as f:
             json.dump(report, f, indent=2, default=str)
+        return path
+
+    @staticmethod
+    def _write_consequence_report_sidecar(
+        *, calc_object: Any, out_dir: Path, base_filename: str,
+    ) -> Path | None:
+        """Persist ``calc.consequence_result`` as ``<stem>.consequence.json``
+        so the catastrophe table can be re-filled for a previous run."""
+        result = getattr(calc_object, 'consequence_result', None)
+        if not isinstance(result, dict) or not result.get('levels'):
+            return None
+        path = out_dir / (Path(base_filename).stem + '.consequence.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2, default=str)
         return path
 
     def _write_input_snapshot(self, path: Path, data: dict) -> None:
@@ -709,8 +768,9 @@ class RunHistoryMixin:
         return out
 
     def _on_previous_runs_selection_changed(self) -> None:
-        """Add / remove comparison columns on TWAccidentResults to
-        match the rows selected in TWPreviousRuns."""
+        """Add / remove comparison columns on TWAccidentResults and
+        TWCatastropheResults to match the rows selected in
+        TWPreviousRuns."""
         from omrat_utils.run_history import RunHistory
         run_ids = self._selected_run_ids()
         try:
@@ -719,6 +779,7 @@ class RunHistoryMixin:
             pass
         if not run_ids:
             self._reset_accident_table_to_base()
+            self._reset_catastrophe_table_to_base()
             return
         try:
             runs = RunHistory().compare_runs(run_ids)
@@ -728,11 +789,14 @@ class RunHistoryMixin:
                 'OMRAT', Qgis.MessageLevel.Warning,
             )
             self._reset_accident_table_to_base()
+            self._reset_catastrophe_table_to_base()
             return
         if not runs:
             self._reset_accident_table_to_base()
+            self._reset_catastrophe_table_to_base()
             return
         self._fill_result_fields_from_runs(runs)
+        self._fill_catastrophe_table_from_runs(runs)
 
     def _fill_result_fields_from_runs(self, runs) -> None:
         """Add one comparison column per selected row in TWPreviousRuns."""
@@ -776,7 +840,7 @@ class RunHistoryMixin:
 
             for row, key in enumerate(self._ACCIDENT_TOTAL_KEYS):
                 v = totals.get(key)
-                tw.setItem(row, prob_col, QTableWidgetItem(_fmt(v)))
+                tw.setItem(row, prob_col, QTableWidgetItem(self._format_result(v)))
                 tw.setItem(
                     row, delta_col,
                     QTableWidgetItem(
@@ -787,7 +851,7 @@ class RunHistoryMixin:
                 row = n_accidents + offset
                 if row >= tw.rowCount():
                     break
-                self._set_bold_item(tw, row, prob_col, format_probability(v))
+                self._set_bold_item(tw, row, prob_col, self._format_result(v))
                 self._set_bold_item(
                     tw, row, delta_col,
                     self._format_delta_pct(v, baseline_summary[offset]),
@@ -829,21 +893,17 @@ class RunHistoryMixin:
         tw.setItem(row, col, item)
 
     def _capture_current_run_baseline(self, tw) -> list[float | None]:
-        """Read the live LEP*-derived probabilities out of column 1."""
-        baseline: list[float | None] = []
-        for row in range(len(self._ACCIDENT_TOTAL_KEYS)):
-            txt = ''
-            try:
-                item = tw.item(row, 1)
-                if item is not None:
-                    txt = item.text()
-            except Exception:  # nosec B110 B112
-                txt = ''
-            try:
-                baseline.append(float(txt))
-            except (TypeError, ValueError):
-                baseline.append(None)
-        return baseline
+        """Live annual frequencies of the nine accident rows.
+
+        Taken from the hidden ``LEP*`` widgets (via
+        ``_current_accident_totals``) rather than the visible cells,
+        which may be showing years between incidents.
+        """
+        try:
+            totals = self._current_accident_totals(tw)
+        except Exception:  # nosec B110 B112
+            totals = {}
+        return [totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS]
 
     @staticmethod
     def _format_delta_pct(v: Any, base: Any) -> str:

@@ -477,22 +477,22 @@ _CF_EXPORT_MAP: dict[str, tuple[tuple[str, ...], str]] = {
     #   p_*_no_turn_causation   Category II -- a turn *was* required at a
     #                           waypoint and the ship failed to make it.
     #
-    # OMRAT models only the second one (see the docstrings on
-    # ``run_powered_grounding_model`` / ``run_powered_allision_model``), so
-    # ``pc['grounding']`` and ``pc['allision']`` are Category-II factors and
-    # belong on the ``_no_turn`` attributes.
+    # OMRAT models both (see ``compute/powered_model.py``):
+    # ``pc['grounding_cat1']`` / ``pc['allision_cat1']`` are the Category-I
+    # factors and ``pc['grounding']`` / ``pc['allision']`` the Category-II
+    # ones, so each goes to its own attribute.
     #
-    # The Category-I attributes get the same value rather than a constant:
-    # IWRAP computes the Category-I geometry whatever we write there, and
-    # scoring it with a factor the user never chose is how the old hardcoded
-    # block produced numbers nobody could account for.  A project that wants
-    # IWRAP to score only what OMRAT models should zero these two by hand.
-    'p_allision_causation': (('allision',), '0.000155'),
+    # A project written before the Category-I keys existed falls back to
+    # its Category-II value on the Category-I attribute rather than to a
+    # constant: IWRAP computes the Category-I geometry whatever we write
+    # there, and scoring it with a factor the user never chose is how the
+    # old hardcoded block produced numbers nobody could account for.
+    'p_allision_causation': (('allision_cat1', 'allision'), '0.000155'),
     'p_allision_no_turn_causation': (('allision',), '0.000155'),
     'p_allision_drifting_causation': (('allision_drifting_rf',), '1'),
     'p_bend_causation': (('bend',), '0.00013'),
     'p_crossing_causation': (('crossing',), '0.00013'),
-    'p_grounding_causation': (('grounding', 'p_pc'), '0.000155'),
+    'p_grounding_causation': (('grounding_cat1', 'grounding', 'p_pc'), '0.000155'),
     'p_grounding_no_turn_causation': (('grounding', 'p_pc'), '0.000155'),
     'p_grounding_drifting_causation': (('grounding_drifting_rf',), '1'),
     'p_headon_causation': (('headon',), '5e-05'),
@@ -502,10 +502,12 @@ _CF_EXPORT_MAP: dict[str, tuple[tuple[str, ...], str]] = {
 
 
 # OMRAT ``pc`` key -> IWRAP attributes to read, in *increasing* precedence.
-# Later entries overwrite earlier ones, so where an IWRAP file sets both
-# categories the turn-failure factor wins -- that is the one OMRAT's
-# powered models actually apply.  Mirror of ``_CF_EXPORT_MAP``; changing
-# one without the other breaks the round-trip.
+# Later entries overwrite earlier ones.  The Category-II keys
+# (``grounding`` / ``allision``) also accept the Category-I attribute so
+# an IWRAP file that sets only ``p_grounding_causation`` still yields a
+# value, but the turn-failure attribute wins when both are present.  The
+# Category-I keys (``*_cat1``) read only their own attribute.  Mirror of
+# ``_CF_EXPORT_MAP``; changing one without the other breaks the round-trip.
 _CF_IMPORT_MAP: dict[str, tuple[str, ...]] = {
     'headon': ('p_headon_causation',),
     'overtaking': ('p_overtaking_causation',),
@@ -518,6 +520,8 @@ _CF_IMPORT_MAP: dict[str, tuple[str, ...]] = {
     'allision': (
         'p_allision_causation', 'p_allision_no_turn_causation',
     ),
+    'grounding_cat1': ('p_grounding_causation',),
+    'allision_cat1': ('p_allision_causation',),
     'grounding_drifting_rf': ('p_grounding_drifting_causation',),
     'allision_drifting_rf': ('p_allision_drifting_causation',),
 }

@@ -7,5 +7,5 @@ matplotlib
 pydantic
 requests
 defusedxml
-aissegments>=0.1.0
+aissegments>=0.3.0
 aisdb>=1.7; python_version < "3.13"

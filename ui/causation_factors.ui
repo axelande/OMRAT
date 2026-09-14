@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>480</width>
-    <height>520</height>
+    <width>520</width>
+    <height>600</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -139,7 +139,10 @@
       <item row="5" column="0">
        <widget class="QLabel" name="labelGroundingCf">
         <property name="text">
-         <string>Grounding causation factor:</string>
+         <string>Grounding causation factor (Cat II, missed turn):</string>
+        </property>
+        <property name="toolTip">
+         <string>Powered grounding Category II: the ship fails to turn at a waypoint and runs straight into a shallow area beyond it.  IWRAP p_grounding_no_turn_causation.</string>
         </property>
        </widget>
       </item>
@@ -153,12 +156,49 @@
       <item row="6" column="0">
        <widget class="QLabel" name="labelAllisionCf">
         <property name="text">
-         <string>Allision causation factor:</string>
+         <string>Allision causation factor (Cat II, missed turn):</string>
+        </property>
+        <property name="toolTip">
+         <string>Powered allision Category II: the ship fails to turn at a waypoint and runs straight into a structure beyond it.  IWRAP p_allision_no_turn_causation.</string>
         </property>
        </widget>
       </item>
       <item row="6" column="1">
        <widget class="QLineEdit" name="leAllisionCf">
+        <property name="text">
+         <string>1.9E-4</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0">
+       <widget class="QLabel" name="labelGroundingCat1Cf">
+        <property name="text">
+         <string>Grounding causation factor (Cat I, in lane):</string>
+        </property>
+        <property name="toolTip">
+         <string>Powered grounding Category I: a shallow area lies inside the leg's lateral spread and the ship sails straight into it without any turn being required.  IWRAP p_grounding_causation.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="1">
+       <widget class="QLineEdit" name="leGroundingCat1Cf">
+        <property name="text">
+         <string>1.6E-4</string>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="0">
+       <widget class="QLabel" name="labelAllisionCat1Cf">
+        <property name="text">
+         <string>Allision causation factor (Cat I, in lane):</string>
+        </property>
+        <property name="toolTip">
+         <string>Powered allision Category I: a structure lies inside the leg's lateral spread and the ship sails straight into it without any turn being required.  IWRAP p_allision_causation.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="1">
+       <widget class="QLineEdit" name="leAllisionCat1Cf">
         <property name="text">
          <string>1.9E-4</string>
         </property>

@@ -198,6 +198,106 @@ class TestSummaryRows:
 
 
 # ---------------------------------------------------------------------------
+# Display mode: frequency <-> years between incidents
+# ---------------------------------------------------------------------------
+
+def _set_all_leps(w) -> None:
+    w.LEPDriftingGrounding.setText('1.000e-03')
+    w.LEPPoweredGrounding.setText('2.000e-03')
+    w.LEPDriftAllision.setText('5.000e-04')
+    w.LEPPoweredAllision.setText('0')
+    for name in ('LEPOvertakingCollision', 'LEPHeadOnCollision',
+                 'LEPCrossingCollision', 'LEPMergingCollision', 'LEPBendCollision'):
+        getattr(w, name).setText('1.000e-05')
+
+
+class TestResultDisplayMode:
+    def test_combo_defaults_to_frequency(self, omrat, history):
+        cb = omrat.main_widget.cbResultDisplayMode
+        assert cb.count() == 2
+        assert cb.itemData(0) == 'frequency'
+        assert cb.itemData(1) == 'return_period'
+        assert cb.currentIndex() == 0
+        tw = omrat.main_widget.TWAccidentResults
+        assert tw.horizontalHeaderItem(1).text() == 'Probability'
+
+    def test_switching_rerenders_cells_and_summary(self, omrat, history):
+        from omrat_utils.accident_summary import RESULT_DISPLAY_SETTING
+        w = omrat.main_widget
+        _set_all_leps(w)
+        tw = w.TWAccidentResults
+        assert tw.item(1, 1).text() == '1.000e-03'
+
+        w.cbResultDisplayMode.setCurrentIndex(1)
+        assert tw.horizontalHeaderItem(1).text() == 'Years between incidents'
+        assert tw.item(1, 1).text() == '1,000'      # drifting grounding
+        assert tw.item(3, 1).text() == '500'        # powered grounding
+        assert tw.item(2, 1).text() == '\u221e'     # zero frequency
+        assert tw.item(4, 1).text() == '100,000'    # overtaking
+        assert tw.item(9, 1).text() == '333'        # All grounding 1/3e-3
+        assert tw.item(11, 1).text() == '20,000'    # All collisions 1/5e-5
+        assert tw.item(9, 1).font().bold()
+        # Stored value is untouched and the choice is persisted.
+        assert w.LEPDriftingGrounding.text() == '1.000e-03'
+        assert _FakeSettings.store[RESULT_DISPLAY_SETTING] == 'return_period'
+
+        # LEP edits while in years mode land as years.
+        w.LEPDriftingGrounding.setText('4.000e-03')
+        assert tw.item(1, 1).text() == '250'
+        assert tw.item(9, 1).text() == '167'
+
+        w.cbResultDisplayMode.setCurrentIndex(0)
+        assert tw.horizontalHeaderItem(1).text() == 'Probability'
+        assert tw.item(1, 1).text() == '4.000e-03'
+        assert tw.item(9, 1).text() == '6.000e-03'
+
+    def test_compare_columns_follow_mode_and_delta_stays_relative(self, omrat, history):
+        omrat._main_run_id = None
+        w = omrat.main_widget
+        _set_all_leps(w)
+        rid = history.save_run('other', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        w.cbResultDisplayMode.setCurrentIndex(1)
+        tw_runs = w.TWPreviousRuns
+        tw_runs.clearSelection()
+        tw_runs.selectRow(_row_of(tw_runs, rid))
+        omrat._on_previous_runs_selection_changed()
+
+        tw = w.TWAccidentResults
+        assert tw.columnCount() == 5
+        assert tw.horizontalHeaderItem(1).text() == 'Years between incidents'
+        # other run: drift_grounding = 4e-4 -> 2,500 years
+        assert tw.item(1, 2).text() == '2,500'
+        # delta is computed on frequencies: 4e-4 vs live 1e-3 -> -60 %
+        assert tw.item(1, 3).text() == '-60.0%'
+        assert tw.horizontalHeaderItem(3).text() == 'Δ vs current %'
+        # summary row: (4e-4 + 8e-4) -> 833 years
+        assert tw.item(9, 2).text() == '833'
+        w.cbResultDisplayMode.setCurrentIndex(0)
+        assert tw.item(1, 2).text() == '4.000e-04'
+        assert tw.item(1, 3).text() == '-60.0%'
+        omrat._reset_accident_table_to_base()
+
+    def test_catastrophe_table_follows_mode(self, omrat, history):
+        w = omrat.main_widget
+        omrat._populate_catastrophe_results_table({'levels': [
+            {'name': 'Minor', 'quantity': 50.0, 'exceedance': 0.01},
+            {'name': 'Major', 'quantity': 500.0, 'exceedance': 0.0},
+        ]})
+        tw = w.TWCatastropheResults
+        assert tw.horizontalHeaderItem(2).text() == 'Exceedance (events/year)'
+        assert tw.item(0, 2).text() == '1.000e-02'
+        w.cbResultDisplayMode.setCurrentIndex(1)
+        assert tw.horizontalHeaderItem(2).text() == 'Years between exceedances'
+        assert tw.item(0, 2).text() == '100'
+        assert tw.item(1, 2).text() == '\u221e'
+        assert 'years between' in w.lblCatastropheResults.text()
+        w.cbResultDisplayMode.setCurrentIndex(0)
+        assert tw.item(0, 2).text() == '1.000e-02'
+        assert 'events/year' in w.lblCatastropheResults.text()
+
+
+# ---------------------------------------------------------------------------
 # Tangent lines on file load
 # ---------------------------------------------------------------------------
 

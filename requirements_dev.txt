@@ -7,6 +7,9 @@ flake8>=7
 # Security linter; ``tools/run_bandit.py`` is the canonical entry point
 # and is run in CI before any plugins.qgis.org upload.
 bandit>=1.7
+# Token rewriter used by the vendored QGIS ``pyqt5_to_pyqt6.py``;
+# ``tools/run_qt6_check.py`` reproduces the plugins.qgis.org Qt6 check.
+tokenize-rt
 # pytest-qgis: pinned to axelande's fork (the upstream PyPI release lags
 # behind and doesn't yet include the fixes this CI needs).  Swap the
 # ``@main`` suffix for a tag (``@v1.2.3``) or commit SHA once a stable

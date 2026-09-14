@@ -104,6 +104,15 @@ def apply_copy(
     if not done:
         return done
 
+    # Junction matrices: the source/target pair now counts as linked
+    # traffic, so their shared junction (if any) gets a 100 % row.
+    junctions = getattr(omrat, 'junctions', None)
+    if junctions is not None and hasattr(junctions, 'rebuild_from_segments'):
+        try:
+            junctions.rebuild_from_segments(omrat.segment_data, prefer_user=True)
+        except Exception:  # nosec B110
+            pass
+
     # Route table lock boxes.
     geoms = getattr(omrat, 'qgis_geoms', None)
     if geoms is not None and hasattr(geoms, 'sync_lock_column'):

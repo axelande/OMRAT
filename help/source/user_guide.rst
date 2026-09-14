@@ -467,9 +467,11 @@ How depths drive the calculation
 * **Drifting anchoring:** a polygon is an anchoring zone if its depth
   is less than ``anchor_d * draught`` (configurable under Drift
   settings).
-* **Powered grounding:** the shallowest depth encountered along a
-  ray cast from the leg's bend gives the grounding contribution
-  (:math:`N_{II} = P_c Q m \exp(-d/(a_i V))`).
+* **Powered grounding:** two categories.  A shallow polygon *inside*
+  the leg's lateral spread is a Category-I hazard
+  (:math:`N_I = P_{c,I} Q m`, no distance term); the shallowest depth
+  encountered along a ray cast *past* the leg's bend gives the
+  Category-II contribution (:math:`N_{II} = P_c Q m \exp(-d/(a_i V))`).
 
 
 Objects tab
@@ -509,10 +511,11 @@ How objects drive the calculation
   the object's ``height`` to ``0``.
 * **Powered allision:** ``ship_height < object_height`` passes under
   (no collision) -- the powered ship is assumed to clear the
-  structure's deck.  Otherwise the standard Cat II probability
-  formula applies.  Set ``object_height = 0`` to disable the
-  clearance check and count every powered ship as well (typical for
-  wind farms and full-height piers).
+  structure's deck.  Otherwise the Cat I formula applies to
+  structures inside the leg's lateral spread and the Cat II formula
+  to structures past the leg's bend.  Set ``object_height = 0`` to
+  disable the clearance check and count every powered ship as well
+  (typical for wind farms and full-height piers).
 
 
 .. _lateral-distributions:
@@ -653,6 +656,16 @@ five ship-ship types).  They recompute whenever the rows above change
 and get their own probability / delta cells when previous runs are
 compared.
 
+The **Show as** selector to the right of the table caption switches the
+presentation between **Frequency (per year)** -- the annual accident
+frequency in scientific notation -- and **Years between incidents**,
+i.e. the return period ``1 / frequency``.  The choice applies to the
+accident table, its summary rows, the per-run comparison columns and
+the catastrophe-exceedance table below, and is remembered between
+sessions.  Only the presentation changes: the stored totals, the run
+history and the ``Δ %`` columns are always computed from the frequency.
+A zero frequency shows as ``∞`` in years mode.
+
 The **View** button on a ship-ship collision row opens a per-leg (or
 per-leg-pair) table with the absolute probability and a **% of total**
 column, i.e. each leg's share of that accident type.
@@ -759,10 +772,14 @@ Causation factors
    Default values come from Fujii (1974), Pedersen (1995), and the
    IALA IWRAP manual.  See :ref:`theory` for the reference table.
 
-Eight fields: powered, drifting, head-on, overtaking, crossing,
-**merging**, bend, grounding and allision.  The merging factor was
-added in v0.14.0 and defaults to the crossing value -- IWRAP
-publishes no separate figure for it (see :ref:`merging-collisions`).
+Eleven fields: powered, drifting, head-on, overtaking, crossing,
+**merging**, bend, grounding and allision (Cat II, missed turn) and
+grounding and allision **Cat I** (obstacle already in the lane).  The
+merging factor was added in v0.14.0 and defaults to the crossing value
+-- IWRAP publishes no separate figure for it (see
+:ref:`merging-collisions`).  The two Cat I factors were added in
+v0.15.0 together with the Category-I powered model and default to the
+same figures as their Cat II counterparts, as IWRAP does.
 
 Ship Categories
 ---------------

@@ -796,7 +796,7 @@ class IngestPage(QWizardPage):
             self,
             "Select AIS files",
             "",
-            "AIS files (*.nm4 *.nmea *.csv *.csv.gz *.gz);;All files (*.*)",
+            "AIS files (*.nm4 *.nmea *.csv *.csv.gz *.gz *.parquet);;All files (*.*)",
         )
         for f in files:
             if f and f not in self._files:
