@@ -24,6 +24,7 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.15.2 (2026-09-16) - Update the numbering rules of the routes so new routes starts at 1.
   Version 0.15.1 (2026-09-08) - Minor bugs fixes and added new ways of presenting the results
   Version 0.15.0 (2026-09-03) - Powered grounding and allision now include IWRAP Category I (obstacle inside the lane) next to the Category II missed-turn model, with separate Cat I causation factors, IWRAP XML mapping and report split.
   Version 0.14.3 (2026-09-03) - Made it possible to move the tangent along the leg and fix saving and copying traffic.

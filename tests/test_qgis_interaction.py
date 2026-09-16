@@ -2,7 +2,6 @@ import pytest
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsPointXY, QgsGeometry, QgsPoint
 )
-from qgis.PyQt.QtWidgets import QTableWidgetItem
 
 
 def test_add_new_route(omrat):
@@ -34,8 +33,58 @@ def test_create_line(omrat):
     # Check that the line layer was created and added to the project
     assert len(omrat.qgis_geoms.vector_layers) == 2
     route_id = omrat.qgis_geoms.cur_route_id
-    seg_id = omrat.qgis_geoms.segment_id
-    assert QgsProject.instance().mapLayersByName(f"LEG_{route_id}_{seg_id}")
+    leg_no = omrat.qgis_geoms.route_leg_no
+    assert QgsProject.instance().mapLayersByName(f"LEG_{route_id}_{leg_no}")
+
+
+def _draw_leg(omrat, start, end):
+    omrat.qgis_geoms.current_start_point = QgsPointXY(*start)
+    omrat.qgis_geoms.create_line(QgsPoint(*end))
+    return str(omrat.qgis_geoms.segment_id)
+
+
+def test_next_leg_number_reset_never_overwrites_existing_legs(omrat):
+    """Regression: setting the *Next leg* spinbox back to 1 for a second
+    route used to reuse ``Segment_Id`` 1 and overwrite the first route's
+    leg in ``segment_data`` (the legs then vanished when a split rebuilt
+    the canvas from the dict).  The spinbox now only drives the leg
+    number in the name; the key is always fresh."""
+    qg = omrat.qgis_geoms
+    first = _draw_leg(omrat, (10.0, 20.0), (11.0, 20.0))
+    second = _draw_leg(omrat, (11.0, 20.0), (12.0, 20.0))
+    before = {k: dict(v) for k, v in omrat.segment_data.items()}
+    assert set(before) >= {first, second}
+
+    # User starts route 2 and resets the leg number to 1 by hand.
+    qg._on_route_id_changed(2)
+    assert qg.route_leg_no == 0
+    qg._on_next_leg_id_changed(1)
+    third = _draw_leg(omrat, (10.0, 25.0), (11.0, 25.0))
+    fourth = _draw_leg(omrat, (11.0, 25.0), (12.0, 25.0))
+
+    assert len({first, second, third, fourth}) == 4
+    for key, seg in before.items():
+        assert omrat.segment_data[key]['Start_Point'] == seg['Start_Point']
+        assert omrat.segment_data[key]['End_Point'] == seg['End_Point']
+    assert omrat.segment_data[third]['Leg_name'] == 'LEG_2_1'
+    assert omrat.segment_data[fourth]['Leg_name'] == 'LEG_2_2'
+    assert omrat.segment_data[third]['Route_Id'] == 2
+    assert QgsProject.instance().mapLayersByName('LEG_2_1')
+    assert QgsProject.instance().mapLayersByName('LEG_1_1')
+
+
+def test_stop_route_restarts_leg_numbering(omrat):
+    qg = omrat.qgis_geoms
+    _draw_leg(omrat, (10.0, 20.0), (11.0, 20.0))
+    _draw_leg(omrat, (11.0, 20.0), (12.0, 20.0))
+    assert qg.route_leg_no == 2
+    omrat.stop_route()
+    assert qg.cur_route_id == 2
+    assert qg.route_leg_no == 0
+    assert omrat.main_widget.sbNextLegId.value() == 1
+    # Switching the route spinbox back continues after the last number.
+    qg._on_route_id_changed(1)
+    assert omrat.main_widget.sbNextLegId.value() == 3
 
 
 def test_create_offset_lines(omrat):
@@ -56,129 +105,121 @@ def test_create_offset_lines(omrat):
     assert feature["type"] == f"Tangent Line {segment_id}"
 
 
-@pytest.mark.skip("not working now")
-def test_on_geometry_changed(omrat):
-    """Test the on_geometry_changed method."""
-    start_point = QgsPointXY(14.31942998, 55.20514187)
-    end_point = QgsPointXY(14.46021114, 55.30168824)
-    end_point2 = QgsPoint(14.61358249, 55.41424602)
-    omrat.qgis_geoms.current_start_point = start_point
+def _leg_layer_and_fid(omrat, seg_id):
+    layer = omrat.qgis_geoms._find_layer_for_seg_id(seg_id)
+    assert layer is not None
+    return layer, next(layer.getFeatures()).id()
 
-    omrat.qgis_geoms.create_line(end_point)
+
+def _tangent_midpoint(seg_id):
     tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
-    tangent_feature = next(tangent_layer.getFeatures())
-    original_tangent_geom = tangent_feature.geometry().asPolyline()
-
-    assert original_tangent_geom == [
-        QgsPointXY(14.41994445867451624, 55.23905443055804199),
-        QgsPointXY(14.35950436006096886, 55.26780867173166456),
-    ]
-
-    segment_layer = omrat.qgis_geoms.vector_layers[1]
-    segment_feature = next(segment_layer.getFeatures())
-    segment_feature.setGeometry(QgsGeometry.fromPolylineXY([start_point, end_point2]))
-    segment_layer.dataProvider().changeGeometryValues({segment_feature.id(): segment_feature.geometry()})
-
-    omrat.qgis_geoms.on_geometry_changed(segment_feature.id(), segment_feature.geometry())
-
-    updated_tangent_feature = next(tangent_layer.getFeatures())
-    updated_tangent_geom = updated_tangent_feature.geometry().asPolyline()
-    assert updated_tangent_geom == [
-        QgsPointXY(14.49682801649846553, 55.29571991224211303),
-        QgsPointXY(14.43538957075596407, 55.32383741183878101),
-    ]
+    for feat in tangent_layer.getFeatures():
+        if feat["type"] == f"Tangent Line {seg_id}":
+            a, b = feat.geometry().asPolyline()
+            return QgsPointXY((a.x() + b.x()) / 2, (a.y() + b.y()) / 2)
+    raise AssertionError(f"no tangent for leg {seg_id}")
 
 
-@pytest.mark.skip("not working now")
-def test_on_width_changed(omrat):
-    """Test the on_width_changed method."""
-    start_point = QgsPoint(14.31942998, 55.20514187)
+def _tangent_length(seg_id):
+    tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
+    for feat in tangent_layer.getFeatures():
+        if feat["type"] == f"Tangent Line {seg_id}":
+            a, b = feat.geometry().asPolyline()
+            return a.distance(b)
+    raise AssertionError(f"no tangent for leg {seg_id}")
+
+
+def test_vertex_move_after_commit_updates_model_table_and_tangent(omrat):
+    """Regression (kattegatt2.omrat, 2026-09-16): the geometry handler hung
+    off the layer's *edit buffer*, which QGIS destroys on commit.  After
+    **Stop route** a dragged vertex moved on the canvas only; the model,
+    the route table and the tangent kept the old position and the next
+    save wrote stale coordinates.  The handler now listens to the layer."""
+    start_point = QgsPointXY(14.31942998, 55.20514187)
     end_point = QgsPoint(14.46021114, 55.30168824)
-    omrat.qgis_geoms.current_start_point = QgsGeometry.fromPointXY(start_point)
+    new_end = QgsPointXY(14.61358249, 55.41424602)
+    omrat.qgis_geoms.current_start_point = start_point
+    omrat.qgis_geoms.create_line(end_point)
+    seg_id = omrat.qgis_geoms.segment_id
+    layer, fid = _leg_layer_and_fid(omrat, seg_id)
 
-    omrat.qgis_geoms.create_line(QgsGeometry.fromPointXY(end_point))
-    tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
-    tangent_feature = next(tangent_layer.getFeatures())
-    original_tangent_geom = tangent_feature.geometry().asPolyline()
+    # Stop route commits every leg layer -> old edit buffer is gone.
+    omrat.stop_route()
+    assert not layer.isEditable()
 
-    assert original_tangent_geom == [
-        QgsPointXY(14.41994445867451624, 55.23905443055804199),
-        QgsPointXY(14.35950436006096886, 55.26780867173166456),
-    ]
+    # A new edit session, as the vertex tool would start.
+    assert layer.startEditing()
+    assert layer.changeGeometry(fid, QgsGeometry.fromPolylineXY([start_point, new_end]))
 
-    item5 = QTableWidgetItem('8000')
-    omrat.main_widget.twRouteList.setItem(0, 5, item5)
-    tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
-    tangent_feature = next(tangent_layer.getFeatures())
-    updated_tangent_geom = tangent_feature.geometry().asPolyline()
-    assert updated_tangent_geom != original_tangent_geom
+    seg = omrat.segment_data[str(seg_id)]
+    assert seg['End_Point'] == f"{new_end.x():.6f} {new_end.y():.6f}"
+    table = omrat.main_widget.twRouteList
+    row = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == str(seg_id))
+    assert table.item(row, 4).text() == seg['End_Point']
+    # Tangent redrawn on the new leg: its midpoint sits at the new leg
+    # midpoint (interpolated in UTM, hence the loose tolerance of about
+    # 100 m) and nowhere near the old one.
+    mid = _tangent_midpoint(seg_id)
+    expect = QgsPointXY((start_point.x() + new_end.x()) / 2, (start_point.y() + new_end.y()) / 2)
+    old_mid = QgsPointXY((start_point.x() + end_point.x()) / 2, (start_point.y() + end_point.y()) / 2)
+    assert mid.distance(expect) < 1e-3
+    assert mid.distance(old_mid) > 0.05
 
 
-@pytest.mark.skip("not working now")
-def test_modify_second_segment(omrat):
-    """Test modifying the second segment and verifying all tangents are updated correctly."""
+def test_on_width_changed(omrat):
+    """Editing the Width cell redraws the tangent with the new half-width."""
     start_point = QgsPointXY(14.31942998, 55.20514187)
-    mid_point = QgsPointXY(14.46021114, 55.30168824)
-    end_point = QgsPointXY(14.61358249, 55.41424602)
-    end_point_mod = QgsPointXY(14.54719788, 55.41359631)
-    end_point2 = QgsPointXY(14.77725490, 55.46813418)
-    omrat.qgis_geoms.current_start_point = QgsGeometry.fromPointXY(start_point)
+    end_point = QgsPoint(14.46021114, 55.30168824)
+    omrat.qgis_geoms.current_start_point = start_point
+    omrat.qgis_geoms.create_line(end_point)
+    seg_id = omrat.qgis_geoms.segment_id
+    before = _tangent_length(seg_id)
 
-    omrat.qgis_geoms.create_line(QgsGeometry.fromPointXY(mid_point))
-    omrat.qgis_geoms.create_line(QgsGeometry.fromPointXY(end_point))
-    omrat.qgis_geoms.create_line(QgsGeometry.fromPointXY(end_point2))
+    table = omrat.main_widget.twRouteList
+    row = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == str(seg_id))
+    table.item(row, 5).setText('8000')
 
+    after = _tangent_length(seg_id)
+    assert after == pytest.approx(before * 8000 / 5000, rel=1e-3)
+    assert float(omrat.segment_data[str(seg_id)]['Width']) == 8000
+
+
+def test_moving_shared_vertex_propagates_to_neighbour(omrat):
+    """Dragging the junction between leg 2 and leg 3 (after a commit) moves
+    leg 3's start too, in the model, the table and the tangent."""
+    p0 = QgsPointXY(14.31942998, 55.20514187)
+    p1 = QgsPointXY(14.46021114, 55.30168824)
+    p2 = QgsPointXY(14.61358249, 55.41424602)
+    p3 = QgsPointXY(14.77725490, 55.46813418)
+    p2_new = QgsPointXY(14.54719788, 55.41359631)
+    omrat.qgis_geoms.current_start_point = p0
+    ids = []
+    for pt in (p1, p2, p3):
+        omrat.qgis_geoms.create_line(QgsPoint(pt.x(), pt.y()))
+        ids.append(omrat.qgis_geoms.segment_id)
+    leg2, leg3 = ids[1], ids[2]
     tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
-    tangent_features = list(tangent_layer.getFeatures())
+    assert tangent_layer.featureCount() == 3
 
-    assert len(tangent_features) == 3
-    for tangent in tangent_features:
-        if tangent.attributes()[0] == 'Tangent Line 1':
-            assert tangent.geometry().asPolyline() == [
-                QgsPointXY(14.41994445867451624, 55.23905443055804199),
-                QgsPointXY(14.35950436006096886, 55.26780867173166456),
-            ]
-        elif tangent.attributes()[0] == 'Tangent Line 2':
-            assert tangent.geometry().asPolyline() == [
-                QgsPointXY(14.56792552892891379, 55.34421538279835318),
-                QgsPointXY(14.50562546536714592, 55.37176484007880362),
-            ]
-        elif tangent.attributes()[0] == 'Tangent Line 3':
-            assert tangent.geometry().asPolyline() == [
-                QgsPointXY(14.71515210670152562, 55.42177566433891656),
-                QgsPointXY(14.67554678409647018, 55.46065575566534278),
-            ]
-        else:
-            assert False, "unknown line"
+    omrat.stop_route()
+    layer, fid = _leg_layer_and_fid(omrat, leg2)
+    assert layer.startEditing()
+    assert layer.changeGeometry(fid, QgsGeometry.fromPolylineXY([p1, p2_new]))
 
-    segment_layer = omrat.qgis_geoms.vector_layers[2]
-    segment_feature = next(segment_layer.getFeatures())
-    segment_feature.setGeometry(QgsGeometry.fromPolylineXY([mid_point, end_point_mod]))
-    segment_layer.dataProvider().changeGeometryValues({segment_feature.id(): segment_feature.geometry()})
-
-    omrat.qgis_geoms.on_geometry_changed(segment_feature.attributes()[0], segment_feature.geometry())
-
-    tangent_layer = QgsProject.instance().mapLayersByName("Tangent Line")[0]
-    updated_tangent_features = list(tangent_layer.getFeatures())
-    assert len(updated_tangent_features) == 3
-    for tangent in updated_tangent_features:
-        if tangent.attributes()[0] == 'Tangent Line 1':
-            assert tangent.geometry().asPolyline() == [
-                QgsPointXY(14.41994445867451624, 55.23905443055804199),
-                QgsPointXY(14.35950436006096886, 55.26780867173166456),
-            ]
-        elif tangent.attributes()[0] == 'Tangent Line 2':
-            assert tangent.geometry().asPolyline() == [
-                QgsPointXY(14.539690916698774, 55.34854897137823571),
-                QgsPointXY(14.46757931842909528, 55.36674064821078645),
-            ]
-        elif tangent.attributes()[0] == 'Tangent Line 3':
-            assert tangent.geometry().asPolyline() == [
-                QgsPointXY(14.71515210670152562, 55.42177566433891656),
-                QgsPointXY(14.67554678409647018, 55.46065575566534278),
-            ]
-        else:
-            assert False, "unknown line"
+    new_wkt = f"{p2_new.x():.6f} {p2_new.y():.6f}"
+    assert omrat.segment_data[str(leg2)]['End_Point'] == new_wkt
+    assert omrat.segment_data[str(leg3)]['Start_Point'] == new_wkt
+    table = omrat.main_widget.twRouteList
+    row3 = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == str(leg3))
+    assert table.item(row3, 3).text() == new_wkt
+    expect = QgsPointXY((p2_new.x() + p3.x()) / 2, (p2_new.y() + p3.y()) / 2)
+    old_mid = QgsPointXY((p2.x() + p3.x()) / 2, (p2.y() + p3.y()) / 2)
+    assert _tangent_midpoint(leg3).distance(expect) < 1e-3
+    assert _tangent_midpoint(leg3).distance(old_mid) > 0.02
+    # The neighbour's blue line on the canvas follows too.
+    layer3, _ = _leg_layer_and_fid(omrat, leg3)
+    first_vertex = next(layer3.getFeatures()).geometry().asPolyline()[0]
+    assert first_vertex.distance(p2_new) < 1e-9
 
 
 def test_unload(omrat):

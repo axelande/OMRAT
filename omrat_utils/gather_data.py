@@ -6,6 +6,7 @@ import numpy as np
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
 
+from omrat_utils.project_sanitize import sanitize_project
 from geometries.tangent_position import (
     TANGENT_POS_KEY, normalize_tangent_pos, percent_from_fraction,
 )
@@ -72,6 +73,12 @@ class GatherData:
                 pass
         self.data['traffic_data'] = copy.deepcopy(self.p.traffic_data)
         self.data['segment_data'] = copy.deepcopy(self.p.segment_data)
+        # A project saved before its first AIS pass still has empty
+        # observation lists in the traffic cells and no distribution
+        # fields on legs never shown in the Distributions tab; the
+        # schema (and therefore Load) rejects both.  Fix the copies, not
+        # the live dicts, so the UI keeps its "no AIS yet" state.
+        sanitize_project(self.data)
         for key, item in self.data['segment_data'].items():
             self.data['segment_data'][key]['dist1'] = list(item.get('dist1', np.array([])))
             self.data['segment_data'][key]['dist2'] = list(item.get('dist2', np.array([])))

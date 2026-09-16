@@ -184,11 +184,12 @@ def test_leg_name_uses_route_then_segment_ordering():
     import inspect
     from geometries.handle_qgis_iface import HandleQGISIface
     src = inspect.getsource(HandleQGISIface)
-    # The correct ordering is route first, segment second.
-    assert "f'LEG_{self.cur_route_id}_{self.segment_id}'" in src or \
-           'f"LEG_{self.cur_route_id}_{self.segment_id}"' in src, src
-    # And the old transposed form should be gone.
+    # Every generation site goes through ``current_leg_name`` (route
+    # first, then the per-route leg number).
+    assert "leg_name(self.cur_route_id, self.route_leg_no)" in src, src
+    # The global key must never appear in the name, in either order.
     assert "LEG_{self.segment_id}_{self.cur_route_id}" not in src
+    assert "LEG_{self.cur_route_id}_{self.segment_id}" not in src
     assert "LEG_{fid}_{route_id}" not in src
 
 

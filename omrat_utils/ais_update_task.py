@@ -282,14 +282,8 @@ class AisUpdateTask(QgsTask):
                 try:
                     layer = qg._find_layer_for_seg_id(int(key))
                     if layer is not None:
-                        eb = layer.editBuffer()
-                        if eb is not None:
-                            try:
-                                eb.geometryChanged.disconnect()
-                            except TypeError:
-                                pass
-                            if eb in qg.buffer_edits:
-                                qg.buffer_edits.remove(eb)
+                        from geometries.handle_qgis_iface import unwire_leg_layer
+                        unwire_leg_layer(qg, layer)
                         qg.vector_layers[:] = [vl for vl in qg.vector_layers if vl is not layer]
                         from qgis.core import QgsProject
                         QgsProject.instance().removeMapLayer(layer.id())

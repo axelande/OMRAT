@@ -415,7 +415,7 @@ class TestPublicMethods:
         assert list(tmp_path.iterdir()) == []
 
     def test_store_all_swallows_validation_error(self, tmp_path, monkeypatch, capsys):
-        """If RootModelSchema raises, the error is printed and save continues."""
+        """If RootModelSchema raises, the user is warned and save continues."""
         out_path = str(tmp_path / 'bad.omrat')
         # Send truly invalid data so validation fails.
         bad = {'segment_data': 'not-a-dict'}
@@ -424,9 +424,9 @@ class TestPublicMethods:
         s.store_all()
         # File was still written (save path is after the validation try).
         assert (tmp_path / 'bad.omrat').exists()
-        # Validation error got printed.
-        err = capsys.readouterr().out
-        assert err  # non-empty
+        # The user is told, on the message bar, that Load will refuse it.
+        msg = s.p.notifier.display_message.call_args.args[0]
+        assert 'bad.omrat' in msg and 'Load will refuse' in msg
 
     def test_select_file_testing_flag_returns_test_path(self):
         from unittest.mock import MagicMock
@@ -479,7 +479,7 @@ class TestPublicMethods:
     def test_load_from_path_validation_failure_returns_early(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Schema validation raises -> populate skipped, error printed."""
+        """Schema validation raises -> populate skipped, user warned."""
         import json
         file_path = tmp_path / 'bad.omrat'
         file_path.write_text(json.dumps({'segment_data': {}}))
@@ -510,7 +510,8 @@ class TestPublicMethods:
 
         s.load_from_path(str(file_path))
         assert populated == []
-        assert 'Validation error' in capsys.readouterr().out
+        msg = parent.notifier.display_message.call_args.args[0]
+        assert 'bad.omrat' in msg and 'not loaded' in msg
 
     def test_load_all_no_file_returns_silently(self, monkeypatch):
         from unittest.mock import MagicMock

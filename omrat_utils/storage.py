@@ -11,6 +11,7 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QFileDialog
 
 from .gather_data import GatherData
+from .project_sanitize import sanitize_project
 from .validate_data import RootModelSchema
 
 if TYPE_CHECKING:
@@ -43,8 +44,12 @@ class Storage:
         try:
             RootModelSchema.model_validate(data)
         except ValidationError as e:
-            # This should not happen when everything works
-            print(e)
+            # Still write the file -- losing the user's work is worse than
+            # an invalid file -- but say so, because Load will refuse it.
+            self._report_validation_error(
+                file_path, e, "The project was written but does not pass the schema check; "
+                "Load will refuse it until this is fixed.",
+            )
         try:
             with open(file_path, 'w') as f:
                 f.write(json.dumps(data, indent=2))
@@ -84,6 +89,47 @@ class Storage:
             QgsMessageLog.logMessage(message, 'OMRAT', Qgis.MessageLevel.Critical)
         except Exception:  # nosec B110 B112
             print(message)
+
+    @staticmethod
+    def summarize_validation_error(exc: ValidationError, limit: int = 5) -> str:
+        """Short, grouped account of a pydantic error: one line per
+        distinct ``(top-level block, field)`` with a count, most frequent
+        first, at most ``limit`` lines."""
+        counts: dict[str, int] = {}
+        for err in exc.errors():
+            loc = [str(x) for x in err.get('loc', ())]
+            if loc and loc[0] == 'traffic_data' and len(loc) > 3:
+                # traffic_data.<leg>.<dir>.<matrix>.r.c -> traffic_data.*.<matrix>
+                key = f"{loc[0]}.*.{loc[3]}: {err.get('msg', '')}"
+            elif loc and loc[0] == 'segment_data' and len(loc) > 2:
+                # segment_data.<leg>.<field> -> segment_data.*.<field>
+                key = f"{loc[0]}.*.{loc[-1]}: {err.get('msg', '')}"
+            else:
+                key = f"{'.'.join(loc) or '<root>'}: {err.get('msg', '')}"
+            counts[key] = counts.get(key, 0) + 1
+        lines = [f"{k} ({n} places)" if n > 1 else k
+                 for k, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+        more = len(lines) - limit
+        lines = lines[:limit]
+        if more > 0:
+            lines.append(f"... and {more} more kinds of error")
+        return "\n".join(lines)
+
+    def _report_validation_error(self, file_path: str, exc: ValidationError, what: str) -> None:
+        """Tell the user (message bar) and the QGIS log why a file failed
+        the schema check instead of printing to a console nobody sees."""
+        summary = self.summarize_validation_error(exc)
+        message = f"{os.path.basename(file_path)}: {what}\n{summary}"
+        try:
+            QgsMessageLog.logMessage(f"{message}\n\nFull error:\n{exc}", 'OMRAT', Qgis.MessageLevel.Critical)
+        except Exception:  # nosec B110 B112
+            print(message)
+        notifier = getattr(self.p, 'notifier', None)
+        if notifier is not None:
+            try:
+                notifier.display_message(message, level=Qgis.MessageLevel.Critical, duration=0)
+            except Exception:  # nosec B110 B112
+                pass
 
     def _suggested_save_location(self) -> tuple[str, str]:
         """``(directory, file name)`` to pre-fill the Save-as dialog with:
@@ -152,8 +198,7 @@ class Storage:
             try:
                 RootModelSchema.model_validate(data)
             except ValidationError as e:
-                # Show error to user, log, etc.
-                print("Validation error:", e)
+                self._report_validation_error(file_path, e, "The project was not loaded.")
                 return
             gather = GatherData(self.p)
             gather.populate(data)
@@ -169,6 +214,11 @@ class Storage:
     def _normalize_legacy_to_schema(self, data: dict) -> dict:
         """Convert older saved formats/keys to match RootModelSchema."""
         out = dict(data)
+        # Same fixes the writer applies, for files written before it did.
+        # Runs first so a leg that was never shown in the Distributions
+        # tab gets that tab's defaults (ai = 180 s), not the zeros the
+        # legacy setdefaults below would otherwise leave behind.
+        sanitize_project(out)
         out['depths'] = self._normalize_depths(out.get('depths', []))
         out['objects'] = self._normalize_objects(out.get('objects', []))
         out['segment_data'] = self._normalize_segment_data(out.get('segment_data', {}) or {})

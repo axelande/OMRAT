@@ -1,7 +1,7 @@
 from functools import partial
 from typing import TYPE_CHECKING
 
-from qgis._core import QgsFeatureRenderer, QgsVectorDataProvider, QgsVectorLayerEditBuffer
+from qgis._core import QgsFeatureRenderer, QgsVectorDataProvider
 if TYPE_CHECKING:
     from omrat import OMRAT
 
@@ -20,6 +20,7 @@ from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 from omrat_utils import PointTool
 from omrat_utils.copy_traffic import LOCK_KEY, SOURCE_KEY, is_locked, set_locked
 from omrat_utils.layer_styles import apply_stored_style
+from omrat_utils.leg_numbering import leg_name, max_leg_number, next_free_segment_id
 from omrat_utils.leg_sort import SORTABLE_COLUMNS, sort_segment_data
 from geometries.tangent_position import (
     DEFAULT_TANGENT_POS, TANGENT_POS_KEY, fraction_from_percent, normalize_tangent_pos,
@@ -52,6 +53,27 @@ def calculate_tangent_line(
     return start_tangent, end_tangent
 
 
+def unwire_leg_layer(handler, layer) -> None:
+    """Disconnect the slot ``wire_leg_layer`` attached to ``layer`` and
+    forget the layer.  Module-level so callers that only hold a duck-typed
+    handler (tests, the AIS task) can use it too."""
+    slots = getattr(handler, '_leg_geom_slots', None)
+    slot = None
+    if isinstance(slots, dict):
+        try:
+            slot = slots.pop(layer.id(), None)
+        except Exception:  # nosec B110 B112
+            slot = None
+    if slot is not None:
+        try:
+            layer.geometryChanged.disconnect(slot)
+        except (TypeError, RuntimeError):
+            pass
+    tracked = getattr(handler, 'buffer_edits', None)
+    if isinstance(tracked, list) and layer in tracked:
+        tracked.remove(layer)
+
+
 class HandleQGISIface:
     def __init__(self, omrat: "OMRAT"):
         """Initialize the HandleQGISIface class."""
@@ -59,10 +81,20 @@ class HandleQGISIface:
         self.tangent_layer: QgsVectorLayer | None = None
         self.vector_layers: list[QgsVectorLayer] = []
         self.current_start_point: QgsPointXY | None = None
+        # ``segment_id`` is the last *global* leg id handed out -- the
+        # ``segment_data`` key.  ``route_leg_no`` is the last leg number on
+        # the current route, the ``n`` in ``LEG_{route}_{n}``; it restarts
+        # at 0 for every new route.  Only the number is user-editable.
         self.segment_id = 0
         self.cur_route_id = 1
+        self.route_leg_no = 0
         self.item_changed_connected = False
-        self.buffer_edits: list[QgsVectorLayerEditBuffer] = []
+        # Leg layers whose ``geometryChanged`` we listen to, and the exact
+        # slot connected per layer id so teardown can disconnect *only*
+        # ours.  (Kept under the historical name: it used to hold edit
+        # buffers -- see ``wire_leg_layer`` for why that was a bug.)
+        self.buffer_edits: list[QgsVectorLayer] = []
+        self._leg_geom_slots: dict[str, object] = {}
         self.leg_dirs: dict[str, list[str]] = {}
         self._rubber_band: QgsRubberBand | None = None
         # Re-entrancy guards: our own tangent redraws / table writes must
@@ -79,7 +111,7 @@ class HandleQGISIface:
             mw.sbRouteId.setValue(self.cur_route_id)
             mw.sbRouteId.valueChanged.connect(self._on_route_id_changed)
         if hasattr(mw, 'sbNextLegId'):
-            mw.sbNextLegId.setValue(self.segment_id + 1)
+            mw.sbNextLegId.setValue(self.route_leg_no + 1)
             mw.sbNextLegId.valueChanged.connect(self._on_next_leg_id_changed)
 
     def add_new_route(self):
@@ -160,7 +192,7 @@ class HandleQGISIface:
         mw = self.omrat.main_widget
         for name, value in (
             ('sbRouteId', self.cur_route_id),
-            ('sbNextLegId', self.segment_id + 1),
+            ('sbNextLegId', self.route_leg_no + 1),
         ):
             sb = getattr(mw, name, None)
             if sb is None:
@@ -172,10 +204,29 @@ class HandleQGISIface:
                 sb.blockSignals(False)
 
     def _on_route_id_changed(self, value: int) -> None:
-        self.cur_route_id = value
+        self.begin_route(value)
 
     def _on_next_leg_id_changed(self, value: int) -> None:
-        self.segment_id = value - 1
+        """The spinbox edits the per-route leg *number* only.  The global
+        ``Segment_Id`` is minted by ``next_free_segment_id`` so a manual
+        reset to 1 can never overwrite an existing leg."""
+        self.route_leg_no = value - 1
+
+    def begin_route(self, route_id: int | None = None) -> None:
+        """Make ``route_id`` (default: the next unused route) the route
+        that newly drawn legs belong to and restart the leg numbering so
+        the first new leg is ``LEG_{route}_1`` -- or continues after the
+        highest number the route already has."""
+        if route_id is None:
+            route_id = self.cur_route_id + 1
+        self.cur_route_id = int(route_id)
+        segment_data = getattr(self.omrat, 'segment_data', None) or {}
+        self.route_leg_no = max_leg_number(segment_data, self.cur_route_id)
+        self.sync_drawing_spinboxes()
+
+    def current_leg_name(self) -> str:
+        """``LEG_{route}_{n}`` for the leg being drawn."""
+        return leg_name(self.cur_route_id, self.route_leg_no)
 
     def create_point(self, point: QgsPoint):
         self.point_layer = QgsVectorLayer("Point?crs=EPSG:4326", "StartPoint", "memory")
@@ -204,11 +255,15 @@ class HandleQGISIface:
 
     def create_line(self, point: QgsPoint):
         """Create a line layer, style it, label it, and create offset lines."""
-        # Increment segment ID so the layer name carries the leg id from
-        # the moment it appears in the QGIS layer panel (rather than
-        # only after a save -> reload round-trip).
-        self.segment_id += 1
-        layer_name = f"LEG_{self.cur_route_id}_{self.segment_id}"
+        # Mint the global id above every id in use (never reuse a key that
+        # is still in ``segment_data``) and advance the per-route number
+        # that the layer name carries from the moment it appears in the
+        # QGIS layer panel.
+        self.segment_id = next_free_segment_id(
+            getattr(self.omrat, 'segment_data', None), self.segment_id,
+        )
+        self.route_leg_no += 1
+        layer_name = self.current_leg_name()
         vl = QgsVectorLayer("LineString?crs=EPSG:4326", layer_name, "memory")
         if not vl.isValid():
             print("Error: Line layer is not valid")
@@ -239,7 +294,7 @@ class HandleQGISIface:
                 self.cur_route_id,
                 self.current_start_point.asWkt(),
                 point.asWkt(),
-                f"LEG_{self.cur_route_id}_{self.segment_id}"  # Label value
+                layer_name,  # Label value
             ])
             # Style the layer (project style if one is stored, else default)
             self.style_layer(vl)
@@ -274,23 +329,40 @@ class HandleQGISIface:
 
             self.vector_layers.append(vl)
 
-            # Ensure the layer is in editing mode before connecting the signal
+            # Leave the layer editable so the user can drag vertices right
+            # away; the signal hookup itself does not depend on it.
             if not vl.isEditable():
                 vl.startEditing()
-
-            edit_buffer: QgsVectorLayerEditBuffer | None = vl.editBuffer()
-            if edit_buffer is None:
-                print("Error: editBuffer is None")
-                return
-
-            edit_buffer.geometryChanged.connect(partial(self.on_geometry_changed_wrapper, self.segment_id))
-            self.buffer_edits.append(edit_buffer)
+            self.wire_leg_layer(vl, self.segment_id)
             self.current_start_point = QgsPointXY(point.x(), point.y())
             self.point_layer = None
             self.save_route(QgsPoint(start_point.x(), start_point.y()), end_point)
 
             vl.setCustomProperty("segment_id", self.segment_id)
             self.sync_drawing_spinboxes()
+
+    def wire_leg_layer(self, layer: QgsVectorLayer, fid: int) -> None:
+        """Route vertex edits on ``layer`` (leg ``fid``) to
+        ``on_geometry_changed``.
+
+        Connects to the *layer's* ``geometryChanged``, which is emitted
+        for every edit session.  Until v0.15.2 the handler hung off
+        ``layer.editBuffer()``; QGIS destroys that buffer on every
+        commit (**Stop route**, toggling edit mode, Save Layer Edits), so
+        a vertex dragged afterwards moved on the canvas while
+        ``segment_data``, the route table and the tangent stayed put --
+        and the next save wrote the stale coordinates.
+        """
+        slot = partial(self.on_geometry_changed_wrapper, fid)
+        layer.geometryChanged.connect(slot)
+        self._leg_geom_slots[layer.id()] = slot
+        self.buffer_edits.append(layer)
+
+    def unwire_all_leg_layers(self) -> None:
+        for layer in list(self.buffer_edits):
+            unwire_leg_layer(self, layer)
+        self.buffer_edits = []
+        self._leg_geom_slots = {}
 
     def unload(self):
         """Remove temporary layers and disconnect signals."""
@@ -303,20 +375,8 @@ class HandleQGISIface:
             pass
         self.point_layer = None
         # Remove vector layers and disconnect geometryChanged signals
-        for obj in self.buffer_edits:
-            try:
-                obj.geometryChanged.disconnect()
-            except BaseException:
-                pass
-        self.buffer_edits = []
+        self.unwire_all_leg_layers()
         for layer in self.vector_layers:
-            try:
-                edit_buffer = layer.editBuffer()
-                if edit_buffer is not None:
-                    edit_buffer.geometryChanged.disconnect()
-                    print(f"Disconnected geometryChanged signal for layer {layer.name()}")
-            except TypeError:
-                print(f"No connection for geometryChanged signal in layer {layer.name()}")
             QgsProject.instance().removeMapLayer(layer.id())  # Remove the layer from QGIS
 
         # Disconnect itemChanged signal from twRouteList
@@ -359,23 +419,12 @@ class HandleQGISIface:
             pass
         self.point_layer = None
 
-        # Disconnect geometry-changed signals from edit buffers
-        for obj in self.buffer_edits:
-            try:
-                obj.geometryChanged.disconnect()
-            except Exception:  # nosec B110 B112
-                pass
-        self.buffer_edits = []
+        # Disconnect our geometry-changed slots
+        self.unwire_all_leg_layers()
 
         # Remove vector layers from QGIS project
         for layer in self.vector_layers:
             try:
-                edit_buffer = layer.editBuffer()
-                if edit_buffer is not None:
-                    try:
-                        edit_buffer.geometryChanged.disconnect()
-                    except TypeError:
-                        pass
                 QgsProject.instance().removeMapLayer(layer.id())
             except Exception:  # nosec B110 B112
                 pass
@@ -401,6 +450,7 @@ class HandleQGISIface:
         self.current_start_point = None
         self.segment_id = 0
         self.cur_route_id = 1
+        self.route_leg_no = 0
         self.leg_dirs = {}
         self._clear_rubber_band()
         self.sync_drawing_spinboxes()
@@ -436,14 +486,7 @@ class HandleQGISIface:
             layer_to_remove = self._find_layer_for_seg_id(seg_id)
 
             if layer_to_remove is not None:
-                edit_buffer = layer_to_remove.editBuffer()
-                if edit_buffer is not None:
-                    try:
-                        edit_buffer.geometryChanged.disconnect()
-                    except TypeError:
-                        pass
-                    if edit_buffer in self.buffer_edits:
-                        self.buffer_edits.remove(edit_buffer)
+                unwire_leg_layer(self, layer_to_remove)
                 self.vector_layers.remove(layer_to_remove)
                 try:
                     QgsProject.instance().removeMapLayer(layer_to_remove.id())
@@ -603,22 +646,11 @@ class HandleQGISIface:
         if widget is None:
             return
 
-        # Disconnect geometry-changed signals on the existing layers.
-        for obj in list(self.buffer_edits):
-            try:
-                obj.geometryChanged.disconnect()
-            except Exception:  # nosec B110 B112
-                pass
-        self.buffer_edits = []
+        # Disconnect geometry-changed slots on the existing layers.
+        self.unwire_all_leg_layers()
         # Remove the existing leg layers from the QGIS project.
         for layer in list(self.vector_layers):
             try:
-                eb = layer.editBuffer()
-                if eb is not None:
-                    try:
-                        eb.geometryChanged.disconnect()
-                    except TypeError:
-                        pass
                 QgsProject.instance().removeMapLayer(layer.id())
             except Exception:  # nosec B110 B112
                 pass
@@ -914,10 +946,14 @@ class HandleQGISIface:
         # Create table items
         item1 = QTableWidgetItem(f'{self.segment_id}')
         item2 = QTableWidgetItem(f'{self.cur_route_id}')
-        item3 = QTableWidgetItem(f'{point1.asWkt(precision=5).split("(")[1].split(")")[0]}')
-        item4 = QTableWidgetItem(f'{point2.asWkt(precision=5).split("(")[1].split(")")[0]}')
+        # Six decimals like every other endpoint writer: save reads the
+        # endpoints back from this table, and junctions are detected by
+        # exact coordinate match, so a 5-decimal copy here silently
+        # detached a leg drawn from an existing junction.
+        item3 = QTableWidgetItem(self.format_wkt(point1))
+        item4 = QTableWidgetItem(self.format_wkt(point2))
         item5 = QTableWidgetItem('5000')  # Default width
-        item6 = QTableWidgetItem(f'LEG_{self.cur_route_id}_{self.segment_id}')  # Leg name
+        item6 = QTableWidgetItem(self.current_leg_name())  # Leg name
         item7 = QTableWidgetItem(percent_from_fraction(DEFAULT_TANGENT_POS))  # Tangent position
 
         # Add items to the table
@@ -1138,7 +1174,7 @@ class HandleQGISIface:
                 TANGENT_POS_KEY: DEFAULT_TANGENT_POS,
                 'Route_Id': self.cur_route_id,
                 'Segment_Id': self.segment_id,
-                'Leg_name': f'LEG_{self.cur_route_id}_{self.segment_id}',
+                'Leg_name': self.current_leg_name(),
             }
             # Initialise an empty traffic block so save() and the UI
             # don't crash with KeyError before AIS data are loaded.
@@ -1156,8 +1192,7 @@ class HandleQGISIface:
                     'End_Point': point.asWkt(),
                 }
         self.leg_dirs[f'{self.segment_id}'] = dirs
-        leg_name = f'LEG_{self.cur_route_id}_{self.segment_id}'
-        main_widget.cbTrafficSelectSeg.addItem(leg_name, f'{self.segment_id}')
+        main_widget.cbTrafficSelectSeg.addItem(self.current_leg_name(), f'{self.segment_id}')
         self.omrat.traffic.c_seg = f'{self.segment_id}'
         self.current_start_point = None
 
@@ -1692,6 +1727,34 @@ class HandleQGISIface:
                 )
             except Exception:  # nosec B110 B112
                 pass
+            # And the neighbour's own line on the canvas -- until v0.15.2
+            # only its tangent and table row followed, so the blue leg
+            # stayed at the old junction while the green tangent jumped.
+            self._rewrite_leg_geometry(fid, new_start_xy, new_end_xy)
+
+    def _rewrite_leg_geometry(self, fid: int, start_xy: QgsPointXY, end_xy: QgsPointXY) -> None:
+        """Push new endpoints into leg ``fid``'s canvas feature.  The
+        caller holds ``_propagating_vertex_move`` so the ``geometryChanged``
+        this raises is not propagated again."""
+        layer = self._find_layer_for_seg_id(fid)
+        if layer is None:
+            return
+        try:
+            feat = next(layer.getFeatures())
+        except StopIteration:
+            return
+        geom = QgsGeometry.fromPolylineXY([start_xy, end_xy])
+        try:
+            if layer.isEditable():
+                layer.changeGeometry(feat.id(), geom)
+            else:
+                prov = layer.dataProvider()
+                if prov is not None:
+                    prov.changeGeometryValues({feat.id(): geom})
+            layer.updateExtents()
+            layer.triggerRepaint()
+        except Exception:  # nosec B110 B112
+            pass
 
     def on_geometry_changed_wrapper(self, segment_id: int, fid: int, geom: QgsGeometry):
         """Wrapper for the geometryChanged signal to pass the segment ID."""

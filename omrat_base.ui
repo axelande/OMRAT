@@ -323,7 +323,7 @@ QToolTip {
                 <item>
                  <widget class="QSpinBox" name="sbRouteId">
                   <property name="toolTip">
-                   <string>Route ID assigned to newly drawn legs</string>
+                   <string>Route ID assigned to newly drawn legs. Changing it restarts the leg numbering for that route.</string>
                   </property>
                   <property name="alignment">
                    <set>Qt::AlignCenter</set>
@@ -342,14 +342,14 @@ QToolTip {
                 <item>
                  <widget class="QLabel" name="label_next_leg">
                   <property name="text">
-                   <string>Next leg ID:</string>
+                   <string>Next leg no.:</string>
                   </property>
                  </widget>
                 </item>
                 <item>
                  <widget class="QSpinBox" name="sbNextLegId">
                   <property name="toolTip">
-                   <string>ID that will be assigned to the next drawn leg</string>
+                   <string>Number of the next drawn leg within the current route (the n in LEG_route_n). It restarts at 1 for every new route. The internal segment id shown in the route table is assigned automatically and is always unique.</string>
                   </property>
                   <property name="alignment">
                    <set>Qt::AlignCenter</set>

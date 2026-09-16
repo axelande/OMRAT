@@ -679,9 +679,7 @@ class OMRAT(
             except Exception:  # nosec B110 B112
                 pass
             return False
-        edit_buffer = vl.editBuffer()
-        if edit_buffer is not None:
-            edit_buffer.geometryChanged.connect(partial(self.qgis_geoms.on_geometry_changed_wrapper, fid))
+        self.qgis_geoms.wire_leg_layer(vl, fid)
         vl.triggerRepaint()
         return True
 
@@ -723,6 +721,8 @@ class OMRAT(
             self.qgis_geoms.cur_route_id = max_route + 1
         except Exception:  # nosec B110 B112
             pass
+        # A loaded project continues with a fresh route, numbered from 1.
+        self.qgis_geoms.route_leg_no = 0
         self.qgis_geoms.sync_drawing_spinboxes()
         self.iface.mapCanvas().refresh()
 
@@ -1137,8 +1137,10 @@ class OMRAT(
 
         # Advance the route id on the leg-drawing handler -- that's the
         # attribute the next "Add route" pass actually reads when it
-        # stamps Route_Id / Leg_name on freshly-drawn legs.
+        # stamps Route_Id / Leg_name on freshly-drawn legs -- and restart
+        # the per-route leg number so the new route begins at LEG_{r}_1.
         self.qgis_geoms.cur_route_id += 1
+        self.qgis_geoms.route_leg_no = 0
         self.qgis_geoms.current_start_point = None
         self.qgis_geoms._clear_rubber_band()
         self.qgis_geoms.sync_drawing_spinboxes()

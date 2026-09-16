@@ -182,10 +182,10 @@ class OObject:
         if not layer.isEditable():
             layer.startEditing()
 
-        buf = layer.editBuffer()
-        if buf is not None:
-            buf.geometryChanged.connect(self._on_depth_geometry_changed)
-            self._depth_edit_buffer = buf
+        # Layer-level signal: survives commits / edit-mode toggles, unlike
+        # the edit buffer's (see HandleQGISIface.wire_leg_layer).
+        layer.geometryChanged.connect(self._on_depth_geometry_changed)
+        self._depth_edit_buffer = layer
 
         self.depth_layer = layer
         try:
@@ -358,17 +358,18 @@ class OObject:
                 pass
         if not area.isEditable():
             area.startEditing()
-        buf = area.editBuffer()
         layer_id = area.id()
         if self.area_type == 'object':
             if row is None:
                 row = self.p.main_widget.twObjectList.rowCount() - 1
             self.object_layer_row[layer_id] = row
-            if buf is not None:
-                buf.geometryChanged.connect(
-                    lambda fid, geom, lid=layer_id: self.on_area_geometry_changed_wrapper(lid, 'object', fid, geom)
-                )
-                self.object_buffer_edits.append(buf)
+
+            def _slot(fid, geom, lid=layer_id):
+                self.on_area_geometry_changed_wrapper(lid, 'object', fid, geom)
+            # Layer-level signal (survives commits); remember the slot so
+            # teardown disconnects only ours.
+            area.geometryChanged.connect(_slot)
+            self.object_buffer_edits.append((area, _slot))
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         if self.area_type == 'object':
             self.loaded_object_areas.append(area)
@@ -755,11 +756,20 @@ class OObject:
                 layer = self.loaded_object_areas.pop(row)
                 QgsProject.instance().removeMapLayer(layer.id())
 
+    def _disconnect_object_geometry_slots(self) -> None:
+        for entry in self.object_buffer_edits:
+            try:
+                layer, slot = entry
+                layer.geometryChanged.disconnect(slot)
+            except Exception:  # nosec B110 B112
+                pass
+        self.object_buffer_edits = []
+
     def _cleanup_depth_layer(self) -> None:
         """Disconnect signals and remove the consolidated depth layer."""
         if self._depth_edit_buffer is not None:
             try:
-                self._depth_edit_buffer.geometryChanged.disconnect()
+                self._depth_edit_buffer.geometryChanged.disconnect(self._on_depth_geometry_changed)
             except Exception:  # nosec B110 B112
                 pass
             self._depth_edit_buffer = None
@@ -781,12 +791,7 @@ class OObject:
         # Clean up consolidated depth layer
         self._cleanup_depth_layer()
         # Clean up object layers
-        try:
-            for buf in self.object_buffer_edits:
-                buf.geometryChanged.disconnect()
-        except Exception:  # nosec B110 B112
-            pass
-        self.object_buffer_edits = []
+        self._disconnect_object_geometry_slots()
         self.object_layer_row = {}
         for layer in self.loaded_object_areas:
             QgsProject.instance().removeMapLayer(layer.id())
@@ -810,12 +815,7 @@ class OObject:
         self._cleanup_depth_layer()
 
         # Disconnect object geometry-changed signals
-        for buf in self.object_buffer_edits:
-            try:
-                buf.geometryChanged.disconnect()
-            except Exception:  # nosec B110 B112
-                pass
-        self.object_buffer_edits = []
+        self._disconnect_object_geometry_slots()
 
         # Remove object layers from QGIS
         for layer in self.loaded_object_areas:

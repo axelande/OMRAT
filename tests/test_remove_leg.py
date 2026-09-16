@@ -97,9 +97,9 @@ def _make_handler(
         tangent_layer=tangent_layer,
         leg_dirs=leg_dirs,
         _find_layer_for_seg_id=lambda seg_id: next(
-            (l for l in layers or [] if any(
+            (lyr for lyr in layers or [] if any(
                 f["segmentId"] == seg_id
-                for f in l.getFeatures()
+                for f in lyr.getFeatures()
             )),
             None,
         ),
@@ -178,23 +178,27 @@ class TestRemoveLegLayerCleanup:
         assert layer2 in handler.vector_layers
         assert layer1 not in handler.vector_layers
 
-    def test_edit_buffer_disconnected(self):
+    def test_layer_geometry_slot_disconnected(self):
         edit_buffer = MagicMock()
         layer = _make_layer(1)
         layer.editBuffer.return_value = edit_buffer
         handler = _make_handler({0: 1}, layers=[layer])
+        slot = object()
+        handler._leg_geom_slots = {layer.id(): slot}
         with patch(_PATCH_PROJECT):
             HandleQGISIface.remove_leg(handler)
-        edit_buffer.geometryChanged.disconnect.assert_called_once()
+        # Only *our* slot is disconnected -- never a blanket disconnect
+        # that would also drop QGIS's own listeners on the layer signal.
+        layer.geometryChanged.disconnect.assert_called_once_with(slot)
+        assert handler._leg_geom_slots == {}
+        edit_buffer.geometryChanged.disconnect.assert_not_called()
 
-    def test_edit_buffer_removed_from_buffer_edits(self):
-        edit_buffer = MagicMock()
+    def test_layer_removed_from_buffer_edits(self):
         layer = _make_layer(1)
-        layer.editBuffer.return_value = edit_buffer
-        handler = _make_handler({0: 1}, layers=[layer], buffer_edits=[edit_buffer])
+        handler = _make_handler({0: 1}, layers=[layer], buffer_edits=[layer])
         with patch(_PATCH_PROJECT):
             HandleQGISIface.remove_leg(handler)
-        assert edit_buffer not in handler.buffer_edits
+        assert layer not in handler.buffer_edits
 
     def test_qgsproject_removeMapLayer_called(self):
         layer = _make_layer(1)
