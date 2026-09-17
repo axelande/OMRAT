@@ -12,6 +12,9 @@ from qgis.PyQt.QtWidgets import QFileDialog
 
 from .gather_data import GatherData
 from .project_sanitize import sanitize_project
+from geometries.waypoints import (
+    rebuild_waypoints, waypoints_from_serializable, waypoints_to_serializable,
+)
 from .validate_data import RootModelSchema
 
 if TYPE_CHECKING:
@@ -223,6 +226,11 @@ class Storage:
         out['objects'] = self._normalize_objects(out.get('objects', []))
         out['segment_data'] = self._normalize_segment_data(out.get('segment_data', {}) or {})
         out['traffic_data'] = self._normalize_traffic_data(out.get('traffic_data', {}) or {})
+        # Node registry: derived from the endpoints, keeping the ids of a
+        # stored block wherever its coordinates still match.
+        out['waypoints'] = waypoints_to_serializable(rebuild_waypoints(
+            out['segment_data'], waypoints_from_serializable(out.get('waypoints')),
+        ))
         out['traffic_scaling'] = self._normalize_traffic_scaling(out.get('traffic_scaling'))
         out['drift'] = self._normalize_drift(
             out.get('drift', {}) or {},

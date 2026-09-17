@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from qgis.PyQt.QtCore import Qt, QUrl
+from qgis.PyQt.QtCore import QSettings, Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QApplication,
@@ -856,6 +856,10 @@ class IngestPage(QWizardPage):
             return
         self._capture_into_settings()
         self._wiz().ingest_settings.to_qsettings()
+        # Seed the AIS connection dialog's year with the ingestion target
+        # year — after ingesting 2025 data the traffic queries should
+        # default to segments_2025, not the .ui default.
+        QSettings().setValue("omrat/ais_year", int(year))
 
         # Lazy import keeps Qt-thread-creation cost out of the wizard's
         # opening path, and keeps the headless pipeline test-importable.
@@ -1052,8 +1056,10 @@ class DonePage(QWizardPage):
             f"<b>Ready for OMRAT:</b> {ready}<br>"
             "<br>"
             "Saving the profile updates both the new <code>omrat/db_profiles/default/*</code> "
-            "keys and the legacy flat keys read by the AIS connection dialog, so existing "
-            "AIS queries pick up the same credentials immediately."
+            "keys and the legacy flat keys read by the AIS connection dialog "
+            "(host, port, database, user, password <i>and schema</i>), so existing "
+            "AIS queries pick up the same connection immediately.  The dialog's "
+            "year follows the last ingestion target year."
         )
 
     def validatePage(self) -> bool:

@@ -45,6 +45,7 @@ from resources import *  # noqa: F401,F403,E402
 # Import the code for the DockWidget
 from compute.run_calculations import Calculation  # noqa: E402
 from compute.calculation_task import CalculationTask  # noqa: E402
+from geometries.waypoints import rebuild_waypoints  # noqa: E402
 from geometries.handle_qgis_iface import HandleQGISIface  # noqa: E402
 from omrat_utils.causation_factors import CausationFactors  # noqa: E402
 from omrat_utils.handle_ais import AIS  # noqa: E402
@@ -124,6 +125,9 @@ class OMRAT(
         self.segment_id = 0
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
         self.segment_data: dict[str, Any] = {}
+        # Shared nodes the legs are hung on: ``{wp_id: (lon, lat)}``;
+        # legs carry ``start_wp`` / ``end_wp``.  See geometries/waypoints.py.
+        self.waypoints: dict[str, tuple[float, float]] = {}
         # Project-level traffic scaling -- global spinbox value + per-row
         # "follow global" bool list.  Compute reads the per-cell matrix
         # in ``traffic_data[...]['Scaling (%)']`` (kept in sync by the
@@ -446,6 +450,7 @@ class OMRAT(
     def _reset_data_structures(self) -> None:
         self.traffic_data = {}
         self.segment_data = {}
+        self.waypoints = {}
         self.layer_styles = {}
         # A cleared model is a new, unnamed project.
         self.project_path = None
@@ -685,6 +690,10 @@ class OMRAT(
 
     def load_lines(self, data: dict[str, dict[str, Any]]) -> None:
         self.segment_id = 0
+        # Coordinates are the truth at this point (file load, IWRAP
+        # import, merges / splits): derive the node registry, keeping
+        # the ids of nodes that did not move.
+        self.waypoints = rebuild_waypoints(data["segment_data"], getattr(self, 'waypoints', None))
         crs = self.iface.mapCanvas().mapSettings().destinationCrs().authid()
         for key, seg_data in data["segment_data"].items():
             seg_id = seg_data.get('Segment_Id', key)

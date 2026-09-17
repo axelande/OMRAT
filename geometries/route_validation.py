@@ -594,6 +594,12 @@ def split_leg_at_points(
         # A sub-leg is a new cross-section; the parent's tangent offset
         # has no meaning on it, so snap back to the midpoint.
         sub['Tangent_Pos'] = 0.5
+        # Interior ends are new nodes: drop the inherited node ids so the
+        # registry rebuild mints fresh ones (outer ends keep the parent's).
+        if i > 0:
+            sub.pop('start_wp', None)
+        if i < n:
+            sub.pop('end_wp', None)
         segment_data[sub_id] = sub
         if traffic_data is not None and parent_traffic is not None:
             traffic_data[sub_id] = _copy.deepcopy(parent_traffic)

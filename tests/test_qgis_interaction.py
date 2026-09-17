@@ -216,10 +216,11 @@ def test_moving_shared_vertex_propagates_to_neighbour(omrat):
     old_mid = QgsPointXY((p2.x() + p3.x()) / 2, (p2.y() + p3.y()) / 2)
     assert _tangent_midpoint(leg3).distance(expect) < 1e-3
     assert _tangent_midpoint(leg3).distance(old_mid) > 0.02
-    # The neighbour's blue line on the canvas follows too.
+    # The neighbour's blue line on the canvas follows too (node
+    # coordinates are kept at six decimals, hence the 1e-6 tolerance).
     layer3, _ = _leg_layer_and_fid(omrat, leg3)
     first_vertex = next(layer3.getFeatures()).geometry().asPolyline()[0]
-    assert first_vertex.distance(p2_new) < 1e-9
+    assert first_vertex.distance(p2_new) < 1e-6
 
 
 def test_unload(omrat):
@@ -232,3 +233,100 @@ def test_unload(omrat):
 
     assert not QgsProject.instance().mapLayersByName("TestLayer")
     assert omrat.qgis_geoms.vector_layers == []
+
+
+# ---------------------------------------------------------------------------
+# Waypoints (v0.15.2): legs hang on shared nodes
+# ---------------------------------------------------------------------------
+
+def _wkt(p):
+    return f"{p.x():.6f} {p.y():.6f}"
+
+
+def test_click_near_existing_node_snaps_and_shares_it(omrat):
+    qg = omrat.qgis_geoms
+    p0 = QgsPointXY(14.30, 55.20)
+    p1 = QgsPointXY(14.40, 55.30)
+    p2 = QgsPointXY(14.50, 55.40)
+    first = _draw_leg(omrat, (p0.x(), p0.y()), (p1.x(), p1.y()))
+    omrat.stop_route()
+    # New route, first click 0.6 m from the end of the first leg.
+    qg.onMapClick(QgsPoint(p1.x() + 0.00001, p1.y()))
+    assert qg.current_start_point == p1
+    qg.onMapClick(QgsPoint(p2.x(), p2.y()))
+    second = str(qg.segment_id)
+    sd = omrat.segment_data
+    assert sd[second]['Start_Point'] == _wkt(p1)
+    assert sd[second]['start_wp'] == sd[first]['end_wp']
+    assert len(omrat.waypoints) == 3
+
+
+def test_dragging_a_junction_moves_every_leg_on_it(omrat):
+    a = QgsPointXY(14.30, 55.20)
+    b = QgsPointXY(14.40, 55.30)
+    c = QgsPointXY(14.50, 55.40)
+    d = QgsPointXY(14.50, 55.20)
+    b_new = QgsPointXY(14.42, 55.31)
+    leg1 = _draw_leg(omrat, (a.x(), a.y()), (b.x(), b.y()))
+    leg2 = _draw_leg(omrat, (b.x(), b.y()), (c.x(), c.y()))
+    leg3 = _draw_leg(omrat, (b.x(), b.y()), (d.x(), d.y()))
+    sd = omrat.segment_data
+    node = sd[leg1]['end_wp']
+    assert sd[leg2]['start_wp'] == node and sd[leg3]['start_wp'] == node
+    omrat.stop_route()
+
+    layer, fid = _leg_layer_and_fid(omrat, int(leg1))
+    assert layer.startEditing()
+    assert layer.changeGeometry(fid, QgsGeometry.fromPolylineXY([a, b_new]))
+
+    assert omrat.waypoints[node] == (b_new.x(), b_new.y())
+    for leg in (leg2, leg3):
+        assert sd[leg]['Start_Point'] == _wkt(b_new)
+        lyr, _ = _leg_layer_and_fid(omrat, int(leg))
+        assert next(lyr.getFeatures()).geometry().asPolyline()[0].distance(b_new) < 1e-9
+        assert _tangent_midpoint(int(leg)).distance(b) > 0.005
+    table = omrat.main_widget.twRouteList
+    row3 = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == leg3)
+    assert table.item(row3, 3).text() == _wkt(b_new)
+    # Untouched node stays where it was.
+    assert sd[leg2]['End_Point'] == _wkt(c)
+
+
+def test_dropping_a_vertex_on_another_node_merges_them(omrat):
+    qg = omrat.qgis_geoms
+    a = QgsPointXY(14.30, 55.20)
+    b = QgsPointXY(14.40, 55.30)
+    c = QgsPointXY(14.60, 55.20)
+    d = QgsPointXY(14.50, 55.40)
+    leg1 = _draw_leg(omrat, (a.x(), a.y()), (b.x(), b.y()))
+    omrat.stop_route()
+    leg2 = _draw_leg(omrat, (c.x(), c.y()), (d.x(), d.y()))
+    omrat.stop_route()
+    assert len(omrat.waypoints) == 4
+
+    layer, fid = _leg_layer_and_fid(omrat, int(leg1))
+    assert layer.startEditing()
+    # Drop leg 1's end 0.6 m from leg 2's end.
+    near_d = QgsPointXY(d.x() + 0.00001, d.y())
+    assert layer.changeGeometry(fid, QgsGeometry.fromPolylineXY([a, near_d]))
+
+    sd = omrat.segment_data
+    assert sd[leg1]['End_Point'] == _wkt(d)
+    assert sd[leg1]['end_wp'] == sd[leg2]['end_wp']
+    assert len(omrat.waypoints) == 3
+    # The canvas line of leg 1 was pulled onto the node too.
+    assert next(layer.getFeatures()).geometry().asPolyline()[-1].distance(d) < 1e-9
+    assert qg.snap_to_waypoint((d.x(), d.y()))[1] == sd[leg2]['end_wp']
+
+
+def test_remove_leg_prunes_unused_nodes(omrat):
+    qg = omrat.qgis_geoms
+    leg1 = _draw_leg(omrat, (14.30, 55.20), (14.40, 55.30))
+    _draw_leg(omrat, (14.40, 55.30), (14.50, 55.40))
+    assert len(omrat.waypoints) == 3
+    table = omrat.main_widget.twRouteList
+    row = next(r for r in range(table.rowCount()) if table.item(r, 0).text() == leg1)
+    table.selectRow(row)
+    qg.remove_leg()
+    assert leg1 not in omrat.segment_data
+    assert len(omrat.waypoints) == 2

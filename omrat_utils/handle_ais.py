@@ -253,6 +253,21 @@ class AIS:
         self.acw.leDBName.setText(db_name)
         self.acw.leUserName.setText(db_user)
         self.acw.lePassword.setText(db_pass)
+        # Schema + year used to live only in the .ui defaults ("sjfv" /
+        # 2000), so a wizard-configured schema or a previously chosen year
+        # silently reset on every QGIS start.  Prefer the stored values;
+        # fall back to the .ui defaults when the keys were never written.
+        db_schema: str = self.settings.value("omrat/db_schema", "")
+        if db_schema:
+            self.acw.leProvider.setText(db_schema)
+        try:
+            ais_year = int(self.settings.value("omrat/ais_year", 0) or 0)
+        except (TypeError, ValueError):
+            ais_year = 0
+        # QSpinBox.setValue clamps to the widget's own range, so a plain
+        # plausibility check is enough (and keeps mocked widgets happy).
+        if 1900 <= ais_year <= 2999:
+            self.acw.SBYear.setValue(ais_year)
         # External vessel-data lookup: prefill from QSettings.
         self.acw.gbExtVessel.setChecked(bool(self.vessel_lookup.enabled))
         self.acw.leExtSchema.setText(self.vessel_lookup.schema)
@@ -322,8 +337,10 @@ class AIS:
             return
         self.max_deviation = float(self.acw.leMaxDev.text())
         for key, value in zip(
-            ["db_host", "db_port", "db_user", "db_pass", "db_name"],
-            [db_host, db_port, db_user, db_pass, db_name],
+            ["db_host", "db_port", "db_user", "db_pass", "db_name",
+             "db_schema", "ais_year"],
+            [db_host, db_port, db_user, db_pass, db_name,
+             self.schema, int(self.year)],
         ):
             self.settings.setValue(f"omrat/{key}", value)
         self._capture_vessel_lookup_from_ui()

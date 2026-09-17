@@ -87,6 +87,10 @@ class Segment(BaseModel):
     Route_Id: int
     Leg_name: str
     Segment_Id: str
+    # Shared node ids (geometries/waypoints.py); Start_Point / End_Point
+    # are the derived coordinates of those nodes.
+    start_wp: Optional[str] = None
+    end_wp: Optional[str] = None
     mean1_1: float
     std1_1: float
     mean2_1: float
@@ -225,3 +229,5 @@ class RootModelSchema(BaseModel):
     traffic_scaling: Optional[TrafficScalingModel] = None
     # QGIS named styles (QML text) per layer type; see omrat_utils/layer_styles.py.
     layer_styles: Optional[dict[str, str]] = None
+    # ``{wp_id: [lon, lat]}`` -- the nodes legs reference via start_wp / end_wp.
+    waypoints: Optional[Dict[str, List[float]]] = None

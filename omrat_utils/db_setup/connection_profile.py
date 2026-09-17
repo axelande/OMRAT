@@ -41,6 +41,7 @@ _LEGACY_KEYS = {
     "database": "omrat/db_name",
     "user": "omrat/db_user",
     "password": "omrat/db_pass",  # nosec B105 -- QSettings key path, not a secret  # pragma: allowlist secret
+    "schema": "omrat/db_schema",
 }
 
 
@@ -141,6 +142,9 @@ class ConnectionProfile:
             user = s.value(f"{prefix}/user", "", type=str)
             password = s.value(f"{prefix}/password", "", type=str)
             port = int(s.value(f"{prefix}/port", 5432, type=int) or 5432)
+        schema = s.value(f"{prefix}/schema", "", type=str)
+        if not schema and name == DEFAULT_PROFILE:
+            schema = s.value(_LEGACY_KEYS["schema"], "", type=str)
         return cls(
             name=name,
             host=host,
@@ -148,7 +152,7 @@ class ConnectionProfile:
             database=database,
             user=user,
             password=password,
-            schema=s.value(f"{prefix}/schema", "omrat", type=str) or "omrat",
+            schema=schema or "omrat",
             sslmode=s.value(f"{prefix}/sslmode", "prefer", type=str) or "prefer",
         )
 
@@ -172,6 +176,10 @@ class ConnectionProfile:
             s.setValue(_LEGACY_KEYS["database"], self.database)
             s.setValue(_LEGACY_KEYS["user"], self.user)
             s.setValue(_LEGACY_KEYS["password"], self.password)
+            # Without this the AIS connection dialog kept its .ui default
+            # schema ("sjfv") after the wizard, so queries hit the wrong
+            # schema even though the credentials were mirrored.
+            s.setValue(_LEGACY_KEYS["schema"], self.schema)
 
     @classmethod
     def list_profiles(cls) -> list[str]:

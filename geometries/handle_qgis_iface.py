@@ -1,3 +1,4 @@
+import math
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,10 @@ from omrat_utils.copy_traffic import LOCK_KEY, SOURCE_KEY, is_locked, set_locked
 from omrat_utils.layer_styles import apply_stored_style
 from omrat_utils.leg_numbering import leg_name, max_leg_number, next_free_segment_id
 from omrat_utils.leg_sort import SORTABLE_COLUMNS, sort_segment_data
+from geometries.waypoints import (
+    WP_END, WP_START, ensure_waypoint, find_waypoint_at, find_waypoint_near,
+    merge_waypoints, move_waypoint, points_equal, prune_unused_waypoints,
+)
 from geometries.tangent_position import (
     DEFAULT_TANGENT_POS, TANGENT_POS_KEY, fraction_from_percent, normalize_tangent_pos,
     percent_from_fraction, point_along, project_fraction,
@@ -128,6 +133,10 @@ class HandleQGISIface:
 
     def onMapClick(self, point: QgsPoint):
         q_point: QgsPoint = self.point4326_from_wkt(point.asWkt())
+        # Reuse an existing node when the click lands on one, so the new
+        # leg is joined to it instead of ending a few metres away.
+        snapped, _wid = self.snap_to_waypoint((q_point.x(), q_point.y()))
+        q_point = QgsPoint(snapped[0], snapped[1])
         if self.current_start_point is None:
             self.create_point(q_point)
         else:
@@ -503,6 +512,8 @@ class HandleQGISIface:
             self.leg_dirs.pop(seg_key, None)
 
             table.removeRow(row)
+
+        prune_unused_waypoints(getattr(self.omrat, 'waypoints', None) or {}, self.omrat.segment_data)
 
         # Rebuild junction registry to remove references to deleted legs.
         if hasattr(self.omrat, 'junctions') and self.omrat.junctions is not None:
@@ -891,15 +902,13 @@ class HandleQGISIface:
                     end_utm = transform_to_utm.transform(end_pointXY)
                     self.omrat.segment_data[seg_key]['line_length'] = start_utm.distance(end_utm)
 
-                # Propagate the move to any other leg that shared the
-                # endpoint that just moved (so curved routes stay
-                # connected when the user drags a junction vertex).
-                self._propagate_shared_vertex_move(
-                    moved_fid=fid,
-                    old_start=old_start,
-                    old_end=old_end,
-                    new_start=(start_pointXY.x(), start_pointXY.y()),
-                    new_end=(end_pointXY.x(), end_pointXY.y()),
+                # Move the node(s) this vertex belongs to, so every leg
+                # sharing the junction follows (and snap onto another node
+                # when dropped on one).
+                self._apply_vertex_move(
+                    fid, old_start, old_end,
+                    (start_pointXY.x(), start_pointXY.y()),
+                    (end_pointXY.x(), end_pointXY.y()),
                 )
 
                 # Stop processing once the correct row is updated
@@ -1160,22 +1169,32 @@ class HandleQGISIface:
         start_utm = transform_to_utm.transform(self.current_start_point)
         dist = start_utm.distance(transform_to_utm.transform(pointXY))
         seg_key = f'{self.segment_id}'
-        start_wkt = QgsPoint(self.current_start_point.x(), self.current_start_point.y()).asWkt()
+        # "lon lat" with six decimals -- the one endpoint format the file,
+        # the route table, the AIS passage line and the waypoint registry
+        # share.  (Until v0.15.2 a freshly drawn leg carried WKT
+        # ``Point (...)`` text here until the first save rewrote it.)
+        start_wkt = self.format_wkt(QgsPoint(self.current_start_point.x(), self.current_start_point.y()))
+        end_wkt = self.format_wkt(QgsPoint(point.x(), point.y()))
         if seg_key in self.omrat.segment_data:
             self.omrat.segment_data[seg_key]['Start_Point'] = start_wkt
-            self.omrat.segment_data[seg_key]['End_Point'] = point.asWkt()
+            self.omrat.segment_data[seg_key]['End_Point'] = end_wkt
             self.omrat.segment_data[seg_key]['Dirs'] = dirs
             self.omrat.segment_data[seg_key]['line_length'] = dist
         else:
             self.omrat.segment_data[seg_key] = {
                 'Start_Point': start_wkt,
-                'End_Point': point.asWkt(),
+                'End_Point': end_wkt,
                 'Dirs': dirs, 'Width': 5000, 'line_length': dist,
                 TANGENT_POS_KEY: DEFAULT_TANGENT_POS,
                 'Route_Id': self.cur_route_id,
                 'Segment_Id': self.segment_id,
                 'Leg_name': self.current_leg_name(),
             }
+            wps = self._waypoints()
+            self.omrat.segment_data[seg_key][WP_START] = ensure_waypoint(
+                wps, (self.current_start_point.x(), self.current_start_point.y()),
+            )
+            self.omrat.segment_data[seg_key][WP_END] = ensure_waypoint(wps, (point.x(), point.y()))
             # Initialise an empty traffic block so save() and the UI
             # don't crash with KeyError before AIS data are loaded.
             traffic = getattr(self.omrat, 'traffic', None)
@@ -1608,129 +1627,147 @@ class HandleQGISIface:
         except ValueError:
             return None
 
-    def _propagate_shared_vertex_move(
+    # ------------------------------------------------------------------
+    # Waypoints: legs reference shared nodes; dragging a node moves them all
+    # ------------------------------------------------------------------
+
+    #: Canvas snapping radius for a click or a dragged vertex.
+    SNAP_PIXELS = 12
+    #: Headless fallback (tests / no canvas) in metres.
+    SNAP_FALLBACK_M = 10.0
+
+    def _waypoints(self) -> dict:
+        wps = getattr(self.omrat, 'waypoints', None)
+        if not isinstance(wps, dict):
+            wps = {}
+            self.omrat.waypoints = wps
+        return wps
+
+    def snap_to_waypoint(
+        self, xy: tuple[float, float], exclude: tuple[str, ...] = (),
+    ) -> tuple[tuple[float, float], str | None]:
+        """Nearest existing node within ``SNAP_PIXELS`` of ``xy`` on the
+        canvas (``SNAP_FALLBACK_M`` when there is no usable canvas or
+        the plugin runs headless).  Returns ``(coordinate, node id)``;
+        the coordinate is the node's when snapped, ``xy`` otherwise."""
+        wps = self._waypoints()
+        if not wps:
+            return xy, None
+        skip = {str(e) for e in exclude}
+        best: tuple[float, str] | None = None
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is not None and not getattr(self.omrat, 'testing', False):
+            try:
+                m2p = canvas.getCoordinateTransform()
+                px = m2p.transform(self._to_canvas_crs(QgsPointXY(xy[0], xy[1]), canvas))
+                for wid, (wx, wy) in wps.items():
+                    if str(wid) in skip:
+                        continue
+                    q = m2p.transform(self._to_canvas_crs(QgsPointXY(wx, wy), canvas))
+                    d = math.hypot(px.x() - q.x(), px.y() - q.y())
+                    if d <= self.SNAP_PIXELS and (best is None or d < best[0]):
+                        best = (d, str(wid))
+            except Exception:  # nosec B110 B112
+                best = None
+        if best is None:
+            hit = find_waypoint_near(wps, xy, self.SNAP_FALLBACK_M, exclude=skip)
+            if hit is not None:
+                best = (hit[1], hit[0])
+        if best is None:
+            return xy, None
+        wxy = wps[best[1]]
+        return (float(wxy[0]), float(wxy[1])), best[1]
+
+    def _apply_vertex_move(
         self,
-        *,
         moved_fid: int,
         old_start: tuple[float, float] | None,
         old_end: tuple[float, float] | None,
         new_start: tuple[float, float],
         new_end: tuple[float, float],
     ) -> None:
-        """Move sibling legs that shared the endpoint just dragged.
+        """A vertex of leg ``moved_fid`` was dragged: move its *node*, so
+        every leg sharing that node follows (model, table, tangent and
+        canvas line).  A node dragged onto another node is merged into it.
 
-        For every other leg whose start or end point matched ``old_start``
-        or ``old_end`` (within :data:`_SHARED_VERTEX_TOL` degrees),
-        update the stored endpoint to the matching ``new_*`` and rewrite
-        the matching row of ``twRouteList``.
-
-        A re-entrancy flag suppresses the propagation triggered by the
-        QGIS ``geometryChanged`` signals fired by our own writes — those
-        signals would otherwise cause a chain of moves that drift away
-        from the user's original drag.
+        Replaces the pre-v0.15.2 coordinate matching, which could only
+        find siblings whose text coordinates happened to be identical.
+        The re-entrancy flag ignores the ``geometryChanged`` signals our
+        own canvas rewrites raise.
         """
         if getattr(self, '_propagating_vertex_move', False):
             return
-
-        # Only propagate when the endpoint actually moved.
-        moved: list[tuple[tuple[float, float], tuple[float, float]]] = []
-        if old_start is not None and not self._xy_close(old_start, new_start):
-            moved.append((old_start, new_start))
-        if old_end is not None and not self._xy_close(old_end, new_end):
-            moved.append((old_end, new_end))
-        if not moved:
+        sd = self.omrat.segment_data
+        seg = sd.get(str(moved_fid))
+        if not isinstance(seg, dict):
             return
-
+        wps = self._waypoints()
         self._propagating_vertex_move = True
         try:
-            for old_xy, new_xy in moved:
-                self._move_matching_endpoints(
-                    skip_fid=moved_fid, old_xy=old_xy, new_xy=new_xy,
-                )
+            for ref, old_xy, new_xy in (
+                (WP_START, old_start, new_start),
+                (WP_END, old_end, new_end),
+            ):
+                if old_xy is None or points_equal(old_xy, new_xy):
+                    continue
+                wid = seg.get(ref)
+                if wid is None or str(wid) not in wps or not points_equal(wps[str(wid)], old_xy):
+                    # Refs out of step with the coordinates (leg made by a
+                    # path that did not register nodes): give this end
+                    # its own node and carry on.
+                    wid = find_waypoint_at(wps, old_xy)
+                    if wid is None:
+                        wid = ensure_waypoint(wps, new_xy)
+                        seg[ref] = wid
+                        continue
+                    seg[ref] = wid
+                wid = str(wid)
+                _snapped, target = self.snap_to_waypoint(new_xy, exclude=(wid,))
+                if target is not None:
+                    affected = merge_waypoints(wps, sd, keep_id=target, drop_id=wid)
+                else:
+                    affected = move_waypoint(wps, sd, wid, new_xy)
+                for leg_id in affected:
+                    self._refresh_leg_views(int(leg_id))
         finally:
             self._propagating_vertex_move = False
 
-    @staticmethod
-    def _xy_close(
-        a: tuple[float, float],
-        b: tuple[float, float],
-        tol: float = 1e-7,
-    ) -> bool:
-        return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
-
-    def _move_matching_endpoints(
-        self,
-        *,
-        skip_fid: int,
-        old_xy: tuple[float, float],
-        new_xy: tuple[float, float],
-    ) -> None:
-        """For every leg != ``skip_fid`` whose start or end equals
-        ``old_xy``, update that endpoint to ``new_xy``.
-
-        Updates ``segment_data`` and the ``twRouteList`` row in step,
-        and rewrites the offset / leg layer features so the canvas
-        catches up without waiting for the next edit-buffer commit.
-        """
-        widget = self.omrat.main_widget
-        if widget is None:
+    def _refresh_leg_views(self, fid: int) -> None:
+        """Bring the route-table row, the tangent and the canvas line of
+        leg ``fid`` in line with ``segment_data``."""
+        seg = self.omrat.segment_data.get(str(fid))
+        if not isinstance(seg, dict):
             return
-        tol = 1e-7
-        for row in range(widget.twRouteList.rowCount()):
+        sp = self._parse_wkt_xy(seg.get('Start_Point'))
+        ep = self._parse_wkt_xy(seg.get('End_Point'))
+        if sp is None or ep is None:
+            return
+        widget = self.omrat.main_widget
+        width = 0.0
+        if widget is not None:
+            row = self._tangent_row_for_segment(fid)
+            if row is not None:
+                try:
+                    widget.twRouteList.item(row, 3).setText(seg['Start_Point'])
+                    widget.twRouteList.item(row, 4).setText(seg['End_Point'])
+                except Exception:  # nosec B110 B112
+                    pass
+                try:
+                    width = float(widget.twRouteList.item(row, 5).text())
+                except (AttributeError, TypeError, ValueError):
+                    width = 0.0
+        if not width:
             try:
-                fid = int(widget.twRouteList.item(row, 0).text())
-            except (AttributeError, ValueError):
-                continue
-            if fid == skip_fid:
-                continue
-
-            seg_key = str(fid)
-            seg = self.omrat.segment_data.get(seg_key)
-            if seg is None:
-                continue
-
-            sp = self._parse_wkt_xy(seg.get('Start_Point'))
-            ep = self._parse_wkt_xy(seg.get('End_Point'))
-            if sp is None or ep is None:
-                continue
-
-            updated = False
-            if abs(sp[0] - old_xy[0]) <= tol and abs(sp[1] - old_xy[1]) <= tol:
-                sp = new_xy
-                updated = True
-            if abs(ep[0] - old_xy[0]) <= tol and abs(ep[1] - old_xy[1]) <= tol:
-                ep = new_xy
-                updated = True
-            if not updated:
-                continue
-
-            new_start_pt = QgsPoint(sp[0], sp[1])
-            new_end_pt = QgsPoint(ep[0], ep[1])
-            new_start_xy = QgsPointXY(sp[0], sp[1])
-            new_end_xy = QgsPointXY(ep[0], ep[1])
-
-            seg['Start_Point'] = self.format_wkt(new_start_pt)
-            seg['End_Point'] = self.format_wkt(new_end_pt)
-            try:
-                widget.twRouteList.item(row, 3).setText(seg['Start_Point'])
-                widget.twRouteList.item(row, 4).setText(seg['End_Point'])
-            except Exception:  # nosec B110 B112
-                pass
-
-            try:
-                width = float(widget.twRouteList.item(row, 5).text())
-            except (AttributeError, TypeError, ValueError):
+                width = float(seg.get('Width', 0) or 0)
+            except (TypeError, ValueError):
                 width = 0.0
-            try:
-                self.create_offset_lines(
-                    new_start_xy, new_end_xy, width / 2 if width else 0.0, fid,
-                )
-            except Exception:  # nosec B110 B112
-                pass
-            # And the neighbour's own line on the canvas -- until v0.15.2
-            # only its tangent and table row followed, so the blue leg
-            # stayed at the old junction while the green tangent jumped.
-            self._rewrite_leg_geometry(fid, new_start_xy, new_end_xy)
+        start_xy = QgsPointXY(sp[0], sp[1])
+        end_xy = QgsPointXY(ep[0], ep[1])
+        try:
+            self.create_offset_lines(start_xy, end_xy, width / 2 if width else 0.0, fid)
+        except Exception:  # nosec B110 B112
+            pass
+        self._rewrite_leg_geometry(fid, start_xy, end_xy)
 
     def _rewrite_leg_geometry(self, fid: int, start_xy: QgsPointXY, end_xy: QgsPointXY) -> None:
         """Push new endpoints into leg ``fid``'s canvas feature.  The
@@ -1742,6 +1779,13 @@ class HandleQGISIface:
         try:
             feat = next(layer.getFeatures())
         except StopIteration:
+            return
+        current = feat.geometry().asPolyline() if feat.hasGeometry() else []
+        if (
+            len(current) >= 2
+            and current[0].distance(start_xy) < 1e-9
+            and current[-1].distance(end_xy) < 1e-9
+        ):
             return
         geom = QgsGeometry.fromPolylineXY([start_xy, end_xy])
         try:

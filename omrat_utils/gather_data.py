@@ -7,6 +7,10 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QTableWidget, QTableWidgetItem
 
 from omrat_utils.project_sanitize import sanitize_project
+from geometries.waypoints import (
+    rebuild_waypoints, sync_endpoints_from_waypoints, waypoints_from_serializable,
+    waypoints_to_serializable,
+)
 from geometries.tangent_position import (
     TANGENT_POS_KEY, normalize_tangent_pos, percent_from_fraction,
 )
@@ -83,6 +87,14 @@ class GatherData:
             self.data['segment_data'][key]['dist1'] = list(item.get('dist1', np.array([])))
             self.data['segment_data'][key]['dist2'] = list(item.get('dist2', np.array([])))
         self.get_segment_tbl()
+        # Nodes are the truth for endpoints; write the legs from them and
+        # persist the registry (rebuilt on the copy so legs that never
+        # registered a node -- e.g. created headless -- get one).
+        live_wps = getattr(self.p, 'waypoints', None) or {}
+        sync_endpoints_from_waypoints(self.data['segment_data'], live_wps)
+        self.data['waypoints'] = waypoints_to_serializable(
+            rebuild_waypoints(self.data['segment_data'], live_wps),
+        )
 
         self.data['depths'] = []
         self.data['objects'] = []
@@ -367,6 +379,7 @@ class GatherData:
 
     def _populate_segment_data(self, data: dict) -> None:
         self.p.segment_data = data['segment_data']
+        self.p.waypoints = waypoints_from_serializable(data.get('waypoints'))
         self.p.drift_values = data['drift']
         self.p.drift_settings.drift_values = data['drift']
         imported_raw = data.get('segments_imported') or {}

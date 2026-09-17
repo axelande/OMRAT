@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from omrat_utils.handle_ais import (
+from omrat_utils.handle_ais import (  # noqa: E402  (needs the sys.path bootstrap above)
     get_pl, get_type, close_to_line, update_ais_settings_file,
 )
 
@@ -297,15 +297,17 @@ class TestAISUpdateSettings:
         with patch.object(mod, 'DB') as MockDB:
             MockDB.return_value = MagicMock()
             ais_with_mocks.update_ais_settings()
-        # QSettings.setValue called 6 times: host, port, user, pass, name,
-        # plus the recalc-to-full-year flag (the vessel-lookup config
-        # writes to its own QSettings instance, not this mock).
+        # QSettings.setValue called 8 times: host, port, user, pass, name,
+        # schema, year, plus the recalc-to-full-year flag (the vessel-lookup
+        # config writes to its own QSettings instance, not this mock).
         setval = ais_with_mocks.settings.setValue
-        assert setval.call_count == 6
+        assert setval.call_count == 8
         stored = {c.args[0]: c.args[1] for c in setval.call_args_list}
         assert stored['omrat/db_host'] == 'new-host'
         assert stored['omrat/db_port'] == 6543
         assert stored['omrat/db_name'] == 'new-db'
+        assert stored['omrat/db_schema'] == 'ais'
+        assert stored['omrat/ais_year'] == 2024
         assert stored['omrat/recalc_to_full_year'] is False
 
     def test_update_ais_settings_passes_port_to_db(self, ais_with_mocks):
