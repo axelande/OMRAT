@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from geometries.junctions import Junction, junction_id_for_point
+
 from omrat_utils.handle_junctions import Junctions
 
 
@@ -179,3 +179,50 @@ def test_apply_ais_counts_passes_through_to_module_function():
     assert n == 1
     assert h.registry[jid].source == 'ais'
     assert h.registry[jid].transitions['1']['2'] == pytest.approx(0.7)
+
+
+# ---------------------------------------------------------------------------
+# AIS evidence survives reload / rebuild; skip + invalidate bookkeeping
+# ---------------------------------------------------------------------------
+
+
+def _ais_handler(sd: dict) -> Junctions:
+    h = _make_handler(sd)
+    h.rebuild_from_segments(prefer_user=False)
+    for j in h.registry.values():
+        j.source = 'ais'
+    return h
+
+
+def test_load_round_trip_keeps_ais_source():
+    sd = _y_segments()
+    h = _ais_handler(sd)
+    j = next(iter(h.registry.values()))
+    j.transitions = {'1': {'2': 0.8, '3': 0.2}, '2': {'1': 1.0}, '3': {'1': 1.0}}
+    payload = h.to_dict()
+
+    h2 = _make_handler(sd)
+    h2.load_from_dict(payload, sd)
+    j2 = next(iter(h2.registry.values()))
+    assert j2.source == 'ais'
+    assert j2.transitions['1']['2'] == pytest.approx(0.8)
+
+
+def test_rebuild_keeps_ais_when_legs_intact():
+    sd = _y_segments()
+    h = _ais_handler(sd)
+    h.rebuild_from_segments(prefer_user=True)
+    assert next(iter(h.registry.values())).source == 'ais'
+
+
+def test_ais_counts_current_and_invalidate_legs():
+    sd = _y_segments()
+    h = _make_handler(sd)
+    h.rebuild_from_segments(prefer_user=False)
+    assert h.ais_counts_current() is False
+    for j in h.registry.values():
+        j.source = 'ais'
+    assert h.ais_counts_current() is True
+    assert h.invalidate_legs(['3']) == 1
+    assert h.ais_counts_current() is False
+    assert next(iter(h.registry.values())).source == 'geometry'

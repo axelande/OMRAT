@@ -231,3 +231,5 @@ class RootModelSchema(BaseModel):
     layer_styles: Optional[dict[str, str]] = None
     # ``{wp_id: [lon, lat]}`` -- the nodes legs reference via start_wp / end_wp.
     waypoints: Optional[Dict[str, List[float]]] = None
+    # Plugin version that wrote the file (traceability; absent in old files).
+    omrat_version: Optional[str] = None

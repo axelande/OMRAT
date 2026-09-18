@@ -29,6 +29,7 @@ class AisUpdateTask(QgsTask):
         variables: list[str],
         var_defaults: dict[str, Any],
         leg_dirs: dict[str, list[str]],
+        fetch_junctions: bool = True,
     ) -> None:
         super().__init__("OMRAT: Fetching AIS data", QgsTask.Flag.CanCancel)
         self.ais = ais
@@ -39,6 +40,11 @@ class AisUpdateTask(QgsTask):
         self.variables = variables
         self.var_defaults = var_defaults
         self.leg_dirs = leg_dirs
+        # False when ``AIS.update_legs`` found every junction already
+        # holding AIS/user evidence for the current legs (single-leg
+        # refresh): the junction pass is then skipped and the stored
+        # matrices are kept by ``_refresh_junction_registry``.
+        self.fetch_junctions = fetch_junctions
 
         # Populated in run(), consumed in finished()
         self.results: dict[str, dict] = {}
@@ -76,10 +82,17 @@ class AisUpdateTask(QgsTask):
     ) -> None:
         from omrat_utils.handle_ais import close_to_line, get_type
         loa, beam, toc, draugt, _, _, sog, air_draught, dist, cog = row
-        if close_to_line(leg_bearing + 180, cog, self.ais.max_deviation):
+        # Direction convention: dirs[0] is the flow travelling in the DRAWN
+        # direction (Start_Point -> End_Point, cog ~ leg_bearing).  That is
+        # what the Dirs naming ("North going" for a north-drawn leg) and the
+        # powered model (dir index 0: origin=start, turn_pt=end) both assume.
+        # Before 2026-09-17 this was inverted (bearing+180 -> dirs[0]), which
+        # put each flow's traffic/distribution under the opposite label and
+        # cast its Cat II rays from the wrong end of the leg.
+        if close_to_line(leg_bearing, cog, self.ais.max_deviation):
             line1.append(dist)
             l1 = True
-        elif close_to_line(leg_bearing, cog, self.ais.max_deviation):
+        elif close_to_line(leg_bearing + 180, cog, self.ais.max_deviation):
             line2.append(dist)
             l1 = False
         else:
@@ -180,9 +193,10 @@ class AisUpdateTask(QgsTask):
                 self._process_leg(leg_key, leg_d)
             if self.isCanceled():
                 return False
-            self.setProgress(85)
-            self.setDescription("OMRAT: Junction transitions")
-            self._fetch_junction_counts()
+            if self.fetch_junctions:
+                self.setProgress(85)
+                self.setDescription("OMRAT: Junction transitions")
+                self._fetch_junction_counts()
             self.setProgress(100)
             return True
         except Exception as exc:
@@ -245,9 +259,17 @@ class AisUpdateTask(QgsTask):
         try:
             handler = getattr(omrat, 'junctions', None)
             if handler is not None:
+                # The rebuild keeps ``ais`` matrices whose junction is
+                # unchanged, so it is safe when the pass was skipped.
                 handler.rebuild_from_segments(omrat.segment_data, prefer_user=True)
                 if self.junction_counts:
                     handler.apply_ais_counts(self.junction_counts)
+                elif not self.fetch_junctions:
+                    QgsMessageLog.logMessage(
+                        "Junction transition matrices already hold AIS evidence for every "
+                        "junction; the junction pass was skipped for this single-leg update.",
+                        "OMRAT", Qgis.MessageLevel.Info,
+                    )
         except Exception as exc:
             QgsMessageLog.logMessage(f"Junction transition refresh skipped: {exc}", "OMRAT", Qgis.MessageLevel.Warning)
 

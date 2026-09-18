@@ -57,12 +57,16 @@ class TestAssign:
 
     def test_qspinbox_branch(self, dist, qgis_iface):
         from qgis.PyQt.QtWidgets import QSpinBox
-        w = QSpinBox(); w.setMaximum(100); w.setValue(42)
+        w = QSpinBox()
+        w.setMaximum(100)
+        w.setValue(42)
         assert dist._assign(w) == 42.0
 
     def test_qdoublespinbox_branch(self, dist, qgis_iface):
         from qgis.PyQt.QtWidgets import QDoubleSpinBox
-        w = QDoubleSpinBox(); w.setMaximum(100); w.setValue(2.5)
+        w = QDoubleSpinBox()
+        w.setMaximum(100)
+        w.setValue(2.5)
         assert dist._assign(w) == 2.5
 
     def test_unsupported_widget_raises(self, dist):
@@ -201,7 +205,9 @@ class TestEnsureTotalSum:
         from qgis.PyQt.QtWidgets import QLineEdit, QSpinBox
         a, b, c = QLineEdit(), QLineEdit(), QSpinBox()
         c.setMaximum(100)
-        a.setText('40'); b.setText('40'); c.setValue(10)
+        a.setText('40')
+        b.setText('40')
+        c.setValue(10)
         # Total = 90 -> last (c) gets +10 to reach 100.
         dist.ensure_total_sum([a, b, c])
         assert c.value() == 20
@@ -209,7 +215,9 @@ class TestEnsureTotalSum:
     def test_handles_blank_text(self, dist, qgis_iface):
         from qgis.PyQt.QtWidgets import QLineEdit
         a, b, c = QLineEdit(), QLineEdit(), QLineEdit()
-        a.setText('30'); b.setText(''); c.setText('30')
+        a.setText('30')
+        b.setText('')
+        c.setText('30')
         dist.ensure_total_sum([a, b, c])
         # Last (c) was '30'; total = 60 -> bumped by 40 -> 70.
         assert c.text() == '70.0'
@@ -405,7 +413,7 @@ class TestPlotData:
     def test_creates_canvas_and_plots(self, dist_quiet):
         """plot_data renders a histogram + distribution overlays into the
         DistributionWidget container."""
-        from omrat_utils.handle_distributions import Params, Normal
+        from omrat_utils.handle_distributions import Params
         d = dist_quiet
         # Restore real plot_data; un-stub.
         d.plot_data = type(d).plot_data.__get__(d)
@@ -432,3 +440,100 @@ class TestPlotData:
         d.plot_data(data, data, Params(), Params(), update_dist=True)
         # Second call replaces canvas.
         assert d.canvas is not first
+
+
+# ---------------------------------------------------------------------------
+# Non-numeric input: message + revert instead of ValueError (2026-09-18)
+# ---------------------------------------------------------------------------
+
+def _fill_valid(d, mean1_2='250.0'):
+    """Put a parsable number in every Distributions line edit."""
+    from omrat_utils.handle_distributions import FLUSH_FIELDS
+    for _key, name, _label in FLUSH_FIELDS:
+        getattr(d.dw, name).setText('0')
+    d.dw.leNormMean1_1.setText('7')
+    d.dw.leNormWeight1_1.setText('100')
+    d.dw.leNormWeight2_1.setText('100')
+    d.dw.leNormMean1_2.setText(mean1_2)
+
+
+class TestParseFloat:
+    def test_accepts_numbers_and_whitespace(self):
+        from omrat_utils.handle_distributions import parse_float
+        assert parse_float('250.0') == 250.0
+        assert parse_float(' -3 ') == -3.0
+        assert parse_float('1e3') == 1000.0
+
+    def test_rejects_garbage(self):
+        from omrat_utils.handle_distributions import parse_float
+        assert parse_float('-+250.0') is None
+        assert parse_float('') is None
+        assert parse_float(None) is None
+        assert parse_float('abc') is None
+
+
+class TestInvalidInput:
+    def test_flush_field_table_covers_all_line_edits(self, dist):
+        from omrat_utils.handle_distributions import FLUSH_FIELDS
+        assert len(FLUSH_FIELDS) == 24
+        for _key, name, _label in FLUSH_FIELDS:
+            assert hasattr(dist.dw, name), name
+
+    def test_typo_is_reported_and_reverted(self, dist_quiet):
+        d = dist_quiet
+        d.omrat.segment_data['1'] = {'mean1_2': 250.0}
+        d.omrat.segment_data['2'] = {}
+        d.omrat.notifier = MagicMock()
+        _fill_valid(d, mean1_2='-+250.0')
+        d.last_id = '1'
+
+        d.change_dist_segment('2')   # must not raise
+
+        seg = d.omrat.segment_data['1']
+        assert seg['mean1_2'] == 250.0          # bad value not written
+        assert seg['mean1_1'] == 7.0            # good fields still flushed
+        assert d.dw.leNormMean1_1.text() == '0'  # widgets now show leg 2
+        d.omrat.notifier.display_message.assert_called_once()
+        msg = d.omrat.notifier.display_message.call_args.args[0]
+        assert "'-+250.0'" in msg
+        assert 'Mean 2, direction 1' in msg
+        assert 'leg 1' in msg
+
+    def test_typo_widget_shows_stored_value_when_staying_on_leg(self, dist_quiet):
+        d = dist_quiet
+        d.omrat.segment_data['1'] = {'mean1_2': 250.0}
+        d.omrat.notifier = MagicMock()
+        _fill_valid(d, mean1_2='-+250.0')
+        d.last_id = '1'
+        rejected = d._flush_widgets_to_segment('1')
+        assert rejected == ['Mean 2, direction 1']
+        assert d.dw.leNormMean1_2.text() == '250.0'
+
+    def test_falls_back_to_log_without_notifier(self, dist_quiet):
+        d = dist_quiet
+        d.omrat.segment_data['1'] = {}
+        d.omrat.notifier = None
+        _fill_valid(d, mean1_2='x')
+        d.last_id = '1'
+        assert d._flush_widgets_to_segment('1') == ['Mean 2, direction 1']
+        assert d.dw.leNormMean1_2.text() == '0'
+
+    def test_adjust_weights_rejects_typo(self, omrat):
+        d = omrat.distributions
+        d.run_update_plot = MagicMock()
+        d.plot_data = MagicMock()
+        d.omrat.segment_data['1'] = {'weight1_2': 20.0}
+        d.omrat.notifier = MagicMock()
+        d.last_id = '1'
+        d.dw.leNormWeight1_1.setText('80')
+        d.dw.leNormWeight1_3.setText('0')
+        d.dw.sbUniformP1.setValue(0)
+        d.dw.leNormWeight1_2.setText('2O')   # letter O
+
+        d.adjust_weights(d.dw.leNormWeight1_2)   # must not raise
+
+        assert d.dw.leNormWeight1_2.text() == '20.0'
+        assert d.dw.leNormWeight1_1.text() == '80'   # others untouched
+        d.omrat.notifier.display_message.assert_called_once()
+        assert 'Weight 2, direction 1' in d.omrat.notifier.display_message.call_args.args[0]
+        d.run_update_plot.assert_not_called()

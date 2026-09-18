@@ -12,16 +12,12 @@ Focus on areas the audit reported as under-tested in
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from compute.junction_transitions import (
-    DEFAULT_TIME_WINDOW_S,
-    transition_counts_from_passages,
-)
+from compute.junction_transitions import transition_counts_from_passages
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +42,12 @@ def stub_ais():
     with patch("omrat_utils.handle_ais.DB"), \
          patch("omrat_utils.handle_ais.AISConnectionWidget"):
         omrat = MagicMock()
+        # Leg drawn westward (bearing 270): Dirs[0] = 'West' (the drawn
+        # direction), Dirs[1] = 'East'.  The east-going test ship (cog 90)
+        # therefore belongs in dirs[1] = 'East'.
         omrat.traffic = SimpleNamespace(
             traffic_data={
-                'L1': {'East': _stub_traffic_block(), 'West': _stub_traffic_block()},
+                'L1': {'West': _stub_traffic_block(), 'East': _stub_traffic_block()},
             },
         )
         ais = AIS(omrat)
@@ -62,14 +61,14 @@ def stub_ais():
 def test_update_ais_data_handles_null_beam(stub_ais):
     """beam=None must not append to the Ship Beam list (skipped via guard)."""
     row = [100, None, 70, 6.0, 'cargo', '2024-01-01', 12.0, 20.0, 0.0, 90.0]
-    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['East', 'West'])
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
     td = stub_ais.omrat.traffic.traffic_data['L1']['East']
     assert td['Ship Beam (meters)'][18][3] == []
 
 
 def test_update_ais_data_handles_null_sog(stub_ais):
     row = [100, 20, 70, 6.0, 'cargo', '2024-01-01', None, 20.0, 0.0, 90.0]
-    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['East', 'West'])
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
     td = stub_ais.omrat.traffic.traffic_data['L1']['East']
     assert td['Speed (knots)'][18][3] == []
     assert td['Frequency (ships/year)'][18][3] == 1  # frequency still incremented
@@ -77,7 +76,7 @@ def test_update_ais_data_handles_null_sog(stub_ais):
 
 def test_update_ais_data_handles_null_draught_and_air_draught(stub_ais):
     row = [100, 20, 70, None, 'cargo', '2024-01-01', 12.0, None, 0.0, 90.0]
-    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['East', 'West'])
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
     td = stub_ais.omrat.traffic.traffic_data['L1']['East']
     assert td['Draught (meters)'][18][3] == []
     assert td['Ship heights (meters)'][18][3] == []
@@ -86,7 +85,7 @@ def test_update_ais_data_handles_null_draught_and_air_draught(stub_ais):
 
 def test_update_ais_data_all_optional_columns_null(stub_ais):
     row = [None, None, None, None, None, '2024-01-01', None, None, 0.0, 90.0]
-    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['East', 'West'])
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
     td = stub_ais.omrat.traffic.traffic_data['L1']['East']
     # toc=None -> get_type returns 20 (Other Type); loa=None -> 100 -> bucket 3.
     assert td['Frequency (ships/year)'][20][3] == 1
@@ -166,3 +165,59 @@ def test_pure_counter_drives_handler_apply():
     # 7/10 went to leg 2; 3/10 went to leg 3.
     assert handler.registry['j_x'].transitions['1']['2'] == pytest.approx(0.7)
     assert handler.registry['j_x'].transitions['1']['3'] == pytest.approx(0.3)
+
+
+# ---------------------------------------------------------------------------
+# junction_pass_needed: skip the junction pass on a single-leg Update AIS
+# ---------------------------------------------------------------------------
+
+
+def _seg(start: str, end: str) -> dict:
+    return {'Start_Point': start, 'End_Point': end, 'line_length': 100_000,
+            'Width': 5000, 'Route_Id': 1, 'Leg_name': 'LEG'}
+
+
+def _y_segments() -> dict:
+    return {
+        '1': _seg("15.0 55.5", "15.0 55.0"),
+        '2': _seg("15.0 55.0", "15.5 54.5"),
+        '3': _seg("15.0 55.0", "14.5 54.5"),
+    }
+
+
+def _ais_handler(stub_ais, sd):
+    from omrat_utils.handle_junctions import Junctions
+    stub_ais.omrat.segment_data = sd
+    handler = Junctions(stub_ais.omrat)
+    handler.rebuild_from_segments(sd, prefer_user=False)
+    stub_ais.omrat.junctions = handler
+    return handler
+
+
+def test_junction_pass_needed_without_handler(stub_ais):
+    stub_ais.omrat.junctions = None
+    stub_ais.omrat.segment_data = _y_segments()
+    assert stub_ais.junction_pass_needed() is True
+
+
+def test_junction_pass_needed_follows_registry_state(stub_ais):
+    sd = _y_segments()
+    handler = _ais_handler(stub_ais, sd)
+    # Geometric defaults only: the pass has never run.
+    assert stub_ais.junction_pass_needed() is True
+    for j in handler.registry.values():
+        j.source = 'ais'
+    assert stub_ais.junction_pass_needed() is False
+    # A new leg on the node needs a fresh count.
+    sd['4'] = _seg("15.0 55.0", "15.0 54.5")
+    assert stub_ais.junction_pass_needed() is True
+
+
+def test_junction_pass_needed_after_passage_line_edit(stub_ais):
+    sd = _y_segments()
+    handler = _ais_handler(stub_ais, sd)
+    for j in handler.registry.values():
+        j.source = 'ais'
+    assert stub_ais.junction_pass_needed() is False
+    handler.invalidate_legs(['2'])
+    assert stub_ais.junction_pass_needed() is True

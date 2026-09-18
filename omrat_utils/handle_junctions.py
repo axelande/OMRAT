@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 from geometries.junctions import (
     Junction,
+    ais_counts_current,
+    invalidate_ais_for_legs,
     apply_geometric_defaults,
     apply_ais_defaults,
     build_junctions,
@@ -142,6 +144,31 @@ class Junctions:
             self._segment_data(segment_data),
             overwrite_user=overwrite_user,
         )
+
+    # ------------------------------------------------------------------
+    # AIS junction pass bookkeeping
+    # ------------------------------------------------------------------
+
+    def ais_counts_current(self, segment_data: dict[str, Any] | None = None) -> bool:
+        """True when every junction already has AIS/user evidence for the current legs.
+
+        ``AIS.update_legs`` uses this to skip the junction pass on a
+        single-leg **Update AIS**.  See :func:`geometries.junctions.ais_counts_current`.
+        """
+        return ais_counts_current(self.registry, self._segment_data(segment_data))
+
+    def invalidate_legs(
+        self,
+        leg_ids: Iterable[Any],
+        segment_data: dict[str, Any] | None = None,
+    ) -> int:
+        """Reset AIS matrices at junctions touching ``leg_ids`` to geometry.
+
+        Called after a leg's passage line moved (vertex drag, width or
+        tangent edit) so the next AIS refresh re-counts those junctions.
+        Returns the number of junctions reset.
+        """
+        return invalidate_ais_for_legs(self.registry, leg_ids, self._segment_data(segment_data))
 
     # ------------------------------------------------------------------
     # User edits

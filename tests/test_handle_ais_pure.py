@@ -704,10 +704,11 @@ class TestAISUpdateAisData:
         # date1=..., sog=12.0, air_draught=20.0, dist=0.0, cog=90.0
         row = [None, 20, 70, 6.0, None, '2024-01-01', 12.0, 20.0, 0.0, 90.0]
         l1, l2 = ais_with_mocks.update_ais_data(
-            'L1', [row], leg_bearing=270.0, dirs=['East', 'West'],
+            'L1', [row], leg_bearing=270.0, dirs=['West', 'East'],
         )
-        # Cog 90 vs leg_bearing+180=450%360=90 -> matches line1.
-        assert len(l1) == 1 and len(l2) == 0
+        # Leg drawn westward (bearing 270); cog 90 is the reciprocal flow
+        # -> line2 / dirs[1] = 'East'.
+        assert len(l1) == 0 and len(l2) == 1
 
     def test_multiplier_scales_frequency_only(self, ais_with_mocks):
         """The multiplier is added to ``Frequency (ships/year)`` per ping
@@ -735,7 +736,7 @@ class TestAISUpdateAisData:
             },
         }
         ais_with_mocks.update_ais_data(
-            'L1', [row, row, row], leg_bearing=270.0, dirs=['East', 'West'],
+            'L1', [row, row, row], leg_bearing=270.0, dirs=['West', 'East'],
             multiplier=182.5,  # 365*24/48 - the user's 48 h example
         )
         td = ais_with_mocks.omrat.traffic.traffic_data['L1']['East']
@@ -772,7 +773,7 @@ class TestAISUpdateAisData:
             },
         }
         ais_with_mocks.update_ais_data(
-            'L1', [row, row], leg_bearing=270.0, dirs=['East', 'West'],
+            'L1', [row, row], leg_bearing=270.0, dirs=['West', 'East'],
         )
         td = ais_with_mocks.omrat.traffic.traffic_data['L1']['East']
         assert td['Frequency (ships/year)'][18][3] == 2
@@ -801,7 +802,7 @@ class TestAISUpdateAisData:
         # cog 180 doesn't match bearing 90 +- 5 and doesn't match 270 +- 5.
         row = [100, 20, 70, 6.0, 'cargo', '2024-01-01', 12.0, 20.0, 0.0, 180.0]
         l1, l2 = ais_with_mocks.update_ais_data(
-            'L1', [row], leg_bearing=270.0, dirs=['East', 'West'],
+            'L1', [row], leg_bearing=270.0, dirs=['West', 'East'],
         )
         assert len(l1) == 0 and len(l2) == 0
 
@@ -830,7 +831,7 @@ class TestAISUpdateAisData:
         }
         row = [9999, 20, 70, 6.0, 'cargo', '2024-01-01', 12.0, 20.0, 0.0, 90.0]
         l1, l2 = ais_with_mocks.update_ais_data(
-            'L1', [row], leg_bearing=270.0, dirs=['East', 'West'],
+            'L1', [row], leg_bearing=270.0, dirs=['West', 'East'],
         )
         # Cargo (row 18), last-bucket (col 1) should be 1.
         assert ais_with_mocks.omrat.traffic.traffic_data['L1']['East'][

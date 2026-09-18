@@ -656,12 +656,15 @@ QToolTip {
                      <widget class="QLabel" name="label_24">
                       <property name="text">
                        <string>Mean time between checks
-(seconds)</string>
+(seconds, 0 = Cat II off)</string>
                       </property>
                      </widget>
                     </item>
                     <item row="0" column="1">
                      <widget class="QLineEdit" name="LEMeanTimeSeconds1">
+                      <property name="toolTip">
+                       <string>Position-check interval for the Cat II (missed turn) model. Set 0 to disable Cat II for this direction, e.g. where the route ends at a port.</string>
+                      </property>
                       <property name="text">
                        <string>180</string>
                       </property>
@@ -938,12 +941,15 @@ QToolTip {
                      <widget class="QLabel" name="label_25">
                       <property name="text">
                        <string>Mean time between checks
-(seconds)</string>
+(seconds, 0 = Cat II off)</string>
                       </property>
                      </widget>
                     </item>
                     <item row="0" column="1">
                      <widget class="QLineEdit" name="LEMeanTimeSeconds2">
+                      <property name="toolTip">
+                       <string>Position-check interval for the Cat II (missed turn) model. Set 0 to disable Cat II for this direction, e.g. where the route ends at a port.</string>
+                      </property>
                       <property name="text">
                        <string>180</string>
                       </property>

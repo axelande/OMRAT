@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+import os
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -19,6 +20,31 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 _USER_ROLE = getattr(Qt, 'UserRole', None) or Qt.ItemDataRole.UserRole
+
+_PLUGIN_VERSION: str | None = None
+
+
+def plugin_version() -> str:
+    """Return the plugin version from ``metadata.txt`` (cached; '' if unreadable).
+
+    Stamped into every saved ``.omrat`` as ``omrat_version`` for
+    traceability — a result can then always be tied to the code that
+    produced it.
+    """
+    global _PLUGIN_VERSION
+    if _PLUGIN_VERSION is None:
+        meta = os.path.join(os.path.dirname(__file__), '..', 'metadata.txt')
+        version = ''
+        try:
+            with open(meta, encoding='utf-8') as f:
+                for line in f:
+                    if line.strip().startswith('version='):
+                        version = line.split('=', 1)[1].strip()
+                        break
+        except OSError:
+            pass
+        _PLUGIN_VERSION = version
+    return _PLUGIN_VERSION
 
 
 def dict_ndarray_to_list(data: dict[str, dict[str, np.ndarray]]) -> dict[str, dict[str, list]]:
@@ -63,6 +89,8 @@ class GatherData:
                 self.data["segment_data"][key][col] = copy.deepcopy(value)
 
     def get_all_for_save(self) -> dict[str, Any]:
+        # Traceability: which OMRAT release wrote this file.
+        self.data['omrat_version'] = plugin_version()
         self.data['pc'] = copy.deepcopy(self.p.causation_f.data)
         self.data['drift'] = copy.deepcopy(self.p.drift_values)
         self.p.distributions.change_dist_segment(self.p.distributions.last_id)  # Saves the current settings on the leg

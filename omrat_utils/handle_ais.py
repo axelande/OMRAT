@@ -437,8 +437,34 @@ class AIS:
                 self.omrat.qgis_geoms.leg_dirs[leg_key] = self.omrat.segment_data[leg_key]["Dirs"]
         return {k: list(v) for k, v in self.omrat.qgis_geoms.leg_dirs.items()}
 
+    def junction_pass_needed(self) -> bool:
+        """Whether a single-leg AIS refresh must also re-count the junctions.
+
+        False when the live :class:`Junctions` registry already holds an
+        ``ais`` or ``user`` matrix for every junction the current legs
+        form (see :func:`geometries.junctions.ais_counts_current`).  A
+        leg that was added or removed, a junction still on its geometric
+        default, or a leg whose passage line moved (``invalidate_legs``)
+        all make this True.  Anything unexpected also returns True so
+        the pass is never skipped by accident.
+        """
+        handler = getattr(self.omrat, 'junctions', None)
+        segment_data = getattr(self.omrat, 'segment_data', None)
+        if handler is None or not isinstance(segment_data, dict):
+            return True
+        try:
+            return not bool(handler.ais_counts_current(segment_data))
+        except Exception:
+            return True
+
     def update_legs(self, key: str | None = None) -> None:
-        """Launch a background task to fetch AIS data for all legs or one leg."""
+        """Launch a background task to fetch AIS data for all legs or one leg.
+
+        **Update all distributions** (``key is None``) always re-counts the
+        junction transitions.  A per-leg **Update AIS** skips that pass
+        when :meth:`junction_pass_needed` says the matrices are current,
+        which saves one MMSI query per junction leg.
+        """
         if self.db is None:
             QMessageBox.information(
                 self.omrat.main_widget,
@@ -465,6 +491,7 @@ class AIS:
             if not legs:
                 return
         leg_dirs = self._ensure_leg_dirs(legs)
+        fetch_junctions = True if key is None else self.junction_pass_needed()
         tw = self.omrat.main_widget.twTrafficData
         from omrat_utils.ais_update_task import AisUpdateTask
         task = AisUpdateTask(
@@ -476,6 +503,7 @@ class AIS:
             variables=list(self.omrat.traffic.variables),
             var_defaults=dict(self.omrat.traffic._var_cell_defaults),
             leg_dirs=leg_dirs,
+            fetch_junctions=fetch_junctions,
         )
         btn = getattr(self.omrat.main_widget, 'pbUpdateAIS', None)
         if btn is not None:
@@ -620,10 +648,13 @@ class AIS:
         line1: list[float] = []
         line2: list[float] = []
         for loa, beam, toc, draugt, sh_type, _, sog, air_draught, dist, cog in ais_data:
-            if close_to_line(leg_bearing + 180, cog, self.max_deviation):
+            # dirs[0] = the flow travelling in the drawn direction
+            # (cog ~ leg_bearing) — must match AisUpdateTask._bin_ping and
+            # the powered model's dir-index convention (0: start -> end).
+            if close_to_line(leg_bearing, cog, self.max_deviation):
                 line1.append(dist)
                 l1 = True
-            elif close_to_line(leg_bearing, cog, self.max_deviation):
+            elif close_to_line(leg_bearing + 180, cog, self.max_deviation):
                 line2.append(dist)
                 l1 = False
             else:
@@ -641,9 +672,9 @@ class AIS:
     ) -> dict[str, list[float]]:
         """Return ``{mmsi: [unix_timestamp, ...]}`` for AIS pings inside the leg.
 
-        ``near_radius_m`` is currently unused — the existing ``run_sql``
-        builds a passage line spanning the whole width of the leg, which
-        is the same data the per-leg traffic update consumes.  When AIS-
+        ``near_radius_m`` is currently unused — the passage line from
+        ``get_pl`` spans the whole width of the leg, the same line the
+        per-leg traffic update queries.  When AIS-
         derived junction transitions become production-grade we will
         switch to a near-junction sub-polygon to better reflect "ships
         actually transiting the junction" instead of "ships anywhere
@@ -665,18 +696,12 @@ class AIS:
                 l_width=float(leg_d.get('Width', 5000)),
                 tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
             )
-            self.run_sql(pl)
         except Exception:
             return {}
-        # ``run_sql`` returns the per-ping row used by ``update_ais_data``;
-        # we only need the (mmsi, date1) pair to build the transition
-        # counts.  ``date1`` is at column index 5 in the SELECT order
-        # (loa, beam, type_and_cargo, draught, ship_type, date1, sog,
-        # air_draught, dist_from_start, cog).  ``mmsi`` is not in the
-        # public SELECT list — we replay the same query joined back to
-        # ``ss.mmsi`` here for the targeted use case.
-        # Keep the implementation pragmatic: re-issue a lighter query
-        # focused on (mmsi, date1) so we don't have to refactor run_sql.
+        # Only (mmsi, date1) is needed for the transition counts, so run
+        # the light MMSI query alone.  Until 2026-09-18 this also ran the
+        # full per-ping ``run_sql`` query and discarded the result, which
+        # doubled the cost of the junction pass for every leg.
         return self._fetch_mmsi_passages(pl)
 
     def _fetch_mmsi_passages(self, pl: str) -> dict[str, list[float]]:

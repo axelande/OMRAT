@@ -8,12 +8,14 @@ import pytest
 
 from geometries.junctions import (
     Junction,
+    ais_counts_current,
     apply_ais_defaults,
     apply_geometric_defaults,
     build_junctions,
     compute_geometric_transition_matrix,
     deflection_deg,
     deserialize_junctions,
+    invalidate_ais_for_legs,
     junction_id_for_point,
     linked_partners,
     refresh_junction_registry,
@@ -482,3 +484,128 @@ def test_linked_rows_do_not_touch_user_matrix():
     j.source = 'user'
     assert apply_geometric_defaults(junctions, sd) == 0
     assert j.transitions == {'a': {'b1': 1.0}}
+
+
+def _ais_registry(sd: dict) -> dict:
+    """Registry for ``sd`` with every junction carrying an ``ais`` matrix."""
+    js = build_junctions(sd)
+    apply_geometric_defaults(js, sd)
+    for j in js.values():
+        j.source = 'ais'
+    return js
+
+
+def test_refresh_preserves_ais_when_leg_map_unchanged():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    j = next(iter(js.values()))
+    j.transitions = {'1': {'2': 0.9, '3': 0.1}, '2': {'1': 1.0}, '3': {'1': 1.0}}
+    refreshed = refresh_junction_registry(js, sd)
+    rj = next(iter(refreshed.values()))
+    assert rj.source == 'ais'
+    assert rj.transitions['1'] == {'2': 0.9, '3': 0.1}
+
+
+def test_refresh_resets_ais_when_a_leg_joins_the_junction():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    sd['4'] = _seg("15.0 55.0", "15.0 54.5")   # fourth leg on the same node
+    refreshed = refresh_junction_registry(js, sd)
+    rj = next(iter(refreshed.values()))
+    assert rj.source == 'geometry'
+    assert '4' in rj.transitions
+
+
+def test_refresh_resets_ais_when_a_leg_leaves_the_junction():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    del sd['3']
+    refreshed = refresh_junction_registry(js, sd)
+    rj = next(iter(refreshed.values()))
+    assert rj.source == 'geometry'
+    assert set(rj.legs) == {'1', '2'}
+
+
+# ---------------------------------------------------------------------------
+# ais_counts_current / invalidate_ais_for_legs
+# ---------------------------------------------------------------------------
+
+
+def test_ais_counts_current_false_on_geometric_defaults():
+    sd = _y_junction_segments()
+    js = build_junctions(sd)
+    apply_geometric_defaults(js, sd)
+    assert ais_counts_current(js, sd) is False
+
+
+def test_ais_counts_current_true_when_all_ais():
+    sd = _y_junction_segments()
+    assert ais_counts_current(_ais_registry(sd), sd) is True
+
+
+def test_ais_counts_current_accepts_user_matrices():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    next(iter(js.values())).source = 'user'
+    assert ais_counts_current(js, sd) is True
+
+
+def test_ais_counts_current_false_after_leg_added_to_junction():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    sd['4'] = _seg("15.0 55.0", "15.0 54.5")
+    assert ais_counts_current(js, sd) is False
+
+
+def test_ais_counts_current_false_after_leg_removed():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    del sd['3']
+    assert ais_counts_current(js, sd) is False
+
+
+def test_ais_counts_current_false_when_new_junction_appears():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    # Two new legs meeting far away form a second junction.
+    sd['8'] = _seg("10.0 50.0", "10.0 51.0")
+    sd['9'] = _seg("10.0 51.0", "11.0 51.0")
+    assert ais_counts_current(js, sd) is False
+
+
+def test_ais_counts_current_ignores_isolated_new_leg():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    sd['9'] = _seg("10.0 50.0", "10.0 51.0")   # touches no junction
+    assert ais_counts_current(js, sd) is True
+
+
+def test_ais_counts_current_true_for_project_without_junctions():
+    sd = {'1': _seg("10.0 50.0", "10.0 51.0")}
+    assert ais_counts_current({}, sd) is True
+
+
+def test_invalidate_ais_resets_touching_junctions_only():
+    sd = _y_junction_segments()
+    sd['8'] = _seg("10.0 50.0", "10.0 51.0")
+    sd['9'] = _seg("10.0 51.0", "11.0 51.0")
+    js = _ais_registry(sd)
+    assert len(js) == 2
+    assert invalidate_ais_for_legs(js, ['2'], sd) == 1
+    by_legs = {frozenset(j.legs): j for j in js.values()}
+    assert by_legs[frozenset({'1', '2', '3'})].source == 'geometry'
+    assert by_legs[frozenset({'8', '9'})].source == 'ais'
+    assert ais_counts_current(js, sd) is False
+
+
+def test_invalidate_ais_leaves_user_matrices_and_unknown_legs():
+    sd = _y_junction_segments()
+    js = _ais_registry(sd)
+    j = next(iter(js.values()))
+    j.source = 'user'
+    assert invalidate_ais_for_legs(js, ['1'], sd) == 0
+    assert j.source == 'user'
+    j.source = 'ais'
+    assert invalidate_ais_for_legs(js, ['42'], sd) == 0
+    assert invalidate_ais_for_legs(js, [], sd) == 0
+    assert j.source == 'ais'

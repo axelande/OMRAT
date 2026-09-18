@@ -3,6 +3,7 @@ from typing import Optional, Any, TYPE_CHECKING, cast
 import numpy as np
 from scipy import stats
 from matplotlib.axes import Axes
+from qgis.core import Qgis, QgsMessageLog
 from qgis.PyQt.QtWidgets import QLineEdit, QSpinBox, QDoubleSpinBox
 try:
     # QGIS 4 / Qt6 path
@@ -15,6 +16,39 @@ if TYPE_CHECKING:
     from omrat import OMRAT
 
 WidgetType = QLineEdit | QSpinBox | QDoubleSpinBox
+
+
+def parse_float(text: str | None) -> float | None:
+    """``float(text)`` that returns ``None`` instead of raising.
+
+    The Distributions tab is edited by hand, so typos like ``-+250.0``
+    (2026-09-18) must become a message, not a traceback out of a Qt slot.
+    """
+    if text is None:
+        return None
+    try:
+        return float(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _flush_fields() -> list[tuple[str, str, str]]:
+    """``(segment_data key, line-edit name, label)`` for every free-text field."""
+    out: list[tuple[str, str, str]] = []
+    for d in ('1', '2'):
+        for i in ('1', '2', '3'):
+            out.append((f'mean{d}_{i}', f'leNormMean{d}_{i}', f'Mean {i}, direction {d}'))
+            out.append((f'std{d}_{i}', f'leNormStd{d}_{i}', f'Std {i}, direction {d}'))
+            out.append((f'weight{d}_{i}', f'leNormWeight{d}_{i}', f'Weight {i}, direction {d}'))
+        out.append((f'u_min{d}', f'leUniformMin{d}', f'Uniform min, direction {d}'))
+        out.append((f'u_max{d}', f'leUniformMax{d}', f'Uniform max, direction {d}'))
+        out.append((f'ai{d}', f'LEMeanTimeSeconds{d}', f'Mean time between checks, direction {d}'))
+    return out
+
+
+# Every QLineEdit the tab flushes into ``segment_data`` (the two uniform
+# probabilities are spin boxes and cannot hold garbage).
+FLUSH_FIELDS: list[tuple[str, str, str]] = _flush_fields()
 
 
 @dataclass
@@ -117,37 +151,18 @@ class Distributions:
         if l_id not in self.omrat.segment_data:
             l_id = None
         if l_id is not None and self.dw.leNormMean1_1.text() != '':
-            # Update segment data for the last segment
-            self.omrat.segment_data[l_id]['mean1_1'] = float(self.dw.leNormMean1_1.text())
-            self.omrat.segment_data[l_id]['mean1_2'] = float(self.dw.leNormMean1_2.text())
-            self.omrat.segment_data[l_id]['mean1_3'] = float(self.dw.leNormMean1_3.text())
-            self.omrat.segment_data[l_id]['std1_1'] = float(self.dw.leNormStd1_1.text())
-            self.omrat.segment_data[l_id]['std1_2'] = float(self.dw.leNormStd1_2.text())
-            self.omrat.segment_data[l_id]['std1_3'] = float(self.dw.leNormStd1_3.text())
-            self.omrat.segment_data[l_id]['mean2_1'] = float(self.dw.leNormMean2_1.text())
-            self.omrat.segment_data[l_id]['mean2_2'] = float(self.dw.leNormMean2_2.text())
-            self.omrat.segment_data[l_id]['mean2_3'] = float(self.dw.leNormMean2_3.text())
-            self.omrat.segment_data[l_id]['std2_1'] = float(self.dw.leNormStd2_1.text())
-            self.omrat.segment_data[l_id]['std2_2'] = float(self.dw.leNormStd2_2.text())
-            self.omrat.segment_data[l_id]['std2_3'] = float(self.dw.leNormStd2_3.text())
-            self.omrat.segment_data[l_id]['weight1_1'] = float(self.dw.leNormWeight1_1.text())
-            self.omrat.segment_data[l_id]['weight1_2'] = float(self.dw.leNormWeight1_2.text())
-            self.omrat.segment_data[l_id]['weight1_3'] = float(self.dw.leNormWeight1_3.text())
-            self.omrat.segment_data[l_id]['weight2_1'] = float(self.dw.leNormWeight2_1.text())
-            self.omrat.segment_data[l_id]['weight2_2'] = float(self.dw.leNormWeight2_2.text())
-            self.omrat.segment_data[l_id]['weight2_3'] = float(self.dw.leNormWeight2_3.text())
-            self.omrat.segment_data[l_id]['u_min1'] = float(self.dw.leUniformMin1.text())
-            self.omrat.segment_data[l_id]['u_max1'] = float(self.dw.leUniformMax1.text())
-            self.omrat.segment_data[l_id]['u_p1'] = self.dw.sbUniformP1.value()
-            self.omrat.segment_data[l_id]['ai1'] = float(self.dw.LEMeanTimeSeconds1.text())
-            self.omrat.segment_data[l_id]['u_min2'] = float(self.dw.leUniformMin2.text())
-            self.omrat.segment_data[l_id]['u_max2'] = float(self.dw.leUniformMax2.text())
-            self.omrat.segment_data[l_id]['u_p2'] = self.dw.sbUniformP2.value()
-            self.omrat.segment_data[l_id]['ai2'] = float(self.dw.LEMeanTimeSeconds2.text())
+            self._flush_widgets_to_segment(l_id)
         if new_id not in self.omrat.segment_data:
             # The combo box still pointed at a segment that no longer exists;
             # nothing to populate the widgets from.
             return
+        # Direction labels: laDir1/laDir2 were previously only written while
+        # drawing a leg, so on a loaded project the panels (and the histogram
+        # legend, which reads these labels) showed nothing.  Panel 1 is
+        # Dirs[0] = the flow travelling Start_Point -> End_Point.
+        dirs = self.omrat.segment_data[new_id].get('Dirs') or []
+        self.dw.laDir1.setText(str(dirs[0]) if len(dirs) > 0 else 'Dir 1')
+        self.dw.laDir2.setText(str(dirs[1]) if len(dirs) > 1 else 'Dir 2')
         if 'mean1_1' not in self.omrat.segment_data[new_id]:
             self.omrat.segment_data[new_id].update({
                 'mean1_1': 0, 'mean2_1': 0, 'weight1_1': 100,
@@ -201,6 +216,61 @@ class Distributions:
         self.dw.sbUniformP2.setValue(int(self.omrat.segment_data[new_id]['u_p2']))
         self.dw.LEMeanTimeSeconds2.setText(str(self.omrat.segment_data[new_id]['ai2']))
         self.last_id = new_id
+
+    def _flush_widgets_to_segment(self, l_id: str) -> list[str]:
+        """Write the tab's line edits into ``segment_data[l_id]``.
+
+        A field that does not parse as a number is *not* written: its
+        widget is put back to the stored value and the user gets one
+        message-bar warning naming the field(s).  Returns the labels of
+        the rejected fields (empty when everything was accepted).
+        """
+        seg = self.omrat.segment_data[l_id]
+        rejected: list[tuple[str, str, Any, str]] = []
+        for key, widget_name, label in FLUSH_FIELDS:
+            widget = getattr(self.dw, widget_name)
+            value = parse_float(widget.text())
+            if value is None:
+                rejected.append((label, widget.text(), widget, key))
+                continue
+            seg[key] = value
+        seg['u_p1'] = self.dw.sbUniformP1.value()
+        seg['u_p2'] = self.dw.sbUniformP2.value()
+        if not rejected:
+            return []
+        for _label, _text, widget, key in rejected:
+            widget.setText(str(seg.get(key, 0)))
+        self._report_invalid_input(l_id, rejected)
+        return [label for label, _text, _widget, _key in rejected]
+
+    def _report_invalid_input(self, l_id: str, rejected: list[tuple[str, str, Any, str]]) -> None:
+        """One warning for all rejected fields; message bar if available, QGIS log otherwise."""
+        seg = self.omrat.segment_data.get(l_id, {})
+        parts = [
+            f"{label}: '{text}' (kept {seg.get(key, 0)})"
+            for label, text, _widget, key in rejected
+        ]
+        msg = (
+            f"Distributions, leg {l_id}: not a number -- " + "; ".join(parts)
+            + ". The previous value was restored."
+        )
+        notifier = getattr(self.omrat, 'notifier', None)
+        if notifier is not None:
+            try:
+                notifier.display_message(msg, level=Qgis.MessageLevel.Warning, duration=10)
+                return
+            except Exception:  # nosec B110 B112
+                pass
+        QgsMessageLog.logMessage(msg, 'OMRAT', Qgis.MessageLevel.Warning)
+
+    def _stored_value_for_widget(self, widget: Any) -> float:
+        """The ``segment_data`` value behind a Distributions line edit (0 if unknown)."""
+        seg = self.omrat.segment_data.get(self.last_id, {}) or {}
+        for key, widget_name, _label in FLUSH_FIELDS:
+            if getattr(self.dw, widget_name, None) is widget:
+                value = parse_float(str(seg.get(key, 0)))
+                return 0.0 if value is None else value
+        return 0.0
 
     def add_dist2plot(self, ax: Axes, parameters: Params, data: np.ndarray, first: bool, update_dist: bool = True):
         try:
@@ -303,8 +373,10 @@ class Distributions:
         fig: Figure = plt.figure(figsize=(10, 6))  # type: ignore
         gs = gridspec.GridSpec(1, 1)
         ax: Axes = fig.add_subplot(gs[0, 0])  # type: ignore
-        ax.hist(data, bins=50, density=True, alpha=0.6, color='b', label=self.dw.laDir1.text())
-        ax.hist(data2, bins=50, density=True, alpha=0.6, color='g', label=self.dw.laDir2.text())
+        ax.hist(data, bins=50, density=True, alpha=0.6, color='b',
+                label=self.dw.laDir1.text() or 'Dir 1 (Start -> End)')
+        ax.hist(data2, bins=50, density=True, alpha=0.6, color='g',
+                label=self.dw.laDir2.text() or 'Dir 2 (End -> Start)')
         self.add_dist2plot(ax, parameters1, data, True, update_dist)
         self.add_dist2plot(ax, parameters2, data2, False, update_dist)
 
@@ -353,7 +425,19 @@ class Distributions:
         # Get the total weight and the changed value
         total_weight = 100
         if hasattr(changed_widget, 'text'):
-            changed_value = float(changed_widget.text())
+            parsed = parse_float(changed_widget.text())
+            if parsed is None:
+                # Typo in a weight field: restore the stored weight and
+                # tell the user instead of raising out of the Qt slot.
+                bad_text = changed_widget.text()
+                changed_widget.setText(str(self._stored_value_for_widget(changed_widget)))
+                key, label = next(
+                    ((k, lab) for k, name, lab in FLUSH_FIELDS if getattr(self.dw, name, None) is changed_widget),
+                    ('', 'Weight'),
+                )
+                self._report_invalid_input(self.last_id, [(label, bad_text, changed_widget, key)])
+                return
+            changed_value = parsed
         else:
             widget_sb: QSpinBox = cast(QSpinBox, changed_widget)
             changed_value = float(widget_sb.value())

@@ -1479,6 +1479,8 @@ class HandleQGISIface:
         seg_key = str(segment_id)
         seg = (getattr(self.omrat, 'segment_data', None) or {}).get(seg_key)
         if isinstance(seg, dict):
+            if seg.get(TANGENT_POS_KEY) != t:
+                self._invalidate_junction_ais([seg_key])
             seg[TANGENT_POS_KEY] = t
 
         row = self._tangent_row_for_segment(segment_id)
@@ -1540,6 +1542,7 @@ class HandleQGISIface:
             seg_key = str(segment_id)
             if seg_key in self.omrat.segment_data:
                 self.omrat.segment_data[seg_key]['Width'] = int(width)
+            self._invalidate_junction_ais([seg_key])
             start_point_geom = QgsGeometry.fromWkt(f"Point ({start_point_wkt})")
             end_point_geom = QgsGeometry.fromWkt(f"Point ({end_point_wkt})")
             if not start_point_geom.isEmpty() and not end_point_geom.isEmpty():
@@ -1702,6 +1705,7 @@ class HandleQGISIface:
         if not isinstance(seg, dict):
             return
         wps = self._waypoints()
+        touched: set[str] = set()
         self._propagating_vertex_move = True
         try:
             for ref, old_xy, new_xy in (
@@ -1728,9 +1732,26 @@ class HandleQGISIface:
                 else:
                     affected = move_waypoint(wps, sd, wid, new_xy)
                 for leg_id in affected:
+                    touched.add(str(leg_id))
                     self._refresh_leg_views(int(leg_id))
         finally:
             self._propagating_vertex_move = False
+        self._invalidate_junction_ais(touched)
+
+    def _invalidate_junction_ais(self, leg_ids) -> None:
+        """A leg's passage line changed: drop the AIS junction counts it fed.
+
+        Junctions touching ``leg_ids`` fall back to their geometric
+        matrix, so the next **Update AIS** on any leg re-counts them
+        instead of skipping the junction pass (``AIS.junction_pass_needed``).
+        """
+        handler = getattr(self.omrat, 'junctions', None)
+        if handler is None or not leg_ids:
+            return
+        try:
+            handler.invalidate_legs(leg_ids, self.omrat.segment_data)
+        except Exception:  # nosec B110 B112
+            pass
 
     def _refresh_leg_views(self, fid: int) -> None:
         """Bring the route-table row, the tangent and the canvas line of

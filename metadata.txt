@@ -7,7 +7,7 @@ name=OMRAT - Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.30
 qgisMaximumVersion=4.9
 description=OMRAT Open Maritime Risk Analysis Tool. This is an open source implementation of Pedersens and Friis-Hansen equations to calculate the probability of maritime accidents. The full documentation of the plugin could be found here: https://axelande.github.io/OMRAT/
-version=0.15.2
+version=0.16.1
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 license=GPL-3
@@ -24,7 +24,8 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
-  Version 0.16.0 (2026-09-17) - Legs now hang on shared waypoints: dragging a junction moves every leg on it and clicks snap to existing nodes. Vertex edits are captured after Stop route / edit-mode toggles (they were lost before). New routes number their legs from 1 without touching existing legs. A project saved before its first AIS pass loads again, and schema errors are shown instead of silently ignored.
+  Version 0.16.1 (2026-09-18) - AIS-derived junction matrices now survive file load and leg edits, and a single-leg Update AIS skips the junction pass when every junction already has AIS evidence.
+  Version 0.16.0 (2026-09-17) - Legs now hang on shared waypoints: dragging a junction moves every leg on it and clicks snap to existing nodes. Vertex edits are captured after Stop route / edit-mode toggles (they were lost before). New routes number their legs from 1 without touching existing legs. A project saved before its first AIS pass loads again, and schema errors are shown instead of silently ignored. AIS-derived junction matrices now survive file load and leg edits, and a single-leg Update AIS skips the junction pass when every junction already has AIS evidence.
   Version 0.15.1 (2026-09-08) - Minor bugs fixes and added new ways of presenting the results
   Version 0.15.0 (2026-09-03) - Powered grounding and allision now include IWRAP Category I (obstacle inside the lane) next to the Category II missed-turn model, with separate Cat I causation factors, IWRAP XML mapping and report split.
   Version 0.14.3 (2026-09-03) - Made it possible to move the tangent along the leg and fix saving and copying traffic.

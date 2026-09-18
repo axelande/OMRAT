@@ -16,6 +16,15 @@ The matrix has three possible provenances:
 * ``"user"`` — entered or edited via the matrix UI; the validation pass
   preserves these and never overwrites them.
 
+:func:`refresh_junction_registry` keeps ``"user"`` matrices whenever the
+legs they reference still exist, and ``"ais"`` matrices whenever the
+junction's leg map is unchanged; everything else falls back to the
+geometric default.  :func:`ais_counts_current` reports whether every
+junction already holds AIS (or user) evidence for the current legs, so a
+single-leg AIS refresh can skip the junction pass;
+:func:`invalidate_ais_for_legs` undoes that after a leg's passage line
+changed (vertex drag, width or tangent edit).
+
 Legs whose traffic was *copied* from one another (``segment_data[leg]
 ['traffic_source']``, see :mod:`omrat_utils.copy_traffic`) are treated as
 one continuous route: at any junction they share, the ``"ais"`` and
@@ -31,7 +40,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import atan2, degrees, exp
-from typing import Any
+from typing import Any, Iterable
 
 from geometries.route_validation import parse_wkt_point
 
@@ -577,25 +586,96 @@ def refresh_junction_registry(
     Called after the validation pass (which may have merged or split
     legs) to bring the registry back into sync.  Junctions whose
     ``source`` is ``"user"`` keep their transitions if all referenced
-    legs still exist; everything else is regenerated from geometry.
+    legs still exist.  Junctions whose ``source`` is ``"ais"`` keep
+    theirs if the leg map (ids and start/end sides) is unchanged -- a
+    new or removed leg needs a new AIS count, but an unrelated edit
+    elsewhere on the route does not.  Until 2026-09-18 every ``"ais"``
+    matrix was reset to geometry here, so AIS evidence never survived a
+    file load or a leg edit.  Everything else is regenerated from
+    geometry.
     """
     fresh = build_junctions(segment_data)
     for jid, new_j in fresh.items():
         old = junctions.get(jid)
-        if old is not None and old.source == 'user':
-            # Preserve user edits when every referenced leg still exists.
-            ok = all(
-                in_leg in new_j.legs and all(
-                    out_leg in new_j.legs for out_leg in row
+        if old is not None and old.transitions:
+            if old.source == 'user':
+                # Preserve user edits when every referenced leg still exists.
+                ok = all(
+                    in_leg in new_j.legs and all(
+                        out_leg in new_j.legs for out_leg in row
+                    )
+                    for in_leg, row in old.transitions.items()
                 )
-                for in_leg, row in old.transitions.items()
-            )
-            if ok and old.transitions:
+                if ok:
+                    new_j.transitions = old.transitions
+                    new_j.source = 'user'
+                    continue
+            elif old.source == 'ais' and old.legs == new_j.legs:
                 new_j.transitions = old.transitions
-                new_j.source = 'user'
+                new_j.source = 'ais'
                 continue
         new_j.transitions = compute_geometric_transition_matrix(
             new_j, segment_data,
         )
         new_j.source = 'geometry'
     return fresh
+
+
+# ---------------------------------------------------------------------------
+# Skip / invalidate the AIS junction pass
+# ---------------------------------------------------------------------------
+
+
+def ais_counts_current(
+    junctions: dict[str, Junction],
+    segment_data: dict[str, Any],
+) -> bool:
+    """True when the AIS junction pass has nothing left to contribute.
+
+    That is the case when the registry describes exactly the junctions
+    the current ``segment_data`` produces (same ids, same leg maps) and
+    every one of them already carries an ``"ais"`` or ``"user"`` matrix.
+    A leg added or removed changes a leg map (or the junction set), and
+    a junction that has never seen AIS evidence is still ``"geometry"``,
+    so both make this False and the caller runs the full pass.
+
+    A project without junctions is trivially current.
+    """
+    fresh = build_junctions(segment_data)
+    if set(fresh) != set(junctions):
+        return False
+    for jid, new_j in fresh.items():
+        old = junctions[jid]
+        if old.legs != new_j.legs:
+            return False
+        if old.source not in ('ais', 'user'):
+            return False
+    return True
+
+
+def invalidate_ais_for_legs(
+    junctions: dict[str, Junction],
+    leg_ids: Iterable[Any],
+    segment_data: dict[str, Any],
+) -> int:
+    """Drop AIS evidence at every junction one of ``leg_ids`` touches.
+
+    Call this when a leg's passage line changed without the junction
+    set changing (vertex drag at the far end, width or tangent edit):
+    the stored counts were sampled on the old line.  Affected
+    junctions fall back to the geometric matrix and ``"geometry"``
+    source, so :func:`ais_counts_current` becomes False and the next
+    AIS refresh re-counts them.  ``"user"`` matrices are left alone.
+    Returns the number of junctions reset.
+    """
+    ids = {str(x) for x in leg_ids}
+    if not ids:
+        return 0
+    reset = 0
+    for j in junctions.values():
+        if j.source != 'ais' or not (ids & set(j.legs)):
+            continue
+        j.transitions = compute_geometric_transition_matrix(j, segment_data)
+        j.source = 'geometry'
+        reset += 1
+    return reset
