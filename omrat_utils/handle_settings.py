@@ -1,6 +1,6 @@
 from typing import Any
 from qgis.PyQt.QtWidgets import (
-    QDialogButtonBox, QLineEdit, QTableWidget, QTableWidgetItem,
+    QDialogButtonBox, QTableWidget, QTableWidgetItem,
     QWidget, QVBoxLayout, QPushButton, QHBoxLayout, QLabel, QHeaderView,
 )
 from qgis.PyQt.QtCore import Qt
@@ -25,6 +25,16 @@ from compute.basic_equations import (  # noqa: E402
     default_blackout_by_ship_type,
 )
 from compute.iwrap_defaults import default_drift_values  # noqa: E402
+from omrat_utils.number_input import (  # noqa: E402
+    format_weight, normalise_weights, parse_decimal, weights_sum_ok,
+)
+
+# Wind-rose line edits in compass order (N, NE, E, SE, S, SW, W, NW) and
+# the ``drift['rose']`` key each one maps to.
+ROSE_FIELDS: tuple[tuple[str, str], ...] = (
+    ('leDriftN', '0'), ('leDriftNE', '45'), ('leDriftE', '90'), ('leDriftSE', '135'),
+    ('leDriftS', '180'), ('leDriftSW', '225'), ('leDriftW', '270'), ('leDriftNW', '315'),
+)
 
 
 class DriftSettings:
@@ -41,48 +51,65 @@ class DriftSettings:
         # is shown (see _ensure_blackout_table).
         self._blackout_table: QTableWidget | None = None
 
-    def adjust_directions(self, changed_widget: QLineEdit) -> None:
-        widgets: list[Any] = [self.dsw.leDriftN, self.dsw.leDriftNE, self.dsw.leDriftNW, self.dsw.leDriftE,
-                              self.dsw.leDriftSE, self.dsw.leDriftS, self.dsw.leDriftSW, self.dsw.leDriftW]
+    # ------------------------------------------------------------------
+    # Wind rose
+    # ------------------------------------------------------------------
+    def _rose_widgets(self) -> list[Any]:
+        return [getattr(self.dsw, name) for name, _ in ROSE_FIELDS]
 
-        total_weight = 100
-        changed_value = float(changed_widget.text())
+    def _read_rose(self) -> list[float]:
+        """Return the eight rose percentages as typed (``,`` accepted).
 
-        # Calculate the remaining weight
-        remaining_weight = total_weight - changed_value
+        Raises ``ValueError`` naming the offending field; an empty field
+        counts as 0.
+        """
+        values: list[float] = []
+        for name, _ in ROSE_FIELDS:
+            widget = getattr(self.dsw, name)
+            try:
+                values.append(parse_decimal(widget.text(), default=0.0))
+            except ValueError:
+                raise ValueError(f"{name[7:]}: '{widget.text()}' is not a number") from None
+        if any(v < 0 for v in values):
+            raise ValueError("directions cannot be negative")
+        return values
 
-        # Distribute the remaining weight proportionally among the other widgets
-        other_widgets = [w for w in widgets if w != changed_widget]
-        other_values = [
-            float(w.text()) if hasattr(w, 'text') and w.text() != '' else w.value() if hasattr(w, 'value') else 0
-            for w in other_widgets
-        ]
-        other_total = sum(other_values)
+    def _set_rose_status(self, text: str, error: bool = False) -> None:
+        label = getattr(self.dsw, 'lblRoseSum', None)
+        if label is None:
+            return
+        label.setText(text)
+        label.setStyleSheet('color: #b00020;' if error else '')
 
-        if other_total == 0:
-            # If all other values are zero, distribute equally
-            for w in other_widgets:
-                w.setText(str(remaining_weight / len(other_widgets)))
-        else:
-            # Adjust the other values proportionally
-            for w, value in zip(other_widgets, other_values):
-                adjusted_value = (value / other_total) * remaining_weight
-                w.setText(str(round(adjusted_value, 2)))
-        # Ensure the total sum is exactly 100
-        self.ensure_total_sum(widgets)
+    def check_rose(self) -> bool:
+        """**Check sum** button: verify the eight directions sum to 100 %.
 
-    def ensure_total_sum(self, widgets: list[QLineEdit]):
-        """Ensure the total sum of weights equals 100."""
-        total = sum(
-            float(w.text()) if w.text() != '' else 0
-            for w in widgets
-        )
-        difference = 100 - total
+        When they do not, every value is scaled proportionally so the
+        total becomes exactly 100 % and the fields are rewritten.  Nothing
+        is touched while a field is not a valid number; the label says
+        which one.  Returns ``True`` when the rose is valid afterwards.
+        """
+        try:
+            values = self._read_rose()
+        except ValueError as exc:
+            self._set_rose_status(str(exc), error=True)
+            return False
+        total = sum(values)
+        if weights_sum_ok(values):
+            self._set_rose_status(f"Sum: {format_weight(total)} % (OK)")
+            return True
+        scaled = normalise_weights(values)
+        for widget, value in zip(self._rose_widgets(), scaled):
+            widget.setText(format_weight(value))
+        self._set_rose_status(f"Sum was {format_weight(total)} % -> scaled to 100 %")
+        return True
 
-        # Adjust the last widget to make the total exactly 100
-        last_widget = widgets[-1]
-        last_value = float(last_widget.text()) if last_widget.text() != '' else 0
-        last_widget.setText(str(last_value + difference))
+    def _rose_fractions(self) -> dict[str, float]:
+        """Rose for ``drift_values``: normalised to 100 % and stored as fractions."""
+        values = self._read_rose()
+        if not weights_sum_ok(values):
+            values = normalise_weights(values)
+        return {key: v / 100 for (_, key), v in zip(ROSE_FIELDS, values)}
 
     def _project_type_names(self) -> list[str] | None:
         """Return the PROJECT's ship-type names (from the Ship Categories
@@ -193,30 +220,24 @@ class DriftSettings:
             item = self._blackout_table.item(row, 1)
             txt = item.text().strip() if item is not None else ""
             try:
-                val = float(txt) if txt else 1.0
+                val = parse_decimal(txt, default=1.0)
             except Exception:  # nosec B110 B112
                 val = 1.0
             out[row] = max(0.0, val)
         return out
 
     def commit_changes(self):
-        n = float(self.dsw.leDriftN.text()) / 100
-        ne = float(self.dsw.leDriftNE.text()) / 100
-        e = float(self.dsw.leDriftE.text()) / 100
-        se = float(self.dsw.leDriftSE.text()) / 100
-        s = float(self.dsw.leDriftS.text()) / 100
-        sw = float(self.dsw.leDriftSW.text()) / 100
-        w = float(self.dsw.leDriftW.text()) / 100
-        nw = float(self.dsw.leDriftNW.text()) / 100
-        rose = {'0': n, '45': ne, '90': e, '135': se, '180': s, '225': sw, '270': w, '315': nw}
+        # The rose is normalised here as well as by the Check sum button, so
+        # OK never stores (or exports to IWRAP) a rose that does not sum to 1.
+        rose = self._rose_fractions()
         # GUI field is in knots; store in knots (matches IWRAP-import and cascade).
-        speed = float(self.dsw.leDriftSpeed.text())
-        drift_p = float(self.dsw.leDriftProb.text())
-        anchor_raw = float(self.dsw.leAnchorProb.text())
+        speed = parse_decimal(self.dsw.leDriftSpeed.text())
+        drift_p = parse_decimal(self.dsw.leDriftProb.text())
+        anchor_raw = parse_decimal(self.dsw.leAnchorProb.text())
         # UI is percentage. Keep backward compatibility if user enters 0-1.
         anchor_p = anchor_raw / 100.0 if anchor_raw > 1.0 else anchor_raw
         anchor_p = max(0.0, min(1.0, anchor_p))
-        anchor_d = float(self.dsw.leAnchorMaxDepth.text())
+        anchor_d = parse_decimal(self.dsw.leAnchorMaxDepth.text())
         start_mode_text = self.dsw.cbStartDriftingFrom.currentText().strip().lower()
         start_from = 'leg_center' if start_mode_text.startswith('leg') else 'distribution_center'
         squat_mode_text = self.dsw.cbSquatMode.currentText().strip().lower()
@@ -227,9 +248,9 @@ class DriftSettings:
         else:
             squat_mode = 'average_speed'
         repair: dict[str, str | float | bool] = {'func': self.dsw.leRepairFunc.toPlainText(),
-                                                 'std': float(self.dsw.leRepairStd.text()),
-                                                 'loc': float(self.dsw.leRepairLoc.text()),
-                                                 'scale': float(self.dsw.leRepairScale.text()),
+                                                 'std': parse_decimal(self.dsw.leRepairStd.text()),
+                                                 'loc': parse_decimal(self.dsw.leRepairLoc.text()),
+                                                 'scale': parse_decimal(self.dsw.leRepairScale.text()),
                                                  'use_lognormal': self.dsw.rbLogNormal.isChecked()}
         blackout_by_ship_type = self._collect_blackout_from_table()
         self.drift_values = {'drift_p': drift_p, 'anchor_p': anchor_p, 'anchor_d': anchor_d, 'speed': speed,
@@ -243,13 +264,12 @@ class DriftSettings:
 
     def unload(self):
         self.dsw.pbTestRepair.clicked.disconnect()
-        widgets: list[Any] = [self.dsw.leDriftN, self.dsw.leDriftNE, self.dsw.leDriftNW, self.dsw.leDriftE,
-                              self.dsw.leDriftSE, self.dsw.leDriftS, self.dsw.leDriftSW, self.dsw.leDriftW]
-        for widget in widgets:
-            if hasattr(widget, 'editingFinished'):
-                widget.editingFinished.disconnect()
-            elif hasattr(widget, 'leaveEvent'):
-                widget.leaveEvent.disconnect()
+        check_btn = getattr(self.dsw, 'pbCheckRose', None)
+        if check_btn is not None:
+            try:
+                check_btn.clicked.disconnect()
+            except (TypeError, RuntimeError):  # nosec B110 - never connected
+                pass
         while self.dsw.canRepairViewLay.count():
             item = self.dsw.canRepairViewLay.takeAt(0)
             widget = item.widget()
@@ -258,14 +278,10 @@ class DriftSettings:
 
     def populate_drift(self):
         """Populates the drift fields with the "drift_values" dict """
-        self.dsw.leDriftN.setText(f"{self.drift_values['rose']['0'] * 100}")
-        self.dsw.leDriftNE.setText(f"{self.drift_values['rose']['45'] * 100}")
-        self.dsw.leDriftE.setText(f"{self.drift_values['rose']['90'] * 100}")
-        self.dsw.leDriftSE.setText(f"{self.drift_values['rose']['135'] * 100}")
-        self.dsw.leDriftS.setText(f"{self.drift_values['rose']['180'] * 100}")
-        self.dsw.leDriftSW.setText(f"{self.drift_values['rose']['225'] * 100}")
-        self.dsw.leDriftW.setText(f"{self.drift_values['rose']['270'] * 100}")
-        self.dsw.leDriftNW.setText(f"{self.drift_values['rose']['315'] * 100}")
+        rose = self.drift_values['rose']
+        for name, key in ROSE_FIELDS:
+            getattr(self.dsw, name).setText(format_weight(float(rose[key]) * 100))
+        self._set_rose_status(f"Sum: {format_weight(sum(float(v) for v in rose.values()) * 100)} %")
         # drift.speed is stored in knots; display directly.
         self.dsw.leDriftSpeed.setText(f"{round(float(self.drift_values['speed']), 3)}")
         anchor_val = float(self.drift_values.get('anchor_p', 0.7))
@@ -331,13 +347,12 @@ class DriftSettings:
         self.dsw.leRepairStd.textChanged.connect(self.repair.test_evaluate)
         self.dsw.leRepairLoc.textChanged.connect(self.repair.test_evaluate)
         self.dsw.leRepairScale.textChanged.connect(self.repair.test_evaluate)
-        widgets: list[Any] = [self.dsw.leDriftN, self.dsw.leDriftNE, self.dsw.leDriftNW, self.dsw.leDriftE,
-                              self.dsw.leDriftSE, self.dsw.leDriftS, self.dsw.leDriftSW, self.dsw.leDriftW]
-        for widget in widgets:
-            if hasattr(widget, 'editingFinished'):
-                widget.editingFinished.connect(lambda w=widget: self.adjust_directions(w))
-            elif hasattr(widget, 'leaveEvent'):
-                widget.leaveEvent.connect(lambda w=widget: self.adjust_directions(w))
+        # The rose is checked / normalised on demand only.  The previous
+        # editingFinished auto-adjust rewrote the other seven fields on
+        # every focus change, so a rose could not be typed in field by field.
+        check_btn = getattr(self.dsw, 'pbCheckRose', None)
+        if check_btn is not None:
+            check_btn.clicked.connect(self.check_rose)
 
         # Connect the accepted signal to your custom slot
         self.buttonBox.accepted.connect(self.commit_changes)

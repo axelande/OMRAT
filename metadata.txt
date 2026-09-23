@@ -7,7 +7,7 @@ name=OMRAT - Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.30
 qgisMaximumVersion=4.9
 description=OMRAT Open Maritime Risk Analysis Tool. This is an open source implementation of Pedersens and Friis-Hansen equations to calculate the probability of maritime accidents. The full documentation of the plugin could be found here: https://axelande.github.io/OMRAT/
-version=0.16.1
+version=0.16.5
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 license=GPL-3
@@ -24,6 +24,10 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.16.5 (2026-09-23) - Adding the feature to supress and move traffic from one leg to others.
+  Version 0.16.4 (2026-09-22) - Added a custom ship type mapping (IMO / MMSI -> category) kept as a table in the AIS database and managed from Settings > Ship type mapping (CSV import/export); the external vessel lookup ship type column is now honoured.
+  Version 0.16.3 (2026-09-21) - Added a one-at-a-time sensitivity analysis (Run Analysis tab) that ranks the inputs by their effect on the accident totals.
+  Version 0.16.2 (2026-09-21) - Split the result presentation of powered accidents. IWRAP export now writes each direction's position check interval (ai) and expresses ai = 0 as a zero leg extension; import maps both back.
   Version 0.16.1 (2026-09-18) - AIS-derived junction matrices now survive file load and leg edits, and a single-leg Update AIS skips the junction pass when every junction already has AIS evidence.
   Version 0.16.0 (2026-09-17) - Legs now hang on shared waypoints: dragging a junction moves every leg on it and clicks snap to existing nodes. Vertex edits are captured after Stop route / edit-mode toggles (they were lost before). New routes number their legs from 1 without touching existing legs. A project saved before its first AIS pass loads again, and schema errors are shown instead of silently ignored. AIS-derived junction matrices now survive file load and leg edits, and a single-leg Update AIS skips the junction pass when every junction already has AIS evidence.
   Version 0.15.1 (2026-09-08) - Minor bugs fixes and added new ways of presenting the results

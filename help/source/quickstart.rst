@@ -266,6 +266,8 @@ The other entries on the Settings menu are documented in
   the crossing value.
 * **AIS connection settings** - host/database/user for the optional AIS
   Postgres database.
+* **Ship type mapping...** - per-vessel (IMO / MMSI) overrides of the
+  AIS ship type, kept as a table in that database and filled from a CSV.
 * **Database setup wizard...** - guided creation and ingestion for that
   database (see :ref:`database-setup`).
 * **Junction transition matrix...** - how traffic splits between legs

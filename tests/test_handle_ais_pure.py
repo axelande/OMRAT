@@ -207,13 +207,17 @@ def ais_with_mocks(monkeypatch):
     # QSettings backend (which under ``pytest-qgis`` is the live QGIS one
     # and can hang the run).
     from omrat_utils.vessel_lookup import VesselLookupConfig
+    from omrat_utils.ship_type_map import ShipTypeMapConfig
 
     with patch('omrat_utils.handle_ais.DB') as MockDB, \
          patch('omrat_utils.handle_ais.AISConnectionWidget') as MockACW, \
          patch('omrat_utils.handle_ais.QSettings') as MockSettings, \
          patch('omrat_utils.vessel_lookup.VesselLookupConfig.to_qsettings'), \
          patch('omrat_utils.vessel_lookup.VesselLookupConfig.from_qsettings',
-               return_value=VesselLookupConfig()):
+               return_value=VesselLookupConfig()), \
+         patch('omrat_utils.ship_type_map.ShipTypeMapConfig.to_qsettings'), \
+         patch('omrat_utils.ship_type_map.ShipTypeMapConfig.from_qsettings',
+               return_value=ShipTypeMapConfig()):
         MockSettings.return_value.value.return_value = ''
         acw = MagicMock()
         # Month checkboxes return False so ``months`` stays empty.
@@ -947,3 +951,110 @@ class TestUpdateLegsSkipsLocked:
         with patch.object(mod, 'QMessageBox'):
             ais_with_mocks.update_legs()
         assert sorted(submitted[0]['legs']) == ['L1', 'L2']
+
+
+# ---------------------------------------------------------------------------
+# Custom ship-type mapping (IMO / MMSI -> OMRAT category) in run_sql
+# ---------------------------------------------------------------------------
+
+def _db_with_probe(has_imo: bool):
+    """A DB mock whose information_schema probe answers ``has_imo``."""
+    db = MagicMock()
+
+    def _exec(sql, return_error=False, params=None):
+        if 'information_schema' in str(sql):
+            return (True, [(1,)] if has_imo else [])
+        return (True, [])
+
+    db.execute_and_return.side_effect = _exec
+    return db
+
+
+def _passage_sql(db):
+    calls = [c for c in db.execute_and_return.call_args_list if 'information_schema' not in str(c.args[0])]
+    assert len(calls) == 1
+    return calls[0].args[0]
+
+
+class TestRunSqlShipTypeMap:
+    def _enable(self, ais, has_imo):
+        from omrat_utils.ship_type_map import ShipTypeMapConfig
+        ais.db = _db_with_probe(has_imo)
+        ais.schema = 'ais'
+        ais.year = 2024
+        ais.months = [1]
+        ais.type_map = ShipTypeMapConfig(enabled=True, schema='omrat', table='ship_type_map')
+
+    def test_disabled_mapping_leaves_query_untouched(self, ais_with_mocks):
+        ais_with_mocks.db = MagicMock()
+        ais_with_mocks.db.execute_and_return.return_value = (True, [])
+        ais_with_mocks.schema = 'ais'
+        ais_with_mocks.year = 2024
+        ais_with_mocks.months = [1]
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = ais_with_mocks.db.execute_and_return.call_args.args[0]
+        assert 'type_map' not in sql
+        assert 'imo_num' not in sql
+        assert 'NULL::int as ship_type' in sql
+
+    def test_mapping_without_imo_column_joins_on_mmsi_only(self, ais_with_mocks):
+        self._enable(ais_with_mocks, has_imo=False)
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = _passage_sql(ais_with_mocks.db)
+        assert 'type_map_mmsi AS (SELECT DISTINCT ON (mmsi)' in sql
+        assert 'FROM omrat.ship_type_map' in sql
+        assert 'LEFT OUTER JOIN type_map_mmsi tmm ON tmm.mmsi = ss.mmsi' in sql
+        assert 'COALESCE(tmm.ship_type, NULL::int) as ship_type' in sql
+        assert 'imo_num' not in sql
+        assert 'tmi.' not in sql
+
+    def test_mapping_with_imo_column_prefers_imo(self, ais_with_mocks):
+        self._enable(ais_with_mocks, has_imo=True)
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = _passage_sql(ais_with_mocks.db)
+        # imo_num is carried through the segments CTE ...
+        assert 'select ss.mmsi, si.imo_num, segment' in sql
+        # ... joined first, and first in the COALESCE.
+        assert 'LEFT OUTER JOIN type_map_imo tmi ON tmi.imo = ss.imo_num' in sql
+        assert 'COALESCE(tmi.ship_type, tmm.ship_type, NULL::int) as ship_type' in sql
+
+    def test_probe_runs_once_per_schema_year(self, ais_with_mocks):
+        self._enable(ais_with_mocks, has_imo=True)
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        probes = [c for c in ais_with_mocks.db.execute_and_return.call_args_list
+                  if 'information_schema' in str(c.args[0])]
+        assert len(probes) == 1
+
+    def test_mapping_wraps_external_vessel_lookup(self, ais_with_mocks):
+        from omrat_utils.vessel_lookup import VesselLookupConfig
+        self._enable(ais_with_mocks, has_imo=True)
+        ais_with_mocks.vessel_lookup = VesselLookupConfig(
+            enabled=True, schema='vessels', table='ship_registry', mmsi_col='mmsi',
+            ship_type_col='ship_type',
+        )
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = _passage_sql(ais_with_mocks.db)
+        assert 'external_vessels AS (' in sql
+        assert 'COALESCE(tmi.ship_type, tmm.ship_type, ext.ext_ship_type) as ship_type' in sql
+        assert sql.index('LEFT OUTER JOIN external_vessels ext') < sql.index('LEFT OUTER JOIN type_map_imo')
+
+    def test_invalid_identifiers_never_reach_sql(self, ais_with_mocks):
+        from omrat_utils.ship_type_map import ShipTypeMapConfig
+        self._enable(ais_with_mocks, has_imo=False)
+        ais_with_mocks.type_map = ShipTypeMapConfig(enabled=True, schema='omrat; drop table x', table='t')
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        sql = _passage_sql(ais_with_mocks.db)
+        # is_valid() is False for the bad schema, so the mapping is skipped
+        assert 'drop table' not in sql
+        assert 'type_map' not in sql
+
+    def test_set_type_map_stores_and_resets_probe_cache(self, ais_with_mocks):
+        from omrat_utils.ship_type_map import ShipTypeMapConfig
+        self._enable(ais_with_mocks, has_imo=True)
+        ais_with_mocks.run_sql('LINESTRING(0 0, 1 1)')
+        assert ais_with_mocks._imo_probe  # cached by the first query
+        cfg = ShipTypeMapConfig(enabled=True, schema='omrat', table='ship_type_map')
+        ais_with_mocks.set_type_map(cfg)
+        assert ais_with_mocks.type_map is cfg
+        assert ais_with_mocks._imo_probe == {}

@@ -80,8 +80,10 @@ class AisUpdateTask(QgsTask):
         self, td_block: dict, dirs: list, row: tuple,
         leg_bearing: float, line1: list, line2: list,
     ) -> None:
-        from omrat_utils.handle_ais import close_to_line, get_type
-        loa, beam, toc, draugt, _, _, sog, air_draught, dist, cog = row
+        from omrat_utils.handle_ais import close_to_line, resolve_ship_type
+        # ``sh_type`` is the custom IMO/MMSI mapping or external-lookup value
+        # (NULL when neither is configured); it wins over the AIS code.
+        loa, beam, toc, draugt, sh_type, _, sog, air_draught, dist, cog = row
         # Direction convention: dirs[0] is the flow travelling in the DRAWN
         # direction (Start_Point -> End_Point, cog ~ leg_bearing).  That is
         # what the Dirs naming ("North going" for a north-drawn leg) and the
@@ -104,7 +106,7 @@ class AisUpdateTask(QgsTask):
         freq_data = td_block[dir_]['Frequency (ships/year)']
         n_cats = len(freq_data[0]) if freq_data else 0
         loa_cat = next((i for i in range(n_cats) if i * 25 < loa <= i * 25 + 25), max(n_cats - 1, 0))
-        type_cat = get_type(toc)
+        type_cat = resolve_ship_type(sh_type, toc)
         td_block[dir_]['Frequency (ships/year)'][type_cat][loa_cat] += self.multiplier
         if sog is not None:
             td_block[dir_]['Speed (knots)'][type_cat][loa_cat].append(float(sog))

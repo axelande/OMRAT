@@ -474,6 +474,11 @@ class GatherData:
         self._populate_objects_and_canvas(data, depth_rows, object_rows)
         self._populate_consequence_and_junctions(data)
         self._apply_layer_styles(data)
+        geoms = getattr(self.p, 'qgis_geoms', None)
+        if geoms is not None and hasattr(geoms, 'refresh_suppressed_styles'):
+            geoms.refresh_suppressed_styles()
+        if geoms is not None and hasattr(geoms, 'refresh_traffic_links'):
+            geoms.refresh_traffic_links()
 
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.

@@ -15,9 +15,17 @@ yet" and would otherwise fail validation:
   (``Distributions.change_dist_segment``).  Legs never shown there have
   none, so the same defaults are seeded here.
 
+A third invariant is that ``traffic_data`` only has keys that exist in
+``segment_data``: ``clean_traffic`` and ``get_no_ship_h`` index the leg
+for every traffic key, so a traffic block whose leg is gone makes the
+whole run fail with a bare ``KeyError`` (``testEO08v2.omrat``,
+2026-09-18, reported as ``'7'``).  Orphan blocks are dropped here.
+
 Both the writer (``GatherData.get_all_for_save``) and the reader
 (``Storage._normalize_legacy_to_schema``) call ``sanitize_project`` so a
-file OMRAT writes is always a file OMRAT can open.  Pure Python.
+file OMRAT writes is always a file OMRAT can open, and the compute
+pipeline consumes the writer's output, so it never sees an orphan
+either.  Pure Python.
 """
 from __future__ import annotations
 
@@ -83,8 +91,26 @@ def collapse_sample_cells(traffic_data: dict[str, Any] | None) -> int:
     return changed
 
 
+def prune_orphan_traffic(traffic_data: dict[str, Any] | None,
+                         segment_data: dict[str, Any] | None) -> list[str]:
+    """Drop traffic blocks whose leg is not in ``segment_data``, in place.
+    Returns the removed leg ids (sorted).
+
+    Nothing is removed when ``segment_data`` is not a dict: with no leg
+    registry to check against there is no way to tell an orphan from a
+    valid block.
+    """
+    if not isinstance(traffic_data, dict) or not isinstance(segment_data, dict):
+        return []
+    orphans = sorted(k for k in traffic_data if k not in segment_data)
+    for k in orphans:
+        del traffic_data[k]
+    return orphans
+
+
 def sanitize_project(data: dict[str, Any]) -> dict[str, Any]:
-    """Apply both fixes to ``data`` in place and return it."""
+    """Apply all fixes to ``data`` in place and return it."""
     seed_distribution_defaults(data.get('segment_data'))
     collapse_sample_cells(data.get('traffic_data'))
+    prune_orphan_traffic(data.get('traffic_data'), data.get('segment_data'))
     return data

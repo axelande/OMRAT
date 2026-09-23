@@ -229,6 +229,10 @@ def build_waypoints(parent: ET.Element, segment_data: dict):
     return added
 
 
+LEG_EXTENSION_M = '50000'
+"""Leg extension written for a direction whose Cat II is enabled."""
+
+
 def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
     legs = ET.SubElement(parent, 'legs')
     leg_map = {}
@@ -240,11 +244,15 @@ def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
         if seg.get('Width') is not None:
             leg.set('max_width', str(seg.get('Width')))
             leg.set('max_width_powered', str(seg.get('Width')))
-        # Use fixed extensions as requested
-        leg.set('max_extension_first', '50000')
-        leg.set('max_extension_last', '50000')
-        if 'ai1' in seg and seg.get('ai1') is not None:
-            leg.set('max_bearing_angle', str(seg['ai1']))
+        # A leg-direction with ``ai <= 0`` has Cat II switched off in OMRAT.
+        # IWRAP has no such switch (``grounding_check_time = 0`` means "use
+        # the global default"), so the extension past the waypoint where
+        # that flow would fail to turn is zeroed instead: direction 1 runs
+        # first -> last and exits past the *last* waypoint, direction 2 the
+        # reverse.
+        leg.set('max_extension_first', '0' if _as_float(seg.get('ai2', 0)) <= 0 else LEG_EXTENSION_M)
+        leg.set('max_extension_last', '0' if _as_float(seg.get('ai1', 0)) <= 0 else LEG_EXTENSION_M)
+        leg.set('max_bearing_angle', '0')
         # Waypoints GUIDs
         sp = parse_point_str(seg.get('Start_Point', ''))
         ep = parse_point_str(seg.get('End_Point', ''))
@@ -369,6 +377,11 @@ def _build_mal_for_direction(
     mal.set('name', str(seg.get('Leg_name', f'LEG_{seg_id}_{dir_suffix}')))
     for attr, default in _MAL_DEFAULT_ATTRS:
         mal.set(attr, default)
+    ai = _as_float(seg.get(f'ai{dir_num}', 0))
+    if ai > 0:
+        # Per-direction position check interval; 0 would make IWRAP fall
+        # back to its global default, which is *not* "off" (see build_legs).
+        mal.set('grounding_check_time', f'{ai:g}')
     md = ET.SubElement(mal, 'mixed_dist')
     md.set('scale', '1')
     _fill_mal_mixed_dist(md, seg, dir_num)
@@ -1300,7 +1313,8 @@ def _parse_mal_el(mals_el) -> dict:
         return mal_map
     for mal_el in mals_el.findall('manoeuvring_aspects_leg'):
         guid = mal_el.get('guid', '')
-        dp: dict = {'means': [], 'stds': [], 'weights': [], 'u_min': None, 'u_max': None, 'u_p': 0}
+        dp: dict = {'means': [], 'stds': [], 'weights': [], 'u_min': None, 'u_max': None, 'u_p': 0,
+                    'check_time': _as_float(mal_el.get('grounding_check_time', 0))}
         md_el = mal_el.find('mixed_dist')
         if md_el is not None:
             norm_items, unif_items = [], []
@@ -1331,6 +1345,8 @@ def _fill_segment_from_mal(seg: dict, ftl_guid: str, ltf_guid: str, mal_map: dic
             seg['u_min1'] = mal['u_min']
             seg['u_max1'] = mal['u_max']
             seg['u_p1'] = int(round(mal['u_p'] * 100.0))
+        if mal.get('check_time', 0) > 0:
+            seg['ai1'] = mal['check_time']
     if ltf_guid in mal_map:
         mal = mal_map[ltf_guid]
         for i, (m, s, w) in enumerate(zip(mal['means'], mal['stds'], mal['weights']), 1):
@@ -1341,6 +1357,8 @@ def _fill_segment_from_mal(seg: dict, ftl_guid: str, ltf_guid: str, mal_map: dic
             seg['u_min2'] = -mal['u_max']
             seg['u_max2'] = -mal['u_min']
             seg['u_p2'] = int(round(mal['u_p'] * 100.0))
+        if mal.get('check_time', 0) > 0:
+            seg['ai2'] = mal['check_time']
 
 
 def _haversine_m(start_point: str, end_point: str) -> float:
@@ -1354,6 +1372,10 @@ def _haversine_m(start_point: str, end_point: str) -> float:
     except Exception:  # nosec B110 B112
         pass
     return 0.0
+
+
+_CAT2_OFF_KEY = '_iwrap_cat2_off'
+"""Transient per-segment marker (list of direction numbers), stripped by parse_iwrap_xml."""
 
 
 def _parse_legs_el(legs_el, waypoint_map: dict, mal_map: dict, debug: bool) -> dict:
@@ -1382,8 +1404,16 @@ def _parse_legs_el(legs_el, waypoint_map: dict, mal_map: dict, debug: bool) -> d
             'u_min2': 0.0, 'u_max2': 0.0, 'u_p2': 0,
             'ai1': 0.0, 'ai2': 0.0, 'dist1': [], 'dist2': [],
         }
-        if (v := leg_el.get('max_bearing_angle')) is not None:
-            seg['ai1'] = seg['ai2'] = float(v)
+        # Zero extension past a waypoint = no Cat II for the flow that would
+        # overshoot it (mirror of build_legs).  Remembered transiently so the
+        # global mean-time-between-checks does not re-enable it.
+        cat2_off = []
+        if (v := leg_el.get('max_extension_last')) is not None and _as_float(v) <= 0:
+            cat2_off.append(1)
+        if (v := leg_el.get('max_extension_first')) is not None and _as_float(v) <= 0:
+            cat2_off.append(2)
+        if cat2_off:
+            seg[_CAT2_OFF_KEY] = cat2_off
         _fill_segment_from_mal(seg, leg_el.get('man_aspects_first_to_last_guid', ''),
                                leg_el.get('man_aspects_last_to_first_guid', ''), mal_map)
         if debug:
@@ -1512,12 +1542,13 @@ def _parse_global_settings_el(gs_el, result: dict, debug: bool) -> None:
             mtbc = float(mtbc_val)
             result['pc']['mean_time_between_checks'] = mtbc
             for seg in result['segment_data'].values():
-                if seg.get('ai1', 0.0) == 0.0:
+                off = seg.get(_CAT2_OFF_KEY, ())
+                if seg.get('ai1', 0.0) == 0.0 and 1 not in off:
                     seg['ai1'] = mtbc
-                if seg.get('ai2', 0.0) == 0.0:
+                if seg.get('ai2', 0.0) == 0.0 and 2 not in off:
                     seg['ai2'] = mtbc
             if debug:
-                print(f"  Mean time between checks: {mtbc}s -> set ai on all segments")
+                print(f"  Mean time between checks: {mtbc}s -> set ai where the leg has no check time")
         except (ValueError, TypeError):
             pass
 
@@ -1580,6 +1611,8 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
 
     result['depths'], result['objects'] = _parse_areas_el(root.find('areas'))
     _parse_global_settings_el(root.find('global_settings'), result, debug)
+    for seg in result['segment_data'].values():
+        seg.pop(_CAT2_OFF_KEY, None)
     _compute_bend_angles(result['segment_data'], debug)
     if debug:
         print(f"\n{'=' * 70}")

@@ -65,13 +65,14 @@ from omrat_utils.accident_results_mixin import AccidentResultsMixin  # noqa: E40
 from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin  # noqa: E402
 from omrat_utils.iwrap_io_mixin import IwrapIOMixin  # noqa: E402
 from omrat_utils.run_history_mixin import RunHistoryMixin  # noqa: E402
+from omrat_utils.sensitivity_mixin import SensitivityMixin  # noqa: E402
 from omrat_utils.notifier import MessageBarNotifier  # noqa: E402
 from geometries.tangent_position import normalize_tangent_pos  # noqa: E402
 
 
 class OMRAT(
     IwrapIOMixin, CompareMixin, DriftAnalysisMixin, RunHistoryMixin,
-    AccidentResultsMixin,
+    AccidentResultsMixin, SensitivityMixin,
 ):
     """QGIS Plugin Implementation.
 
@@ -559,6 +560,10 @@ class OMRAT(
             try:
                 self.main_widget.pbLoadRoute.clicked.disconnect()
             except TypeError:
+                pass
+            try:
+                self.main_widget.pbSensitivity.clicked.disconnect()
+            except (TypeError, AttributeError, RuntimeError):
                 pass
 
         # Set plugin state to inactive
@@ -1166,6 +1171,11 @@ class OMRAT(
     def ais_settings(self) -> None:
         self.ais.run()
 
+    def open_ship_type_mapping(self) -> None:
+        """Open the custom IMO / MMSI -> ship type mapping dialog."""
+        from omrat_utils.ship_type_map_dialog import ShipTypeMapping
+        ShipTypeMapping(self).run()
+
     def open_db_setup_wizard(self) -> None:
         # Lazy import: keeps plugin startup unaffected even if the wizard
         # module pulls in something heavyweight in the future.
@@ -1247,6 +1257,10 @@ class OMRAT(
             self.main_widget.pbMoveTangent.clicked.connect(self.qgis_geoms.start_move_tangent)
         if hasattr(self.main_widget, 'pbCopyTraffic'):
             self.main_widget.pbCopyTraffic.clicked.connect(self.qgis_geoms.open_copy_traffic_dialog)
+        if hasattr(self.main_widget, 'pbSuppressLeg'):
+            self.main_widget.pbSuppressLeg.clicked.connect(self.qgis_geoms.open_suppress_leg_dialog)
+        if hasattr(self.main_widget, 'pbTrafficLinks'):
+            self.main_widget.pbTrafficLinks.toggled.connect(self.qgis_geoms.show_traffic_links)
         self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
         self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
         self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
@@ -1266,6 +1280,7 @@ class OMRAT(
         sm.addAction("Ship Categories", self.open_ship_categories)
         sm.addAction("Causation Factors", self.open_causation_factors)
         sm.addAction("AIS connection settings", self.ais_settings)
+        sm.addAction("Ship type mapping...", self.open_ship_type_mapping)
         sm.addAction("Database setup wizard...", self.open_db_setup_wizard)
         sm.addAction("Junction transition matrix...", self.open_junction_dialog)
         cm = menubar.addMenu('Consequence')
@@ -1335,6 +1350,11 @@ class OMRAT(
             self._setup_compare_tab()
         except Exception as e:
             QgsMessageLog.logMessage(f'Could not initialise Compare tab: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
+        try:
+            self._setup_sensitivity_button()
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f'Could not initialise sensitivity button: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
         try:
             fileMenu.addSeparator()
             fileMenu.addAction('Manage previous runs...', self.open_previous_runs_dialog)

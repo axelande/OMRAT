@@ -309,6 +309,29 @@ QToolTip {
                   </property>
                  </widget>
                 </item>
+                <item>
+                 <widget class="QPushButton" name="pbSuppressLeg">
+                  <property name="toolTip">
+                   <string>Suppress a leg (scenario): leave it out of the calculation and move its traffic, per direction and in percent, onto other legs. The leg is kept and drawn dashed.</string>
+                  </property>
+                  <property name="text">
+                   <string>Suppress leg...</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="pbTrafficLinks">
+                  <property name="toolTip">
+                   <string>Show which leg's traffic refers to which: arrows from copied-from legs to their copies (green), from suppressed legs to the legs their traffic is moved to (orange, dashed) and from legs suppressed together with a lead leg (grey). Click a leg in the route table to highlight its linked legs.</string>
+                  </property>
+                  <property name="text">
+                   <string>Traffic links</string>
+                  </property>
+                  <property name="checkable">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
                </layout>
               </item>
               <item>
@@ -1827,6 +1850,16 @@ QToolTip {
               <widget class="QPushButton" name="pbRunModel">
                <property name="text">
                 <string>Run model</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="pbSensitivity">
+               <property name="toolTip">
+                <string>Rank the model inputs by how much a +/- change in each one moves the accident totals</string>
+               </property>
+               <property name="text">
+                <string>Sensitivity analysis...</string>
                </property>
               </widget>
              </item>

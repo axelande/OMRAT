@@ -11,6 +11,7 @@ from qgis.PyQt.QtWidgets import QCheckBox, QDoubleSpinBox, QLabel, QLineEdit, QS
 
 from geometries import isint  # noqa: E402
 from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox  # noqa: E402
+from omrat_utils.traffic_links import status_suffix  # noqa: E402
 
 
 WidgetType = Union[QLineEdit, QSpinBox, QDoubleSpinBox]
@@ -78,9 +79,7 @@ class Traffic:
             name_item = self.dw.twRouteList.item(i, 2)
             label = name_item.text() if name_item is not None else seg_id
             if isinstance(segment_data, dict):
-                seg = segment_data.get(seg_id)
-                if isinstance(seg, dict) and seg.get('traffic_locked') is True:
-                    label = f"{label}  [locked]"
+                label = f"{label}{status_suffix(seg_id, segment_data)}"
             self.dw.cbTrafficSelectSeg.addItem(label, seg_id)
         self.c_seg = self.dw.cbTrafficSelectSeg.currentData() or ''
 

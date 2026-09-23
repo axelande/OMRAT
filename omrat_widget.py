@@ -125,6 +125,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Run analysis
         self.LEModelName: QtWidgets.QLineEdit
         self.pbRunModel: QtWidgets.QPushButton
+        self.pbSensitivity: QtWidgets.QPushButton
         self.TWPreviousRuns: QtWidgets.QTableWidget
         self.pbViewDriftingAllision: QtWidgets.QPushButton
         self.LEPDriftAllision: QtWidgets.QLineEdit

@@ -14,14 +14,23 @@ from shapely.geometry import Point
 from compute.database import DB
 from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
 from omrat_utils.copy_traffic import describe_targets, split_locked
+from omrat_utils.ship_type_map import (
+    ShipTypeMapConfig, get_type, resolve_ship_type, statics_have_imo,
+)
 from omrat_utils.vessel_lookup import VesselLookupConfig
 from ui.ais_connection_widget import AISConnectionWidget
 
+__all__ = [
+    "AIS", "get_type", "resolve_ship_type", "close_to_line", "get_pl",
+    "update_ais_settings_file",
+]
 
 _SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# ``{imo_sel}`` is ``"si.imo_num, "`` when the custom ship-type mapping
+# needs the IMO number and the statics table has the column, else "".
 _AIS_SELECT_TEMPLATE = (
-    "select ss.mmsi, segment, cog, sog, draught, type_and_cargo, "
+    "select ss.mmsi, {imo_sel}segment, cog, sog, draught, type_and_cargo, "
     "date1, dim_a, dim_b, dim_c, dim_d "
     "FROM {tbl} ss "
     "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
@@ -30,13 +39,14 @@ _AIS_SELECT_TEMPLATE = (
 )
 
 
-def _build_ais_union_block(schema: str, year: int, months: list[int]) -> str:
+def _build_ais_union_block(schema: str, year: int, months: list[int], with_imo: bool = False) -> str:
     if months:
         tables = [f"{schema}.segments_{year}_{month}" for month in months]
     else:
         tables = [f"{schema}.segments_{year}"]
+    imo_sel = "si.imo_num, " if with_imo else ""
     return " UNION ".join(
-        _AIS_SELECT_TEMPLATE.format(tbl=tbl, schema=schema, year=year)
+        _AIS_SELECT_TEMPLATE.format(tbl=tbl, schema=schema, year=year, imo_sel=imo_sel)
         for tbl in tables
     )
 
@@ -53,7 +63,7 @@ def _assemble_ais_query(
         "case when dim_c + dim_d < 2 or dim_c > 62 or dim_d > 62 "
         f"then {beam_fb} else dim_c + dim_d end as beam, "
         "type_and_cargo, draught, "
-        f"{ship_type_expr}, "
+        f"{ship_type_expr} as ship_type, "
         "date1, sog, "
         f"{air_draught_expr}, "
         "st_distance("
@@ -124,59 +134,6 @@ def get_pl(
     return str(pl)
 
 
-def get_type(toc: float) -> int:
-    """Return ship type index matching the UI ship category list.
-
-    Maps AIS Type-of-Cargo (TOC) codes to indices 0-20 corresponding to:
-        0: Fishing (TOC 30)
-        1: Towing (TOC 31-32)
-        2: Dredging or underwater ops (TOC 33)
-        3: Diving ops (TOC 34)
-        4: Military ops (TOC 35)
-        5: Sailing (TOC 36)
-        6: Pleasure Craft (TOC 37)
-        7: High speed craft (TOC 40-49)
-        8: Pilot Vessel (TOC 50)
-        9: Search and Rescue vessel (TOC 51)
-        10: Tug (TOC 52)
-        11: Port Tender (TOC 53)
-        12: Anti-pollution equipment (TOC 54)
-        13: Law Enforcement (TOC 55)
-        14: Spare (TOC 56-57)
-        15: Medical Transport (TOC 58)
-        16: Noncombatant ship (TOC 59)
-        17: Passenger (TOC 60-69)
-        18: Cargo (TOC 70-79)
-        19: Tanker (TOC 80-89)
-        20: Other Type (everything else)
-    """
-    # NULL / unparseable type_and_cargo is common — any MMSI whose Type-5
-    # statics never came through arrives here as None.  Bucket those into
-    # "Other Type" rather than crashing the whole leg's traffic build.
-    if toc is None:
-        return 20
-    try:
-        toc_int = int(toc)
-    except (TypeError, ValueError):
-        return 20
-    _TOC_MAP = {
-        30: 0, 31: 1, 32: 1, 33: 2, 34: 3, 35: 4, 36: 5, 37: 6,
-        50: 8, 51: 9, 52: 10, 53: 11, 54: 12, 55: 13,
-        56: 14, 57: 14, 58: 15, 59: 16,
-    }
-    if toc_int in _TOC_MAP:
-        return _TOC_MAP[toc_int]
-    if 40 <= toc_int <= 49:
-        return 7
-    if 60 <= toc_int <= 69:
-        return 17
-    if 70 <= toc_int <= 79:
-        return 18
-    if 80 <= toc_int <= 89:
-        return 19
-    return 20
-
-
 def close_to_line(bearing: float, cog: float, max_angle: float) -> bool:
     """Returns True if the cog is less than the max_angle towards the bearing else False"""
     if max_angle > 180:
@@ -209,6 +166,13 @@ class AIS:
         # The default-constructed config has ``enabled=False`` so
         # ``is_valid()`` is False and ``run_sql`` skips the JOIN.
         self.vessel_lookup: VesselLookupConfig = VesselLookupConfig.from_qsettings()
+        # Custom ship-type mapping table (IMO / MMSI -> OMRAT category),
+        # edited in Settings > Ship type mapping... (``ship_type_map_dialog``)
+        # and applied through :meth:`set_type_map`.  Disabled by default.
+        self.type_map: ShipTypeMapConfig = ShipTypeMapConfig.from_qsettings()
+        # ``(schema, year) -> statics has imo_num`` probe results, so the
+        # information_schema query runs once per settings change.
+        self._imo_probe: dict[tuple[str, int], bool] = {}
         # When True, ``update_legs`` divides the year-of-seconds by the
         # actual coverage seen in the data and uses that as a multiplier
         # on the per-ping frequency increment, so a partial-year ingest
@@ -324,6 +288,38 @@ class AIS:
         )
         self.vessel_lookup.to_qsettings()
 
+    # ----------------------------------------------------------- ship type mapping
+
+    def set_type_map(self, cfg: ShipTypeMapConfig) -> None:
+        """Store the mapping config (from the Settings dialog) and persist it."""
+        self.type_map = cfg
+        self._imo_probe.clear()
+        cfg.to_qsettings()
+
+    def _type_map_uses_imo(self, schema: str, year: int) -> bool:
+        key = (schema, int(year))
+        if key not in self._imo_probe:
+            self._imo_probe[key] = statics_have_imo(self.db, schema, year)
+        return self._imo_probe[key]
+
+    def _build_type_map_fragments(
+        self, schema: str, year: int, cte_block: str, joins: str, ship_type_expr: str,
+    ) -> tuple[str, str, str, bool]:
+        """Wrap the ext-vessel fragments with the custom mapping joins.
+
+        Returns ``(cte_block, joins, ship_type_expr, with_imo)``; the
+        input is passed through untouched when the mapping is off.
+        """
+        cfg = self.type_map
+        if not cfg.is_valid():
+            return cte_block, joins, ship_type_expr, False
+        _validate_sql_identifier(cfg.schema)
+        _validate_sql_identifier(cfg.table)
+        with_imo = self._type_map_uses_imo(schema, year)
+        cte_block = cte_block + ", " + cfg.build_ctes()
+        joins = joins + cfg.build_joins(with_imo)
+        return cte_block, joins, cfg.build_ship_type_expr(ship_type_expr, with_imo), with_imo
+
     def update_ais_settings(self):
         db_host = self.acw.leDBHost.text()
         db_port = int(self.acw.SBPort.value())
@@ -344,6 +340,8 @@ class AIS:
         ):
             self.settings.setValue(f"omrat/{key}", value)
         self._capture_vessel_lookup_from_ui()
+        # A new database may or may not have ``statics.imo_num``.
+        self._imo_probe.clear()
         self.recalc_to_full_year = bool(self.acw.cbRecalcFullYear.isChecked())
         self.settings.setValue("omrat/recalc_to_full_year", self.recalc_to_full_year)
 
@@ -563,7 +561,7 @@ class AIS:
 
     def _build_ext_vessel_fragments(self) -> tuple[str, str, str, str, str, str]:
         if not self.vessel_lookup.is_valid():
-            return "", "", "NULL", "NULL", "NULL::int as ship_type", "NULL::double precision as air_draught"
+            return "", "", "NULL", "NULL", "NULL::int", "NULL::double precision as air_draught"
         for ident in (
             self.vessel_lookup.schema, self.vessel_lookup.table,
             self.vessel_lookup.mmsi_col, self.vessel_lookup.loa_col,
@@ -577,7 +575,7 @@ class AIS:
         return (
             cte_block, ext_join,
             "ext.ext_loa", "ext.ext_beam",
-            "ext.ext_ship_type as ship_type",
+            "ext.ext_ship_type",
             "ext.ext_air_draught as air_draught",
         )
 
@@ -588,10 +586,15 @@ class AIS:
         schema = _validate_sql_identifier(str(self.schema))
         year = int(self.year)
         months = self._validate_months()
-        union_block = _build_ais_union_block(schema, year, months)
         cte_block, ext_join, loa_fb, beam_fb, ship_type_expr, air_draught_expr = (
             self._build_ext_vessel_fragments()
         )
+        # Custom IMO / MMSI -> ship type mapping wraps the ext-vessel value
+        # in a COALESCE; the IMO join needs ``si.imo_num`` in the segments CTE.
+        cte_block, ext_join, ship_type_expr, with_imo = self._build_type_map_fragments(
+            schema, year, cte_block, ext_join, ship_type_expr,
+        )
+        union_block = _build_ais_union_block(schema, year, months, with_imo=with_imo)
         sql = _assemble_ais_query(
             union_block, cte_block, ext_join, loa_fb, beam_fb, ship_type_expr, air_draught_expr,
         )
@@ -607,6 +610,7 @@ class AIS:
     def _bin_one_ping(
         self, leg_key: str, dir_: str,
         loa, toc, sog, air_draught, beam, draugt, multiplier: float,
+        mapped_type=None,
     ) -> None:
         if loa is None:
             loa = 100
@@ -620,7 +624,7 @@ class AIS:
                 continue
         if loa_cat < 0:
             loa_cat = n_loa_cats - 1 if n_loa_cats > 0 else 0
-        type_cat = get_type(toc)
+        type_cat = resolve_ship_type(mapped_type, toc)
         td = self.omrat.traffic.traffic_data[leg_key][dir_]
         td['Frequency (ships/year)'][type_cat][loa_cat] += multiplier
         if sog is not None:
@@ -660,7 +664,8 @@ class AIS:
             else:
                 continue
             dir_ = dirs[0] if l1 else dirs[1]
-            self._bin_one_ping(leg_key, dir_, loa, toc, sog, air_draught, beam, draugt, multiplier)
+            self._bin_one_ping(leg_key, dir_, loa, toc, sog, air_draught, beam, draugt, multiplier,
+                               mapped_type=sh_type)
         np_line1 = np.array(line1)
         np_line2 = np.array(line2)
         return np_line1, np_line2

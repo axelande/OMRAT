@@ -63,45 +63,80 @@ def _extract_nonneg(array, row_i: int, col_j: int, default: float) -> float:
     return default
 
 
-def _iter_hit_probs(comp: dict, recovery: float) -> Iterator[tuple[str, tuple, float]]:
-    """Yield ``(category, (kind, obs_id), p_hit)`` for every obstacle *comp* hit.
+def _edge_shares(edges: dict | None, recovery: float | None) -> dict[int, float]:
+    """Fraction of an obstacle's hit probability landing on each boundary edge.
+
+    ``edges`` is the ``{edge_idx: {mass, mean_dist}}`` block the ray caster
+    attaches to every obstacle summary.  Each edge is weighted like the
+    obstacle itself -- ``mass * exp(-d / recovery)`` for Cat II, plain
+    ``mass`` when *recovery* is ``None`` (Cat I) -- and the weights are
+    normalised so the shares sum to one.  The per-edge values in the result
+    layer therefore always add up to the obstacle's ``by_obstacle`` figure.
+    """
+    raw: dict[int, float] = {}
+    for e_idx, e in (edges or {}).items():
+        mass = e["mass"]
+        if mass <= 0:
+            continue
+        raw[int(e_idx)] = mass if recovery is None else mass * exp(-e["mean_dist"] / recovery)
+    total = sum(raw.values())
+    if total <= 0:
+        return {}
+    return {e_idx: v / total for e_idx, v in raw.items()}
+
+
+def _iter_hit_probs(comp: dict, recovery: float) -> Iterator[tuple[str, tuple, float, dict[int, float]]]:
+    """Yield ``(category, (kind, obs_id), p_hit, edge_shares)`` per obstacle hit.
 
     * ``'cat2'``: ``p_hit = mass * exp(-d_mean / recovery)`` -- skipped when
       the recovery distance ``ai * V`` is not positive.
     * ``'cat1'``: ``p_hit = mass`` -- the ship is already on course for the
       obstacle, so there is no distance term.
+
+    ``edge_shares`` splits ``p_hit`` over the obstacle's boundary edges
+    (see :func:`_edge_shares`); it is empty when the caster has no edge
+    information for that obstacle.
     """
     for obs_key, s in comp["summaries"].items():
         mass, d_mean = s["mass"], s["mean_dist"]
         if mass <= 0 or d_mean <= 0 or recovery <= 0:
             continue
-        yield 'cat2', obs_key, mass * exp(-d_mean / recovery)
+        yield 'cat2', obs_key, mass * exp(-d_mean / recovery), _edge_shares(s.get("edges"), recovery)
     for obs_key, s in ((comp.get("cat1") or {}).get("summaries") or {}).items():
         mass = s["mass"]
         if mass <= 0:
             continue
-        yield 'cat1', obs_key, mass
+        yield 'cat1', obs_key, mass, _edge_shares(s.get("edges"), None)
 
 
 class _ContribAccumulator:
-    """Per-obstacle / per-leg / per-cell / per-category running totals.
+    """Per-obstacle / per-leg / per-edge / per-cell / per-category running totals.
 
-    ``by_obstacle``, ``by_obstacle_leg`` and ``by_cell`` sum both
-    categories (they feed the result layers and the consequence
-    module); ``by_category`` keeps the Cat I / Cat II split for the
-    report and the IWRAP comparison.
+    ``by_obstacle``, ``by_obstacle_leg``, ``by_obstacle_segment_legdir`` and
+    ``by_cell`` sum both categories (they feed the result layers and the
+    consequence module); ``by_category`` keeps the Cat I / Cat II split for
+    the report and the IWRAP comparison.
+
+    ``by_obstacle_segment_legdir[obs_id]["seg_<k>"][dir_key]`` is the share
+    of the (obstacle, leg-direction) contribution that landed on boundary
+    edge ``k`` (numbering of :func:`geometries.boundary_edges.boundary_edges`).
+    Summed over edges and directions it equals ``by_obstacle[obs_id]``.
     """
 
     def __init__(self) -> None:
         self.total = 0.0
         self.by_obstacle: dict[str, float] = {}
         self.by_obstacle_leg: dict[str, dict[str, float]] = {}
+        self.by_obstacle_segment_legdir: dict[str, dict[str, dict[str, float]]] = {}
         self.by_cell: dict[str, float] = {}
         self.by_category: dict[str, dict[str, Any]] = {
             cat: {'total': 0.0, 'by_obstacle': {}} for cat in CATEGORIES
         }
 
-    def add(self, category: str, c: float, obs_id: Any, dir_key: str, cell_key: str) -> None:
+    def add(
+        self, category: str, c: float, obs_id: Any, dir_key: str, cell_key: str,
+        edge_shares: dict[int, float] | None = None,
+    ) -> None:
         self.total += c
         k = str(obs_id)
         self.by_obstacle[k] = self.by_obstacle.get(k, 0.0) + c
@@ -111,6 +146,11 @@ class _ContribAccumulator:
         cat = self.by_category[category]
         cat['total'] += c
         cat['by_obstacle'][k] = cat['by_obstacle'].get(k, 0.0) + c
+        if edge_shares:
+            seg_root = self.by_obstacle_segment_legdir.setdefault(k, {})
+            for e_idx, share in edge_shares.items():
+                seg_map = seg_root.setdefault(f"seg_{e_idx}", {})
+                seg_map[dir_key] = seg_map.get(dir_key, 0.0) + c * share
 
     def report(self, total_key: str, pc_cat2: float, pc_cat1: float) -> dict[str, Any]:
         return {
@@ -121,6 +161,7 @@ class _ContribAccumulator:
             },
             'by_obstacle': self.by_obstacle,
             'by_obstacle_leg': self.by_obstacle_leg,
+            'by_obstacle_segment_legdir': self.by_obstacle_segment_legdir,
             'by_cell': self.by_cell,
             'by_category': self.by_category,
             'causation_factor': pc_cat2,
@@ -131,7 +172,7 @@ class _ContribAccumulator:
 def _empty_report(total_key: str) -> dict[str, Any]:
     return {
         'totals': {total_key: 0.0, 'cat1': 0.0, 'cat2': 0.0},
-        'by_obstacle': {}, 'by_obstacle_leg': {}, 'by_cell': {},
+        'by_obstacle': {}, 'by_obstacle_leg': {}, 'by_obstacle_segment_legdir': {}, 'by_cell': {},
         'by_category': {cat: {'total': 0.0, 'by_obstacle': {}} for cat in CATEGORIES},
     }
 
@@ -254,9 +295,9 @@ class PoweredModelMixin:
                                 continue
                             dir_key = f"{leg_key}:{dir_idx}"
                             cell_key = f"{loa_i}_{type_j}"
-                            for category, (_, obs_id), p_hit in _iter_hit_probs(comp, ai * speed_ms):
+                            for category, (_, obs_id), p_hit, shares in _iter_hit_probs(comp, ai * speed_ms):
                                 acc.add(category, pc_by_cat[category] * q * p_hit,
-                                        obs_id, dir_key, cell_key)
+                                        obs_id, dir_key, cell_key, edge_shares=shares)
         return acc
 
     def _finalize_grounding(
@@ -335,14 +376,14 @@ class PoweredModelMixin:
                     ship_h = _extract_nonneg(hgt_arr, loa_i, type_j, 0.0)
                     dir_key = f"{seg_id}:{dir_idx}"
                     cell_key = f"{loa_i}_{type_j}"
-                    for category, (kind, obs_id), p_hit in _iter_hit_probs(comp, ai * speed_ms):
+                    for category, (kind, obs_id), p_hit, shares in _iter_hit_probs(comp, ai * speed_ms):
                         # Clearance check applies to both categories: a ship
                         # lower than the structure passes under it whether it
                         # is in the lane or has missed the turn.
                         if kind == "object" and ship_h < obj_heights.get(str(obs_id), 0.0):
                             continue
                         acc.add(category, pc_by_cat[category] * q * p_hit,
-                                obs_id, dir_key, cell_key)
+                                obs_id, dir_key, cell_key, edge_shares=shares)
         return acc
 
     def _finalize_allision(

@@ -350,6 +350,50 @@ Geometry
      - Bend angle at the downstream waypoint, in degrees.  > 5 deg
        enables the bend-collision formula for this leg.
 
+Scenario: suppressed leg
+------------------------
+
+.. code-block:: json
+
+   "suppressed": true,
+   "traffic_redirect": [
+     {"from_dir": 0, "leg": "5",  "dir": 0, "share": 80.0},
+     {"from_dir": 0, "leg": "15", "dir": 0, "share": 20.0},
+     {"from_dir": 1, "leg": "5",  "dir": 1, "share": 100.0}
+   ]
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - Key
+     - Meaning
+   * - ``suppressed``
+     - ``true`` leaves the leg out of the calculation and the IWRAP
+       export (:ref:`suppress-leg`).  Missing = ``false``.
+   * - ``suppressed_with``
+     - Segment id of the *lead* leg this leg is suppressed together with
+       (:ref:`suppress-route`).  The leg is left out without moving any
+       traffic, and its own ``traffic_redirect`` is ignored.  Missing on a
+       leg that is not in a group.
+   * - ``traffic_redirect``
+     - Where the suppressed leg's ships go.  ``from_dir`` and ``dir``
+       are direction indices (``0`` = the drawn direction,
+       ``Dirs[0]``; ``1`` = the reverse) on the suppressed leg and on
+       the target ``leg`` (a segment id).  ``share`` is the percentage
+       of the ``from_dir`` ships that sail the target.  The list is
+       kept when the leg is restored and is only used while
+       ``suppressed`` is ``true``.
+
+The redirect is applied by
+:func:`compute.traffic_redirect.apply_traffic_redirects` right after
+:func:`compute.data_preparation.apply_traffic_scaling`.  It works on the
+calculation's private copy of the data: frequencies are added to the
+target cells, speed / draught / height / beam become frequency-weighted
+means, and the suppressed legs are then removed from ``segment_data``,
+``traffic_data`` and ``junctions``.  The saved file always keeps the
+original traffic.
+
 Lateral distribution
 --------------------
 

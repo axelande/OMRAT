@@ -29,17 +29,16 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from omrat_utils.copy_traffic import (
-    LOCK_KEY, copy_leg_traffic, describe_targets, is_locked,
+    copy_leg_traffic, describe_targets, is_locked,
 )
 
 if TYPE_CHECKING:
     from omrat import OMRAT
 
 
-def _leg_label(seg_id: str, seg_d: dict[str, Any]) -> str:
-    name = seg_d.get('Leg_name') or f'LEG_{seg_id}'
-    suffix = '  [locked]' if seg_d.get(LOCK_KEY) is True else ''
-    return f"{name}  (id {seg_id}){suffix}"
+def _leg_label(seg_id: str, segment_data: dict[str, Any]) -> str:
+    from omrat_utils.traffic_links import leg_label
+    return leg_label(str(seg_id), segment_data)
 
 
 def _legs_with_traffic(omrat: "OMRAT") -> list[str]:
@@ -113,11 +112,13 @@ def apply_copy(
         except Exception:  # nosec B110
             pass
 
-    # Route table lock boxes.
+    # Route table lock boxes, leg labels and the traffic-links layer.
     geoms = getattr(omrat, 'qgis_geoms', None)
     if geoms is not None and hasattr(geoms, 'sync_lock_column'):
         for dst in done:
             geoms.sync_lock_column(dst)
+    if geoms is not None and hasattr(geoms, 'refresh_traffic_link_views'):
+        geoms.refresh_traffic_link_views()
 
     # Traffic tab: same dict object, but the direction combo and the
     # matrix must be re-rendered if the shown leg was a target.
@@ -147,7 +148,23 @@ def apply_copy(
 
 
 def run(omrat: "OMRAT") -> None:
-    """Open the modal dialog and apply the user's choice."""
+    """Open the dialog (modeless) and apply the user's choice on OK.
+
+    The dialog is non-modal so the map canvas stays usable -- the user
+    can pan / zoom to find the legs while it is open.  A second click on
+    the button raises the already open dialog instead of stacking a new one.
+    """
+    existing = getattr(omrat, '_copy_traffic_dlg', None)
+    if existing is not None:
+        try:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+        except RuntimeError:
+            # The C++ object is gone (deleted on close); build a new one.
+            omrat._copy_traffic_dlg = None
+
     segment_data = getattr(omrat, 'segment_data', None) or {}
     sources = _legs_with_traffic(omrat)
     if not sources:
@@ -165,12 +182,14 @@ def run(omrat: "OMRAT") -> None:
 
     dlg = QDialog(omrat.main_widget)
     dlg.setWindowTitle(omrat.tr("Copy traffic between legs"))
+    dlg.setModal(False)
+    dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     layout = QVBoxLayout(dlg)
 
     layout.addWidget(QLabel(omrat.tr("Copy traffic from leg:")))
     cb_src = QComboBox()
     for seg_id in sources:
-        cb_src.addItem(_leg_label(seg_id, segment_data.get(seg_id) or {}), seg_id)
+        cb_src.addItem(_leg_label(seg_id, segment_data), seg_id)
     layout.addWidget(cb_src)
 
     layout.addWidget(QLabel(omrat.tr("To leg(s)  (Ctrl-click to pick several):")))
@@ -181,10 +200,11 @@ def run(omrat: "OMRAT") -> None:
     def _fill_targets() -> None:
         lst.clear()
         src = cb_src.currentData()
-        for seg_id, seg_d in segment_data.items():
+        seg_now = getattr(omrat, 'segment_data', None) or {}
+        for seg_id, seg_d in seg_now.items():
             if str(seg_id) == str(src) or not isinstance(seg_d, dict):
                 continue
-            item = QListWidgetItem(_leg_label(str(seg_id), seg_d))
+            item = QListWidgetItem(_leg_label(str(seg_id), seg_now))
             item.setData(Qt.ItemDataRole.UserRole, str(seg_id))
             lst.addItem(item)
 
@@ -204,47 +224,66 @@ def run(omrat: "OMRAT") -> None:
         layout.addWidget(w)
 
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-    buttons.accepted.connect(dlg.accept)
-    buttons.rejected.connect(dlg.reject)
     layout.addWidget(buttons)
 
-    if dlg.exec() != QDialog.DialogCode.Accepted:
-        return
-
-    src = str(cb_src.currentData())
-    targets = [str(it.data(Qt.ItemDataRole.UserRole)) for it in lst.selectedItems()]
-    if not targets:
-        QMessageBox.information(omrat.main_widget, omrat.tr("Copy traffic"), omrat.tr("No target leg selected."))
-        return
-
-    already = [t for t in targets if is_locked(segment_data, t)]
-    if already:
-        answer = QMessageBox.question(
-            omrat.main_widget, omrat.tr("Overwrite locked legs?"),
-            omrat.tr(
-                "These target legs are locked (they already hold copied or protected traffic):\n\n"
-                f"{describe_targets(already, segment_data)}\n\nOverwrite them?"
-            ),
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+    def _on_ok() -> None:
+        # Legs may have been edited / removed while the dialog was open,
+        # so read segment_data afresh and drop ids that no longer exist.
+        seg_now = getattr(omrat, 'segment_data', None) or {}
+        src = str(cb_src.currentData())
+        targets = [str(it.data(Qt.ItemDataRole.UserRole)) for it in lst.selectedItems()]
+        targets = [t for t in targets if t in seg_now]
+        if src not in seg_now or src not in (getattr(omrat, 'traffic_data', None) or {}):
+            QMessageBox.information(dlg, omrat.tr("Copy traffic"), omrat.tr("The source leg no longer exists."))
+            _fill_targets()
+            return
+        if not targets:
+            QMessageBox.information(dlg, omrat.tr("Copy traffic"), omrat.tr("No target leg selected."))
             return
 
-    done = apply_copy(
-        omrat, src, targets,
-        swap_dirs=cb_swap.isChecked(),
-        copy_distributions=cb_dists.isChecked(),
-        lock=cb_lock.isChecked(),
-    )
-    notifier = getattr(omrat, 'notifier', None)
-    if notifier is not None and done:
-        try:
-            lock_txt = omrat.tr(" and locked") if cb_lock.isChecked() else ""
-            notifier.display_message(
-                omrat.tr("Copied traffic from {src} to {n} leg(s){lock}: {names}").format(
-                    src=describe_targets([src], segment_data), n=len(done), lock=lock_txt,
-                    names=describe_targets(done, segment_data),
+        already = [t for t in targets if is_locked(seg_now, t)]
+        if already:
+            answer = QMessageBox.question(
+                dlg, omrat.tr("Overwrite locked legs?"),
+                omrat.tr(
+                    "These target legs are locked (they already hold copied or protected traffic):\n\n"
+                    f"{describe_targets(already, seg_now)}\n\nOverwrite them?"
                 ),
-                duration=10,
             )
-        except Exception:  # nosec B110 B112
-            pass
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        lock = cb_lock.isChecked()
+        done = apply_copy(
+            omrat, src, targets,
+            swap_dirs=cb_swap.isChecked(),
+            copy_distributions=cb_dists.isChecked(),
+            lock=lock,
+        )
+        dlg.close()
+        notifier = getattr(omrat, 'notifier', None)
+        if notifier is not None and done:
+            try:
+                lock_txt = omrat.tr(" and locked") if lock else ""
+                notifier.display_message(
+                    omrat.tr("Copied traffic from {src} to {n} leg(s){lock}: {names}").format(
+                        src=describe_targets([src], seg_now), n=len(done), lock=lock_txt,
+                        names=describe_targets(done, seg_now),
+                    ),
+                    duration=10,
+                )
+            except Exception:  # nosec B110 B112
+                pass
+
+    def _on_finished(_result: int) -> None:
+        if getattr(omrat, '_copy_traffic_dlg', None) is dlg:
+            omrat._copy_traffic_dlg = None
+
+    buttons.accepted.connect(_on_ok)
+    buttons.rejected.connect(dlg.close)
+    dlg.finished.connect(_on_finished)
+    dlg.destroyed.connect(lambda *_: _on_finished(0))
+
+    # Keep a Python reference, otherwise the modeless dialog is collected.
+    omrat._copy_traffic_dlg = dlg
+    dlg.show()

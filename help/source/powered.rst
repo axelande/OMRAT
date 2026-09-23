@@ -41,8 +41,8 @@ Current implementation notes:
 
 .. container:: source-code-ref pipeline
 
-   **Grounding pipeline:** ``compute/powered_model.py:301`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L301>`__ |
-   **Allision pipeline:** ``compute/powered_model.py:334`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L334>`__ |
+   **Grounding pipeline:** ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__ |
+   **Allision pipeline:** ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__ |
    **Exponential decay:** ``compute/basic_equations.py:96`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L96>`__
 
 
@@ -329,7 +329,7 @@ significantly reduces runtime on projects with many draught entries.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:350`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L350>`__
+   ``geometries/get_powered_overlap.py:404`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L404>`__
 
 
 Shadow Effect
@@ -407,7 +407,7 @@ ship draught.
 
 .. container:: source-code-ref
 
-   ``compute/powered_model.py:70`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L70>`__
+   ``compute/powered_model.py:213`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L213>`__
 
 
 Computation Pipeline
@@ -491,8 +491,8 @@ a short recovery distance, so the exponential drops off quickly.
 
 .. container:: source-code-ref pipeline
 
-   ``compute/powered_model.py:301`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L301>`__ |
-   ``compute/powered_model.py:334`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L334>`__
+   ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__ |
+   ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__
 
 
 .. _powered-visualization:
@@ -553,7 +553,7 @@ distribution, leaving little mass for obstacles further away.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:566`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L566>`__
+   ``geometries/get_powered_overlap.py:716`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L716>`__
 
 
 Combined Powered Risk

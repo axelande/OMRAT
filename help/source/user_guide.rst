@@ -66,6 +66,11 @@ Each segment has:
 * **ai1**, **ai2** -- IWRAP "position check interval" in seconds for
   directions 1 and 2.  Used by the powered-grounding / allision
   calculations (:math:`N_{II} = P_c Q \cdot m \cdot \exp(-d/(a_i V))`).
+  A value of 0 switches Category II off for that direction.  On IWRAP
+  export the value goes to the direction's ``grounding_check_time``;
+  because IWRAP treats 0 there as "use the global default", a 0 is
+  exported as a zero leg extension past the waypoint that flow would
+  overshoot instead, and import maps it back the same way.
 
 Click the **Segment_Id**, **Route_Id** or **Leg_name** column header to
 sort the table by that column; click again to reverse.  Names sort
@@ -187,6 +192,10 @@ that choice from the next AIS refresh.
    sub-legs of the same original leg leave it unticked.
 #. Leave **Lock target legs** ticked (default) and press OK.
 
+The dialog does not block QGIS: you can pan and zoom the map while it
+is open to find the legs you want.  Clicking **Copy traffic...** again
+brings the open dialog to the front.
+
 Every variable (Frequency, Speed, Draught, heights, beam and the
 Scaling matrix) is copied per direction, direction 1 to direction 1
 and 2 to 2, using the target leg's own direction labels.  If a target
@@ -204,6 +213,382 @@ flag and the source leg are saved in the project file.
 Locking does not stop the leg's passages from being counted for the
 junction transition matrices; those still come from AIS (or your
 manual edits) as described below.
+
+.. _suppress-leg:
+
+Moving traffic to another route (suppressing legs)
+--------------------------------------------------
+
+The AIS data shows where ships sail *today*.  A scenario often asks what
+happens when a lane can no longer be used.  The typical case is a planned
+wind farm built on top of it: the ships take a detour, and the risk that
+matters is on the detour (more head-on, overtaking and crossing traffic,
+and allision or drifting towards the farm).
+
+**Suppress leg...** handles this.  A suppressed leg stays in the project,
+drawn dashed, but is left out of the calculation, and its ships are moved
+onto the legs you choose.  The total number of ships is unchanged, and
+**Restore leg** brings the baseline back at any time.
+
+Copy, move or suppress together?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Three tools change where a leg's traffic comes from.  Pick the one that
+says what you mean:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 22 44
+
+   * - You want to say ...
+     - Use
+     - What happens to the ships
+   * - "Leg X has the same traffic as leg Y" (X's own AIS sample is
+       polluted by a crossing)
+     - **Copy traffic...**
+     - Y's traffic is written onto X.  Both legs are in the calculation,
+       as they should be for two parts of one route.
+   * - "The ships on leg X sail leg Y instead"
+     - **Suppress leg...** with targets
+     - X is left out; its ships are *added* to Y.  Nothing is duplicated.
+   * - "Leg X carries the same ships as leg Y, and Y is already being
+       moved"
+     - **Suppress together with this leg** (on Y)
+     - X is left out and nothing is moved again.
+
+.. important::
+
+   **Two rules cover every case.**
+
+   #. **Every leg the moved ships sail gets the full share.**  A detour
+      made of three legs in a row gets 100 % on *each* of the three legs.
+      Shares are split only between *alternative* routes.
+   #. **One route, one lead.**  The ships of a route are moved by one leg
+      only, the *lead*.  The other legs of the same route are suppressed
+      *together with* the lead, without targets of their own.
+
+   A quick check for rule 1: draw any line across the detour, from one
+   side to the other.  The shares on the legs it cuts add up to 100 %.
+
+Example 1: one leg, a detour in a row
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. image:: _static/images/suppress_series.svg
+   :alt: LEG_A crosses a wind farm; the detour is LEG_B then LEG_C.
+   :width: 90%
+
+``LEG_A`` crosses the wind farm and carries 100 ships/year East going and
+40 West going.  After the farm is built the ships sail ``LEG_B`` and then
+``LEG_C``.  Every ship sails *both* detour legs, so each gets 100 %.
+
+Pick ``LEG_A`` in **Suppress leg...** and add four rows:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - From direction
+     - To leg
+     - To direction
+     - Share (%)
+   * - East going
+     - LEG_B
+     - East going
+     - 100
+   * - West going
+     - LEG_B
+     - West going
+     - 100
+   * - East going
+     - LEG_C
+     - East going
+     - 100
+   * - West going
+     - LEG_C
+     - West going
+     - 100
+
+Result in the calculation (assuming ``LEG_B`` and ``LEG_C`` had 10 ships
+each way of their own):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - Leg
+     - Direction
+     - Before
+     - After
+   * - LEG_A
+     - both
+     - 100 / 40
+     - left out
+   * - LEG_B
+     - East / West
+     - 10 / 10
+     - 110 / 50
+   * - LEG_C
+     - East / West
+     - 10 / 10
+     - 110 / 50
+
+A common mistake is 50 % on each detour leg.  That would make only half
+the ships sail ``LEG_B`` and the other half ``LEG_C``, but both halves
+must pass both legs.  The cross-section check shows it: a line across the
+detour cuts ``LEG_B`` only (or ``LEG_C`` only), so that leg needs 100 %.
+
+Example 2: the ships split between two routes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. image:: _static/images/suppress_alternatives.svg
+   :alt: LEG_A's ships split between a northern and a southern detour.
+   :width: 90%
+
+Now there are two detours: a northern one (``LEG_N1`` then ``LEG_N2``)
+taken by 80 % of the ships, and a southern one (``LEG_S1`` then
+``LEG_S2``) taken by 20 %.  Rule 1 still applies inside each route: both
+legs of the northern route get 80 %, and both legs of the southern route
+get 20 %.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - From direction
+     - To leg
+     - To direction
+     - Share (%)
+   * - East going
+     - LEG_N1, LEG_N2
+     - East going
+     - 80 (one row each)
+   * - East going
+     - LEG_S1, LEG_S2
+     - East going
+     - 20 (one row each)
+   * - West going
+     - the same four legs
+     - West going
+     - 80 / 20 as above
+
+That is eight rows.  The shares add up to 200 % per direction, which is
+correct: a line across the detour cuts one northern and one southern leg,
+and 80 % + 20 % = 100 %.  Result: the northern legs gain 80 East-going
+ships and the southern legs 20 (and 32 / 8 West going).
+
+The two directions do not have to match.  You may send 80 % of the East
+going ships north but only 50 % of the West going ships, if that is what
+the traffic does.
+
+.. _suppress-route:
+
+Example 3: moving a whole route
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. image:: _static/images/suppress_route.svg
+   :alt: Route 7 (four legs) moved onto route 2 (four legs). Left: one
+         lead leg with targets, the other three suppressed with it.
+         Right: targets on every leg count the ships four times.
+   :width: 100%
+
+Crossings split a route into several legs.  Here route 7 is ``LEG_7_3_c``,
+``LEG_7_3_b``, ``LEG_7_3_a`` and ``LEG_7_2``, and all of its ships should
+move to route 2 (``LEG_2_3_a``, ``LEG_2_3_c``, ``LEG_2_3_b``, ``LEG_2_6``).
+The four route-7 legs carry the *same* ships.  If each of them had
+targets, route 2 would receive those ships four times (right-hand
+picture).  So:
+
+#. Pick the leg with the cleanest AIS sample as the **lead**, usually the
+   one furthest from any crossing.  Here that is ``LEG_7_3_b``, with 497
+   ships/year West going and 444 East going.
+#. Open **Suppress leg...**, pick ``LEG_7_3_b`` and add eight rows: both
+   directions, 100 %, onto each of the four route-2 legs (rule 1: route 2
+   is one detour in a row).  **To direction** is filled in from the leg
+   bearings; check it once.
+#. In **Suppress together with this leg**, tick ``LEG_7_3_c``,
+   ``LEG_7_3_a`` and ``LEG_7_2``.
+#. Click **Suppress & move traffic**.
+
+Result:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Leg
+     - Before (ships/year)
+     - After
+   * - LEG_7_3_b (lead)
+     - 941
+     - left out, ships moved
+   * - LEG_7_3_c, LEG_7_3_a, LEG_7_2
+     - (own AIS samples)
+     - left out, nothing moved
+   * - LEG_2_6
+     - 7,155
+     - 8,096 (+941)
+   * - LEG_2_3_b / LEG_2_3_c
+     - 9,873
+     - 10,814 (+941)
+   * - LEG_2_3_a
+     - 10,741
+     - 11,682 (+941)
+
+Things you do **not** need to do:
+
+* **Copy the lead's traffic onto the other route-7 legs first.**  A leg
+  suppressed together with the lead is never read, so its traffic does
+  not matter.
+* **Unlock the target legs.**  A lock only stops **Update AIS** from
+  overwriting a leg's *stored* traffic.  The move happens during the
+  calculation on a copy of the data, so locked legs (such as copies) are
+  fine as targets.  Keep the *lead* unlocked if you want **Update AIS** to
+  keep the moved amount current.
+
+**Restore leg (+3 with it)** on ``LEG_7_3_b`` brings the whole of route 7
+back.  If you open one of the other route-7 legs in the dialog, it tells
+you which lead it belongs to.
+
+The dialog, field by field
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The dialog does not block QGIS, so you can pan the map while you fill it
+in.
+
+* **Leg to suppress** -- the leg whose ships are moved (the lead, for a
+  whole route).  Its ships per year per direction are shown underneath.
+* **Target rows** (**Add target** / **Remove target**), one per target leg
+  and direction:
+
+  * **From direction** -- which of this leg's two directions is moved.
+  * **To leg** -- a leg the ships sail instead.  Suppressed legs are not
+    offered.
+  * **To direction** -- the direction on the target leg.  It is
+    pre-filled with the one pointing the same way, so a target drawn in
+    the opposite direction is handled for you.
+  * **Share (%)** -- the percentage of the *From direction* ships that
+    sail this target leg.
+
+* **Suppress together with this leg** -- the other legs of the same
+  route (rule 2).  Legs already suppressed elsewhere are greyed out.  A
+  leg cannot be both a target and ticked here.
+* **Suppress & move traffic** -- stores everything and dashes the legs.
+  If a direction that carries ships has no target, you are asked first,
+  because those ships would then drop out of the calculation.
+* **Restore leg** -- brings the leg (and the legs suppressed with it)
+  back into the calculation.  The targets are kept, so suppressing the leg
+  again restores the same scenario.
+
+What the calculation does
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* The moved ships are added to the target leg cell by cell (ship type x
+  length).  Speed, draught, height and beam become averages weighted by
+  the number of ships.
+* The target leg keeps its own lateral distribution: the moved ships
+  follow the lane they are moved into.
+* Traffic scaling (**Scaling (%)**) is applied first, so the moved ships
+  carry the suppressed leg's scaling.
+* Suppressed legs are left out of every model (collisions, powered and
+  drifting grounding / allision, consequence) and out of the junction
+  transition matrices.  At a junction, a share that went to a suppressed
+  leg is spread over the remaining legs.
+* Your project file keeps the original traffic.  Only the calculation's
+  copy is changed, and the project can be saved and reopened with the
+  scenario intact.
+
+.. _traffic-links:
+
+Checking the set-up
+~~~~~~~~~~~~~~~~~~~
+
+These tools are easy to lose track of in a busy junction area.  Check a
+scenario in three places.
+
+**1. The leg labels.**  Every leg label in the Copy traffic and Suppress
+leg dialogs and in the Traffic tab's leg selector says where the leg's
+traffic comes from.  With Example 3 set up:
+
+.. code-block:: text
+
+   LEG_7_3_b  (id 27)  [suppressed -> LEG_2_6 +3, +3 leg(s) with it]
+   LEG_7_2  (id 25)  [suppressed with LEG_7_3_b]
+   LEG_2_3_b  (id 16)  [locked, copy of LEG_2_3_a]
+   LEG_2_6  (id 6)
+
+**2. The map.**  Press **Traffic links** under the route table (it stays
+pressed).  A temporary *Traffic links* layer draws a curved arrow from
+each leg whose data is used to the leg that uses it.  The colours are the
+same as in the pictures above:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Arrow
+     - Meaning
+   * - green, solid
+     - Traffic copied from the source leg (``copy``, or ``copy (locked)``).
+   * - orange, dashed
+     - Ships moved from a suppressed leg.  The label gives the share per
+       direction, e.g. ``N 100 %, S 80 %``.
+   * - grey, dotted
+     - A leg suppressed together with a lead (the arrow points to the lead).
+
+While the view is on, click a leg in the route table to highlight it in
+yellow and every leg linked with it in orange.  In Example 3, clicking
+``LEG_7_3_b`` lights up all of route 7 and route 2.  The layer follows
+every change and is not saved; press the button again to remove it.
+
+**3. The QGIS log** (*View -> Panels -> Log Messages*, tab *OMRAT*).
+Every run lists each move, for example::
+
+   Suppressed leg 27 (dir 1): moved 497.0 ships/year (100 %) to leg 6 (dir 1)
+   Suppressed legs left out of the calculation: 25, 26, 27, 28
+
+``dir 1`` is the leg's drawn direction and ``dir 2`` the reverse, the
+same as direction 1 / 2 in the lateral distribution panel.  A target that does
+not exist any more, or that is itself suppressed, is listed as a warning.
+
+Common questions
+~~~~~~~~~~~~~~~~
+
+*My shares add up to more than 100 %.  Is that wrong?*
+   No.  Shares are per target leg, not per direction.  Use the
+   cross-section check instead: a line across the detour should cut legs
+   whose shares add up to 100 %.
+
+*The dialog says "No target is given ... those ships are removed".*
+   On the lead leg this usually means a direction was forgotten: add its
+   rows.  If the leg belongs to a route that is already being moved, press
+   **Cancel**, open the lead leg instead and tick this leg under
+   **Suppress together with this leg**.
+
+*A detour leg was drawn the other way round.*
+   Nothing to do: **To direction** is chosen from the bearings.  Check the
+   pre-filled value when the detour leg runs almost at right angles to the
+   suppressed leg, where "the same way" is ambiguous.
+
+*Can a target leg be a locked copy?*
+   Yes.  See "Things you do not need to do" in Example 3.
+
+*How do I compare the scenario with today's traffic?*
+   Run the model with the legs restored (the baseline), suppress them, run
+   again, and compare the two runs on the **Compare** tab.  **Restore leg**
+   and suppressing again switch between the two without losing the
+   targets.
+
+*What about the IWRAP export?*
+   IWRAP has no suppressed legs, so the export writes the scenario as the
+   calculation sees it.  The suppressed legs are left out and their ships
+   are added to the targets.  A warning lists every move first, and you
+   can cancel (see the File menu section below).
+
+*What if a suppressed leg is split later?*
+   (For example at a crossing found by **Update all distributions**.)  The
+   first part keeps the targets and the other parts are suppressed
+   together with it, so the ships are still moved once.  If a *target* leg
+   is split, every part gets the same share.
 
 Junctions, crossings and merging
 --------------------------------
@@ -423,6 +808,28 @@ The query time is shown in the QGIS log panel.
    guide: standing up the PostGIS schema, ingesting raw NMEA / CSV
    files through the **Database setup wizard**, and verifying the
    tables before clicking **Update AIS** in OMRAT.
+
+Custom ship type mapping
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The AIS type code a ship broadcasts is not always the category you
+want it in.  **Settings -> Ship type mapping...** lets you keep a
+per-vessel override in the AIS database (the connection from **AIS
+connection settings** is used): enter the schema the table should
+live in (the table name defaults to ``ship_type_map``), click
+**Import CSV...**, tick **Use the custom ship type mapping** and
+**Save**.  The dialog previews the table and **Export CSV...** writes
+it back out for editing.  The CSV needs an ``mmsi`` and/or ``imo`` column and a
+``ship_type`` column holding the OMRAT category index (0-20), an AIS
+type code (30-89) or a name such as ``Tanker``, ``Cargo`` or
+``Passenger``; an optional ``note`` column is stored as is.  OMRAT
+creates the table when missing and replaces its rows on every import.
+
+On the next **Update AIS** each passing ship is classified as: IMO
+match, else MMSI match, else the external vessel lookup's ship type
+column, else the broadcast AIS code.  Legs already fetched keep their
+old categories until you refresh them, so run **Update all
+distributions** after changing the mapping.
 
 
 Depths tab
@@ -718,15 +1125,78 @@ per-segment and per-obstacle contributions for the run selected in
 **Previous runs**.  These are useful for locating the single obstacle
 that dominates the total risk.
 
+.. _sensitivity-analysis:
+
+Sensitivity analysis
+--------------------
+
+**Sensitivity analysis...** (below **Run model**) answers "which inputs
+drive the result?".  Every selected parameter is changed *one at a
+time* by ``-d`` and ``+d`` (default 20 %) around its current value, the
+accident totals are recomputed and the parameters are ranked by the
+swing they produce in a chosen output.
+
+A full model run takes from half an hour to a few hours on a real
+project, so the dialog avoids re-running the model wherever it can:
+
+* **Instant parameters** never re-run anything.  Causation factors are
+  pure multipliers on their accident type (with the Category I / II
+  split for powered accidents), a change in **traffic volume** scales
+  drifting and powered totals linearly and ship-ship collisions
+  quadratically, and a change in the volume of **one ship type** is
+  read first-order exactly from the per-cell breakdowns every model
+  emits.  Their ranking appears as soon as the analysis starts.
+* **Computed parameters** -- ship speed, draught, height and beam,
+  the drift settings (blackout frequency, anchoring probability and
+  depth, drift speed, repair-time distribution), the lateral spread of
+  the legs and the position check interval -- re-run only the model
+  phases they can influence.  The **Model phases re-run** column of
+  the parameter tree shows which, and the line under the tree counts
+  the partial runs before you press **Run analysis**.
+
+Dialog controls:
+
+* **Perturbation d** -- the one-at-a-time change in percent.
+* **Baseline** -- *Reuse the results of the last model run* (fastest;
+  it assumes the inputs have not changed since that run) or
+  *Recompute the baseline first*.  Only the second option is offered
+  before the first **Run model** of the session.
+* **Rank by** -- the output the ranking uses: all accidents, all
+  grounding / allision / collisions, or a single accident type.  It
+  can be switched after the run without recomputing.
+* **Select all / Instant only / Select none** -- quick selection of
+  the parameter tree.  Start with *Instant only* to get a first
+  ranking in seconds; add the computed parameters for an overnight
+  run.
+
+The analysis runs in the QGIS task manager and can be cancelled; the
+parameters finished so far are kept.  The **Ranking** table lists, per
+parameter, the output at ``-d`` and ``+d``, the **Swing** (value at
+``+d`` minus value at ``-d``, absolute and in percent of the baseline)
+and the **Elasticity**, i.e. the relative change of the output per
+relative change of the input: 1 means proportional, 2 quadratic, 0 no
+effect.  Causation factors therefore always show an elasticity of 1 on
+their own accident type; the interesting numbers are the non-linear
+ones (repair time, drift speed, lateral spread, check interval) and the
+*relative* size of the swings.
+
+When an output folder is set on the Run Analysis tab the ranking is
+written there automatically as ``<model>_sensitivity_<timestamp>.md``
+plus a ``.json`` with every perturbed total, so a report can be
+re-ranked later.  **Save report...** writes the same pair anywhere and
+**Tornado plot...** draws the top parameters as a tornado diagram
+(needs matplotlib, which QGIS ships).
+
 
 Settings menu
 =============
 
-Settings are split across six sub-dialogs accessed from the
+Settings are split across seven sub-dialogs accessed from the
 **Settings** menu: **Drift settings**, **Ship Categories**,
 **Causation Factors**, **AIS connection settings**,
-**Database setup wizard...** and **Junction transition matrix...**
-(the last one is documented in :ref:`junctions`).
+**Ship type mapping...**, **Database setup wizard...** and
+**Junction transition matrix...** (the last one is documented in
+:ref:`junctions`).
 
 Drift settings
 --------------
@@ -756,11 +1226,20 @@ Drift settings
    * - ``speed``
      - Drift speed in knots.
    * - Wind **rose**
-     - Probability per compass direction.  Eight values that must sum
-       to 1.
+     - Probability per compass direction, entered as eight percentages
+       that should sum to 100.  Type the values freely, then press
+       **Check sum**: it reports the total next to the S field and, if
+       it is not 100, scales every direction proportionally so the
+       total becomes exactly 100 %.  OK applies the same normalisation,
+       so the stored rose always sums to 1.  (Earlier versions rewrote
+       the other seven fields as soon as one lost focus, which made
+       entering a whole rose by hand hard.)
    * - **Repair time**
      - Lognormal / Weibull / Normal CDF parameters for the
        time-to-repair distribution used to compute :math:`P_{NR}`.
+
+All numeric fields in this dialog accept both ``.`` and ``,`` as the
+decimal mark (``12,5`` and ``12.5`` are the same value).
 
 Causation factors
 -----------------
@@ -809,6 +1288,22 @@ data.  To stand up the database itself, ingest raw AIS files, and
 verify that segments are queryable, see
 :ref:`database-setup`.
 
+Ship type mapping
+-----------------
+
+Per-vessel overrides of the AIS ship type, keyed by IMO number or
+MMSI.  The mapping is a table in the AIS database (schema of your
+choice, table ``ship_type_map`` by default) holding the OMRAT
+category index 0-20 per vessel.  The dialog shows a preview of the
+table, **Import CSV...** creates or replaces it from a file with
+``mmsi`` and/or ``imo`` plus ``ship_type`` columns (index, AIS type
+code or a name such as ``Tanker``), and **Export CSV...** writes it
+back out for editing.  Tick **Use the custom ship type mapping** and
+**Save** to apply it to the next AIS fetch; an IMO match wins over an
+MMSI match, which wins over the external vessel lookup and the
+broadcast AIS code.  See :ref:`ship-type-mapping` for the table
+layout and the CSV rules.
+
 
 File menu
 =========
@@ -818,7 +1313,12 @@ File menu
   See :ref:`reference-data-format` for the full schema.
 * **Export to IWRAP XML** / **Import from IWRAP XML** -- exchange with
   the IALA IWRAP reference tool.  Useful for cross-validating OMRAT
-  results against IWRAP on the same project.
+  results against IWRAP on the same project.  IWRAP has no suppressed
+  legs, so when the project has any (see :ref:`suppress-leg`) the
+  export writes the scenario the OMRAT calculation runs: the suppressed
+  legs are left out and their traffic is added to the target legs.  A
+  warning lists what is moved before anything is written, and you can
+  cancel.  Your OMRAT project is not changed.
 * **Manage previous runs...** -- browse, re-load and delete entries
   in the run history.
 
@@ -948,10 +1448,13 @@ total is zero is skipped):
        contour's depth.
    * - Powered Allision Results
      - Line
-     - Structure boundary edges again, but coloured by the powered
-       Cat II total.  ``obstacle_id``, ``segment_idx``,
-       ``total_edge_probability``, ``object_probability``, ``value``,
-       plus a ``leg_<id>`` column per contributing leg.
+     - Structure boundary edges again, coloured by the powered
+       (Cat I + Cat II) probability the ray caster placed on that edge:
+       ``total_edge_probability`` is the share of the ships that hit
+       *this* edge first, so the edges of one structure add up to its
+       ``object_probability`` and edges no ship can reach are zero.
+       ``obstacle_id``, ``segment_idx``, ``value``, plus a ``leg_<id>``
+       column per contributing leg direction holding that edge's share.
    * - Powered Grounding Results
      - Line
      - Same shape, over depth-contour edges.

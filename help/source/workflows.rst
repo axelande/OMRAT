@@ -87,6 +87,40 @@ The emitted XML is IWRAP Mk2 compatible.  Anything OMRAT computes
 that has no IWRAP counterpart (e.g. the anchoring branch) is
 dropped from the export.
 
+Suppressed legs (see :ref:`suppress-leg`) do not exist in IWRAP.  The
+export leaves them out and adds their traffic to the target legs, the
+same way the OMRAT calculation does.  A warning lists the suppressed
+legs and every move (ships per year) before the file is written;
+**Cancel** stops the export.  The OMRAT project itself is not changed.
+
+
+Assess a wind farm that blocks an existing lane
+===============================================
+
+The AIS data shows today's traffic, but once the farm is built the ships
+on the lane through it take a detour.
+
+#. Build the project from AIS as above, with the lane through the farm
+   area and the legs of the detour(s) around it.
+#. **Run Analysis tab** -- run the model.  This is the baseline.
+#. Add the wind farm as a structure on the **Objects** tab.
+#. **Routes tab -> Suppress leg...** -- pick the lane through the farm
+   and give each direction its targets, following the two rules and the
+   worked examples in :ref:`suppress-leg`: 100 % on every leg of a single
+   detour, or a split such as 80 % / 20 % between two alternative
+   routes.  If the lane is split into several legs, give only the leg
+   with the best AIS sample the targets and tick the others under
+   **Suppress together with this leg** (:ref:`suppress-route`).  The
+   lane is drawn dashed.
+#. Press **Traffic links** to check on the map that the arrows go where
+   you expect (:ref:`traffic-links`).
+#. Run the model again and compare the two runs on the **Compare**
+   tab.  The difference shows where the risk moves to: the detour legs,
+   their junctions and the farm's edges.
+
+**Restore leg** in the same dialog brings the lane back without losing
+the detour settings.
+
 
 Inspect the dominant obstacle on a risk number
 ===============================================

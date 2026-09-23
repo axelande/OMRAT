@@ -221,3 +221,33 @@ def test_junction_pass_needed_after_passage_line_edit(stub_ais):
     assert stub_ais.junction_pass_needed() is False
     handler.invalidate_legs(['2'])
     assert stub_ais.junction_pass_needed() is True
+
+
+# ---------------------------------------------------------------------------
+# Custom ship-type mapping: the query's ship_type column wins over the AIS code
+# ---------------------------------------------------------------------------
+
+
+def test_update_ais_data_uses_mapped_ship_type(stub_ais):
+    """Row layout: loa, beam, toc, draught, ship_type, date, sog, air_draught, dist, cog.
+    toc 70 (Cargo -> 18) but the mapping says 19 (Tanker): bin as tanker."""
+    row = [120, 20.0, 70, 7.0, 19, None, 12.0, None, 10.0, 90.0]
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
+    freq = stub_ais.omrat.traffic.traffic_data['L1']['East']['Frequency (ships/year)']
+    assert freq[19][4] == 1
+    assert freq[18][4] == 0
+
+
+def test_update_ais_data_falls_back_to_ais_code_without_mapping(stub_ais):
+    row = [120, 20.0, 70, 7.0, None, None, 12.0, None, 10.0, 90.0]
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
+    freq = stub_ais.omrat.traffic.traffic_data['L1']['East']['Frequency (ships/year)']
+    assert freq[18][4] == 1
+
+
+def test_update_ais_data_accepts_ais_code_in_mapped_column(stub_ais):
+    """An external vessel table that stores the AIS code (80-89) still maps to Tanker."""
+    row = [120, 20.0, 70, 7.0, 84, None, 12.0, None, 10.0, 90.0]
+    stub_ais.update_ais_data('L1', [row], leg_bearing=270.0, dirs=['West', 'East'])
+    freq = stub_ais.omrat.traffic.traffic_data['L1']['East']['Frequency (ships/year)']
+    assert freq[19][4] == 1

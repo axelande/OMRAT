@@ -11,6 +11,7 @@ def mock_parent():
         drift_values = None
     return Parent()
 
+
 @pytest.fixture
 def mock_dsw():
     # Mock all UI elements used in DriftSettings
@@ -72,11 +73,13 @@ def mock_dsw():
     dsw.leRepairScale.textChanged.connect = MagicMock()
     return dsw
 
+
 @pytest.fixture
 def mock_repair():
     repair = MagicMock()
     repair.test_evaluate = MagicMock()
     return repair
+
 
 @patch('omrat_utils.handle_settings.DriftSettingsWidget')
 @patch('omrat_utils.handle_settings.Repair')
@@ -103,6 +106,7 @@ def test_run(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
     button_box.rejected.connect.assert_called()
     mock_dsw.pbTestRepair.clicked.connect.assert_called_with(mock_repair.test_evaluate)
 
+
 @patch('omrat_utils.handle_settings.DriftSettingsWidget')
 @patch('omrat_utils.handle_settings.Repair')
 def test_commit_changes(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
@@ -118,12 +122,14 @@ def test_commit_changes(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mo
     assert ds.drift_values['anchor_d'] == 10
     # drift.speed is stored in knots (no m/s conversion at the GUI boundary).
     assert ds.drift_values['speed'] == 9
-    # Rose values are stored as fractions; commit_changes divides the UI
-    # percentage by 100, so "1" -> 0.01 etc.
-    assert ds.drift_values['rose'] == {
-        '0': 0.01, '45': 0.02, '90': 0.03, '135': 0.04,
-        '180': 0.05, '225': 0.06, '270': 0.07, '315': 0.08,
-    }
+    # Rose values are stored as fractions.  The mock fields 1..8 sum to
+    # 36 %, so OK normalises them proportionally to 100 % first (two
+    # decimals, residue on the largest) and then divides by 100.
+    rose = ds.drift_values['rose']
+    assert list(rose) == ['0', '45', '90', '135', '180', '225', '270', '315']
+    assert sum(rose.values()) == pytest.approx(1.0, abs=1e-9)
+    for key, typed in zip(rose, range(1, 9)):
+        assert rose[key] == pytest.approx(typed / 36, abs=0.0002)
     assert ds.drift_values['repair']['func'] == "func"
     assert ds.drift_values['repair']['std'] == 0.1
     assert ds.drift_values['repair']['loc'] == 0.2
@@ -131,6 +137,7 @@ def test_commit_changes(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mo
     assert ds.drift_values['repair']['use_lognormal'] is True
     # Check parent updated
     assert mock_parent.drift_values == ds.drift_values
+
 
 @patch('omrat_utils.handle_settings.DriftSettingsWidget')
 @patch('omrat_utils.handle_settings.Repair')
@@ -179,6 +186,7 @@ def test_populate_drift(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mo
     mock_dsw.rbLogNormal.setChecked.assert_called_with(False)
     mock_dsw.rbUserDefined.setChecked.assert_called_with(True)
 
+
 @patch('omrat_utils.handle_settings.DriftSettingsWidget')
 @patch('omrat_utils.handle_settings.Repair')
 def test_unload(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
@@ -192,6 +200,7 @@ def test_unload(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repai
     mock_dsw.canRepairViewLay.count.assert_called()
     mock_dsw.canRepairViewLay.takeAt.return_value.widget.return_value.deleteLater.assert_called_once()
 
+
 @patch('omrat_utils.handle_settings.DriftSettingsWidget')
 @patch('omrat_utils.handle_settings.Repair')
 def test_discard_changes(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
@@ -199,3 +208,97 @@ def test_discard_changes(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, m
     mock_repair_cls.return_value = mock_repair
     ds = DriftSettings(mock_parent)
     ds.discard_changes()  # Should not raise
+
+
+@patch('omrat_utils.handle_settings.DriftSettingsWidget')
+@patch('omrat_utils.handle_settings.Repair')
+def test_run_does_not_auto_adjust_on_editing_finished(mock_repair_cls, mock_dsw_cls, mock_parent,
+                                                      mock_dsw, mock_repair):
+    """Leaving a rose field must not rewrite the other seven any more; the
+    Check sum button is the only trigger."""
+    mock_dsw_cls.return_value = mock_dsw
+    mock_repair_cls.return_value = mock_repair
+    ds = DriftSettings(mock_parent)
+    ds.populate_drift = MagicMock()
+    ds.dsw = mock_dsw
+    ds.repair = mock_repair
+    mock_dsw.findChild.return_value = MagicMock()
+    ds.run()
+    for name in ('leDriftN', 'leDriftNE', 'leDriftE', 'leDriftSE',
+                 'leDriftS', 'leDriftSW', 'leDriftW', 'leDriftNW'):
+        getattr(mock_dsw, name).editingFinished.connect.assert_not_called()
+    mock_dsw.pbCheckRose.clicked.connect.assert_called_once_with(ds.check_rose)
+
+
+def _set_rose(dsw, values):
+    for name, val in zip(('leDriftN', 'leDriftNE', 'leDriftE', 'leDriftSE',
+                          'leDriftS', 'leDriftSW', 'leDriftW', 'leDriftNW'), values):
+        getattr(dsw, name).text.return_value = val
+
+
+@patch('omrat_utils.handle_settings.DriftSettingsWidget')
+@patch('omrat_utils.handle_settings.Repair')
+def test_check_rose_ok_leaves_fields_alone(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
+    mock_dsw_cls.return_value = mock_dsw
+    mock_repair_cls.return_value = mock_repair
+    ds = DriftSettings(mock_parent)
+    ds.dsw = mock_dsw
+    _set_rose(mock_dsw, ["12.5"] * 8)
+    assert ds.check_rose() is True
+    mock_dsw.leDriftN.setText.assert_not_called()
+    mock_dsw.lblRoseSum.setText.assert_called_with("Sum: 100.0 % (OK)")
+
+
+@patch('omrat_utils.handle_settings.DriftSettingsWidget')
+@patch('omrat_utils.handle_settings.Repair')
+def test_check_rose_scales_to_100_and_accepts_comma(mock_repair_cls, mock_dsw_cls, mock_parent,
+                                                    mock_dsw, mock_repair):
+    mock_dsw_cls.return_value = mock_dsw
+    mock_repair_cls.return_value = mock_repair
+    ds = DriftSettings(mock_parent)
+    ds.dsw = mock_dsw
+    # 10 + 7 * 10 = 80 %, N written with a decimal comma.
+    _set_rose(mock_dsw, ["10,0"] + ["10"] * 7)
+    assert ds.check_rose() is True
+    for name in ('leDriftN', 'leDriftNE', 'leDriftE', 'leDriftSE',
+                 'leDriftS', 'leDriftSW', 'leDriftW', 'leDriftNW'):
+        getattr(mock_dsw, name).setText.assert_called_once_with("12.5")
+    mock_dsw.lblRoseSum.setText.assert_called_with("Sum was 80.0 % -> scaled to 100 %")
+
+
+@patch('omrat_utils.handle_settings.DriftSettingsWidget')
+@patch('omrat_utils.handle_settings.Repair')
+def test_check_rose_reports_bad_field_without_touching_others(mock_repair_cls, mock_dsw_cls, mock_parent,
+                                                              mock_dsw, mock_repair):
+    mock_dsw_cls.return_value = mock_dsw
+    mock_repair_cls.return_value = mock_repair
+    ds = DriftSettings(mock_parent)
+    ds.dsw = mock_dsw
+    _set_rose(mock_dsw, ["12.5"] * 3 + ["abc"] + ["12.5"] * 4)
+    assert ds.check_rose() is False
+    for name in ('leDriftN', 'leDriftNE', 'leDriftE', 'leDriftSE',
+                 'leDriftS', 'leDriftSW', 'leDriftW', 'leDriftNW'):
+        getattr(mock_dsw, name).setText.assert_not_called()
+    msg = mock_dsw.lblRoseSum.setText.call_args[0][0]
+    assert 'SE' in msg and 'abc' in msg
+    mock_dsw.lblRoseSum.setStyleSheet.assert_called_with('color: #b00020;')
+
+
+@patch('omrat_utils.handle_settings.DriftSettingsWidget')
+@patch('omrat_utils.handle_settings.Repair')
+def test_commit_changes_accepts_decimal_comma(mock_repair_cls, mock_dsw_cls, mock_parent, mock_dsw, mock_repair):
+    mock_dsw_cls.return_value = mock_dsw
+    mock_repair_cls.return_value = mock_repair
+    ds = DriftSettings(mock_parent)
+    ds.dsw = mock_dsw
+    _set_rose(mock_dsw, ["12,5"] * 8)
+    mock_dsw.leDriftSpeed.text.return_value = "1,5"
+    mock_dsw.leAnchorProb.text.return_value = "70,0"
+    mock_dsw.leAnchorMaxDepth.text.return_value = "7,5"
+    mock_dsw.leRepairStd.text.return_value = "0,1"
+    ds.commit_changes()
+    assert ds.drift_values['speed'] == 1.5
+    assert ds.drift_values['anchor_p'] == 0.7
+    assert ds.drift_values['anchor_d'] == 7.5
+    assert ds.drift_values['repair']['std'] == 0.1
+    assert all(v == 0.125 for v in ds.drift_values['rose'].values())

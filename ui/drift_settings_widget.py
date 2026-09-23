@@ -32,3 +32,5 @@ class DriftSettingsWidget(QtWidgets.QDialog, FORM_CLASS):
         self.rbLogNormal: QtWidgets.QRadioButton
         self.rbUserDefined: QtWidgets.QRadioButton
         self.pbTestRepair: QtWidgets.QPushButton
+        self.pbCheckRose: QtWidgets.QPushButton
+        self.lblRoseSum: QtWidgets.QLabel

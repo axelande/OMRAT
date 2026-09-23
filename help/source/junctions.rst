@@ -152,6 +152,21 @@ junction id (a stable string derived from the coordinate, e.g.
     }
 
 
+Suppressed legs
+===============
+
+A suppressed leg (:ref:`suppress-leg`) keeps its place in the live
+registry, so restoring it needs no rebuild and user or AIS matrices
+survive.  Only the calculation's copy is changed
+(:func:`compute.traffic_redirect.drop_legs_from_junctions`):
+
+* the leg's row and column are removed and the remaining rows are
+  renormalised;
+* a row whose whole share went to the suppressed leg falls back to the
+  geometric default of the remaining legs;
+* a junction left with fewer than two legs disappears.
+
+
 Behind the scenes
 =================
 

@@ -112,12 +112,30 @@ class CalculationTask(QgsTask):
         if not self.isCanceled():
             self._run_consequence()
 
+    def _apply_traffic_redirects(self) -> None:
+        """Move suppressed legs' traffic onto their detour legs (after
+        scaling) and drop the suppressed legs from this run's data."""
+        from compute.traffic_redirect import apply_traffic_redirects
+        summary = apply_traffic_redirects(self.data)
+        for mv in summary['moves']:
+            QgsMessageLog.logMessage(
+                f"Suppressed leg {mv['src']} (dir {mv['from_dir'] + 1}): moved {mv['ships']:.1f} ships/year "
+                f"({mv['share']:g} %) to leg {mv['dst']} (dir {mv['dir'] + 1})",
+                'OMRAT', Qgis.MessageLevel.Info)
+        for msg in summary['warnings']:
+            QgsMessageLog.logMessage(f'Traffic redirect: {msg}', 'OMRAT', Qgis.MessageLevel.Warning)
+        if summary['removed']:
+            QgsMessageLog.logMessage(
+                f"Suppressed legs left out of the calculation: {', '.join(summary['removed'])}",
+                'OMRAT', Qgis.MessageLevel.Info)
+
     def run(self) -> bool:
         """Execute the calculation in a background thread."""
         QgsMessageLog.logMessage('Starting calculation...', 'OMRAT', Qgis.MessageLevel.Info)
         try:
             from compute.data_preparation import apply_traffic_scaling
             apply_traffic_scaling(self.data)
+            self._apply_traffic_redirects()
             if hasattr(self.calc, 'set_progress_callback'):
                 self.calc.set_progress_callback(self._make_progress_wrapper())
             self._run_all_phases()

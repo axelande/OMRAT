@@ -136,6 +136,16 @@ def leg_layers(omrat: "OMRAT") -> list[Any]:
     return out
 
 
+def _is_suppressed_leg(omrat: "OMRAT", layer: Any) -> bool:
+    """``True`` when ``layer`` draws a suppressed (dashed) leg."""
+    try:
+        from compute.traffic_redirect import is_suppressed
+        feat = next(layer.getFeatures(), None)
+        return feat is not None and is_suppressed(getattr(omrat, 'segment_data', None) or {}, str(feat['segmentId']))
+    except Exception:  # nosec B110 B112
+        return False
+
+
 def tangent_layer(omrat: "OMRAT") -> Any | None:
     geoms = getattr(omrat, 'qgis_geoms', None)
     layer = getattr(geoms, 'tangent_layer', None) if geoms is not None else None
@@ -192,6 +202,13 @@ def collect_styles(omrat: "OMRAT") -> dict[str, str]:
             layers = []
         if not layers:
             continue
+        if key == 'legs':
+            # A suppressed leg is drawn dashed; that is not the project's
+            # leg style, so take the first leg that is not suppressed.
+            normal = [lyr for lyr in layers if not _is_suppressed_leg(omrat, lyr)]
+            if not normal:
+                continue
+            layers = normal
         qml = export_style(layers[0])
         if qml:
             styles[key] = qml
@@ -213,6 +230,13 @@ def apply_styles(omrat: "OMRAT", styles: dict[str, Any] | None) -> dict[str, int
             if apply_style(layer, qml):
                 n += 1
         applied[key] = n
+    if 'legs' in clean:
+        geoms = getattr(omrat, 'qgis_geoms', None)
+        if geoms is not None and hasattr(geoms, 'refresh_suppressed_styles'):
+            try:
+                geoms.refresh_suppressed_styles()
+            except Exception:  # nosec B110 B112
+                pass
     return applied
 
 

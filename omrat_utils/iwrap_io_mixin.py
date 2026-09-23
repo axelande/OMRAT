@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
 from compute.iwrap_convertion import parse_iwrap_xml, write_iwrap_xml
+from compute.traffic_redirect import describe_redirect_summary, prepare_export_data
 from omrat_utils.gather_data import GatherData
 
 
@@ -60,7 +61,10 @@ class IwrapIOMixin:
             filename = self._ask_iwrap_export_path()
             if not filename:
                 return
-            self._do_iwrap_export(filename)
+            data = self._export_data_with_suppression()
+            if data is None:
+                return
+            self._do_iwrap_export(filename, data)
             QMessageBox.information(
                 self.main_widget,
                 self.tr('Export Successful'),
@@ -82,9 +86,41 @@ class IwrapIOMixin:
             filename += '.xml'
         return filename
 
-    def _do_iwrap_export(self, filename: str) -> None:
-        gd = GatherData(self)
-        data = gd.get_all_for_save()
+    def _export_data_with_suppression(self) -> dict | None:
+        """Project data as IWRAP should see it, or ``None`` if cancelled.
+
+        IWRAP has no suppressed legs, so the export writes the scenario the
+        OMRAT calculation runs: suppressed legs left out, their traffic added
+        to the target legs (``compute.traffic_redirect``).  When the project
+        has suppressed legs the user is told so and can cancel.
+        """
+        data = GatherData(self).get_all_for_save()
+        prepared, summary = prepare_export_data(data)
+        if not summary['removed']:
+            return prepared
+        answer = QMessageBox.warning(
+            self.main_widget,
+            self.tr('Suppressed legs in the IWRAP export'),
+            self.tr(
+                'IWRAP has no suppressed legs.  The export leaves them out and adds '
+                'their traffic to the target legs, as the OMRAT calculation does.\n\n'
+                '{details}\n\n'
+                'Your OMRAT project is not changed.  Continue with the export?'
+            ).format(details=describe_redirect_summary(summary, data.get('segment_data') or {})),
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok,
+        )
+        if answer != QMessageBox.StandardButton.Ok:
+            return None
+        return prepared
+
+    def _do_iwrap_export(self, filename: str, data: dict | None = None) -> None:
+        """Write ``data`` (default: the gathered project) as IWRAP XML.
+        Suppressed legs are always resolved first; on already prepared data
+        that is a no-op."""
+        if data is None:
+            data = GatherData(self).get_all_for_save()
+        data, _summary = prepare_export_data(data)
         # The IWRAP writer expects a JSON file on disk -- stage to a
         # temp file, run the converter, clean up.
         temp = tempfile.NamedTemporaryFile(

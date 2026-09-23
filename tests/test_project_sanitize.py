@@ -23,7 +23,7 @@ if str(ROOT) not in sys.path:
 
 from omrat_utils.project_sanitize import (  # noqa: E402
     DISTRIBUTION_DEFAULTS, NO_OBSERVATION, collapse_sample_cells,
-    sanitize_project, seed_distribution_defaults,
+    prune_orphan_traffic, sanitize_project, seed_distribution_defaults,
 )
 from omrat_utils.storage import Storage  # noqa: E402
 from omrat_utils.validate_data import RootModelSchema  # noqa: E402
@@ -149,3 +149,44 @@ def test_validation_summary_groups_by_field():
     assert lines[-1].startswith('... and')
     # A leg id must not appear: the summary is per field, not per cell.
     assert 'traffic_data.1.' not in text and 'segment_data.1.' not in text
+
+
+# ---------------------------------------------------------------------------
+# Orphan traffic blocks (testEO08v2.omrat, 2026-09-18)
+# ---------------------------------------------------------------------------
+
+def _orphaned_project():
+    """Leg 7 was removed but its traffic block survived in the file."""
+    data = _drawn_project(n_legs=3)
+    data['traffic_data']['7'] = {'East going': _empty_block(), 'West going': _empty_block()}
+    return data
+
+
+def test_prune_orphan_traffic_drops_only_legless_blocks():
+    data = _orphaned_project()
+    removed = prune_orphan_traffic(data['traffic_data'], data['segment_data'])
+    assert removed == ['7']
+    assert sorted(data['traffic_data']) == ['1', '2', '3']
+
+
+def test_prune_orphan_traffic_without_leg_registry_is_a_no_op():
+    td = {'7': {}}
+    assert prune_orphan_traffic(td, None) == []
+    assert prune_orphan_traffic(None, {}) == []
+    assert td == {'7': {}}
+
+
+def test_sanitized_project_indexes_every_traffic_leg():
+    """``clean_traffic`` / ``get_no_ship_h`` do ``segment_data[leg]`` for
+    every traffic key; before the prune this raised ``KeyError: '7'``."""
+    data = sanitize_project(_orphaned_project())
+    for leg in data['traffic_data']:
+        data['segment_data'][leg]  # must not raise
+    RootModelSchema.model_validate(data)  # must not raise
+
+
+def test_storage_normaliser_drops_orphan_traffic_on_load():
+    store = Storage(MagicMock())
+    out = store._normalize_legacy_to_schema(_orphaned_project())
+    assert '7' not in out['traffic_data']
+    assert sorted(out['traffic_data']) == ['1', '2', '3']

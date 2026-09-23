@@ -191,6 +191,39 @@ settings" menu in OMRAT's main dialog reads from the same QSettings keys
 the wizard saved, so traffic-fetching for legs / segments works without
 any additional config.
 
+## Custom ship type mapping (IMO / MMSI)
+
+The AIS Type-5 `type_and_cargo` code is often missing or wrong.  When a
+study needs specific hulls in specific OMRAT categories, keep a small
+mapping table in the AIS database and manage it from
+**Settings -> Ship type mapping...** (it uses the connection from the AIS
+connection settings):
+
+| column | type | meaning |
+|---|---|---|
+| `mmsi` | bigint | MMSI to match (nullable) |
+| `imo` | bigint | IMO number to match (nullable) |
+| `ship_type` | smallint | OMRAT category index 0-20 (0 Fishing ... 17 Passenger, 18 Cargo, 19 Tanker, 20 Other) |
+| `note` | text | free text, ignored by OMRAT |
+
+You choose the schema; the table defaults to `ship_type_map`.  **Import
+CSV...** creates the table when it does not exist and replaces its
+contents from a `;`/`,`/tab separated file with an `mmsi` and/or `imo`
+column plus a `ship_type` column.  **Export CSV...** writes the table
+back out (with a `ship_type_name` column for readability) so it can be
+edited and re-imported, and the dialog previews the first 1000 rows.  The type cell may hold the index, an
+AIS type code (30-89, converted with the same rule as the passage query)
+or a category name (`Tanker`, `Cargo`, `ferry`, `hsc`, ...).  Rows that
+cannot be read are listed and skipped.
+
+Resolution order per passing ship: **IMO match -> MMSI match -> external
+vessel lookup `ship_type` column -> broadcast AIS code**.  The IMO join
+needs `imo_num` in `statics_<year>`; databases built by the ingestion
+wizard have it, on others OMRAT probes `information_schema` once and
+joins on MMSI only.  Duplicate keys in the mapping table never multiply
+pings (`DISTINCT ON` in both lookups).  Junction passage counting uses
+MMSI and timestamps only and is unaffected.
+
 ## Database schema reference
 
 The schema matches OMRAT's legacy (sjfv) layout used by

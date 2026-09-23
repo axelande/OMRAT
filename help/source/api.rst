@@ -205,6 +205,46 @@ compute.run_calculations
       probability calculation.
 
 
+compute.traffic_redirect
+========================
+
+Suppressed legs and their traffic redirects (:ref:`suppress-leg`).
+Pure Python, no QGIS dependency.
+
+**Source file:** ``compute/traffic_redirect.py`` (`View on GitHub <https://github.com/axelande/OMRAT/blob/main/compute/traffic_redirect.py>`__)
+
+.. function:: apply_traffic_redirects(data)
+
+   Move every suppressed leg's traffic onto its targets and remove the
+   suppressed legs from ``data`` (in place, on a private copy).
+   Returns ``{'moves': [...], 'removed': [...], 'warnings': [...]}``.
+
+.. function:: prepare_export_data(data)
+
+   ``(copy, summary)``: a deep copy with the redirects applied, used by
+   the IWRAP export.  ``data`` is not changed.
+
+.. function:: merge_direction(target, source, share_pct)
+
+   Add ``share_pct`` % of one direction's ships to another: frequencies
+   add, per-cell attributes become frequency-weighted means.  Returns
+   the ships per year moved.
+
+.. function:: auto_target_dir(segment_data, src, from_dir, dst)
+
+   The direction of ``dst`` closest in bearing to direction
+   ``from_dir`` of ``src``.  Pre-fills **To direction** in the dialog.
+
+.. function:: drop_legs_from_junctions(junctions, removed, segment_data)
+
+   Serialised junctions without the removed legs (rows renormalised,
+   geometric fallback for rows that only fed a removed leg).
+
+.. function:: after_split(segment_data, parent, sub_ids)
+
+   Keep redirects consistent after ``split_leg_at_points``.
+
+
 geometries.drift
 =================
 

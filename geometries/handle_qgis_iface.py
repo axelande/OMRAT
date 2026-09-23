@@ -58,6 +58,23 @@ def calculate_tangent_line(
     return start_tangent, end_tangent
 
 
+def _layer_tree_view():
+    """The QGIS layer-tree view, or ``None`` headless."""
+    try:
+        from qgis.utils import iface
+        return iface.layerTreeView() if iface is not None else None
+    except Exception:  # nosec B110 B112
+        return None
+
+
+def _refresh_link_views(handler, method: str) -> None:
+    """Call the traffic-links refresh ``method`` on ``handler`` if it has one
+    (tests drive some handler methods with a bare namespace as ``self``)."""
+    fn = getattr(handler, method, None)
+    if callable(fn):
+        fn()
+
+
 def unwire_leg_layer(handler, layer) -> None:
     """Disconnect the slot ``wire_leg_layer`` attached to ``layer`` and
     forget the layer.  Module-level so callers that only hold a duck-typed
@@ -102,6 +119,13 @@ class HandleQGISIface:
         self._leg_geom_slots: dict[str, object] = {}
         self.leg_dirs: dict[str, list[str]] = {}
         self._rubber_band: QgsRubberBand | None = None
+        # "Traffic links" view (omrat_utils/traffic_links.py): the memory
+        # layer, whether the user switched it on, and the highlight bands
+        # of the leg last clicked in the route table.
+        self.traffic_links_layer: QgsVectorLayer | None = None
+        self._links_shown = False
+        self._link_bands: list[QgsRubberBand] = []
+        self._highlight_seg: str | None = None
         # Re-entrancy guards: our own tangent redraws / table writes must
         # not be mistaken for user edits.
         self._tangent_guard = False
@@ -447,6 +471,11 @@ class HandleQGISIface:
                 pass
             self.tangent_layer = None
 
+        # Traffic links layer + highlight (rebuilt after the next load when
+        # the view is still switched on).
+        self._remove_traffic_links_layer()
+        self._clear_link_highlight()
+
         # Disconnect itemChanged if connected (will be reconnected on next load)
         if self.item_changed_connected:
             try:
@@ -521,6 +550,7 @@ class HandleQGISIface:
 
         # Refresh traffic UI so the removed leg no longer appears in the selector.
         self.omrat.run_traffic_module()
+        _refresh_link_views(self, 'refresh_traffic_links')
 
         canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
         if canvas is not None:
@@ -1058,6 +1088,7 @@ class HandleQGISIface:
         """Store the lock flag and mirror it into the route table."""
         set_locked(self.omrat.segment_data, str(segment_id), locked)
         self.sync_lock_column(segment_id)
+        _refresh_link_views(self, 'refresh_traffic_link_views')
 
     def sync_lock_column(self, segment_id: int | str) -> None:
         """Redraw the lock checkbox of one row from ``segment_data``."""
@@ -1075,6 +1106,233 @@ class HandleQGISIface:
     def open_copy_traffic_dialog(self) -> None:
         from omrat_utils import copy_traffic_dialog
         copy_traffic_dialog.run(self.omrat)
+
+    def open_suppress_leg_dialog(self) -> None:
+        from omrat_utils import suppress_leg_dialog
+        suppress_leg_dialog.run(self.omrat)
+
+    # ------------------------------------------------------------------
+    # Suppressed legs: drawn dashed (compute/traffic_redirect.py)
+    # ------------------------------------------------------------------
+
+    def leg_layer_for(self, segment_id: int | str) -> "QgsVectorLayer | None":
+        """Leg layer whose feature carries ``segmentId == segment_id``
+        (compared as text: the attribute is an int or a str by origin)."""
+        key = str(segment_id)
+        for layer in list(self.vector_layers):
+            try:
+                for feat in layer.getFeatures():
+                    if str(feat["segmentId"]) == key:
+                        return layer
+            except Exception:  # nosec B110 B112
+                continue
+        return None
+
+    @staticmethod
+    def set_layer_dashed(layer: QgsVectorLayer, dashed: bool) -> bool:
+        """Switch the line symbol layers of ``layer`` between dashed and
+        solid, keeping colour and width.  Returns ``True`` when a symbol
+        layer was changed."""
+        renderer = layer.renderer() if layer is not None else None
+        if renderer is None:
+            return False
+        if isinstance(renderer, QgsSingleSymbolRenderer):
+            symbols = [renderer.symbol()]
+        else:
+            from qgis.core import QgsRenderContext
+            symbols = list(renderer.symbols(QgsRenderContext()))
+        style = Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine
+        changed = False
+        for symbol in symbols:
+            if symbol is None:
+                continue
+            for sl in symbol.symbolLayers():
+                if hasattr(sl, 'setPenStyle'):
+                    sl.setPenStyle(style)
+                    changed = True
+        layer.triggerRepaint()
+        try:
+            view = _layer_tree_view()
+            if view is not None:
+                view.refreshLayerSymbology(layer.id())
+        except Exception:  # nosec B110 B112
+            pass
+        return changed
+
+    def sync_suppressed_style(self, segment_id: int | str) -> None:
+        """Dash (or restore) one leg on the map from ``segment_data``."""
+        from compute.traffic_redirect import is_suppressed
+        layer = self.leg_layer_for(segment_id)
+        if layer is not None:
+            self.set_layer_dashed(layer, is_suppressed(self.omrat.segment_data, str(segment_id)))
+
+    def refresh_suppressed_styles(self) -> None:
+        """Dash every suppressed leg (after load / a project style apply)."""
+        from compute.traffic_redirect import suppressed_legs
+        for seg_id in suppressed_legs(getattr(self.omrat, 'segment_data', None) or {}):
+            self.sync_suppressed_style(seg_id)
+
+    # ------------------------------------------------------------------
+    # Traffic links: which leg's traffic refers to which
+    # (omrat_utils/traffic_links.py)
+    # ------------------------------------------------------------------
+
+    LINKS_LAYER_NAME = "Traffic links"
+    _LINK_STYLE = {
+        # kind: (colour, pen style, legend label)
+        'copy': ('#1a9641', Qt.PenStyle.SolidLine, 'Copied traffic (source -> copy)'),
+        'redirect': ('#f07c00', Qt.PenStyle.DashLine, 'Moved traffic (suppressed -> target)'),
+        'with': ('#7f7f7f', Qt.PenStyle.DotLine, 'Suppressed with (member -> lead)'),
+    }
+
+    def refresh_traffic_link_views(self) -> None:
+        """Bring every view of the copy / lock / suppress links up to date:
+        the Traffic tab leg labels, the links layer and the highlight."""
+        from omrat_utils.traffic_links import status_suffix
+        segs = getattr(self.omrat, 'segment_data', None) or {}
+        try:
+            cb = self.omrat.main_widget.cbTrafficSelectSeg
+            for i in range(cb.count()):
+                base = cb.itemText(i).split('  [')[0]
+                cb.setItemText(i, f"{base}{status_suffix(str(cb.itemData(i)), segs)}")
+        except Exception:  # nosec B110 B112
+            pass
+        self.refresh_traffic_links()
+
+    def show_traffic_links(self, show: bool) -> None:
+        """Switch the "Traffic links" map layer on / off (toggle button)."""
+        self._links_shown = bool(show)
+        if self._links_shown:
+            self.refresh_traffic_links()
+        else:
+            self._remove_traffic_links_layer()
+            self._clear_link_highlight()
+
+    def refresh_traffic_links(self) -> None:
+        """Rebuild the links layer from ``segment_data`` (no-op when off)."""
+        if not self._links_shown:
+            return
+        from omrat_utils.traffic_links import link_geometries
+        layer = self._ensure_traffic_links_layer()
+        if layer is None:
+            return
+        provider = layer.dataProvider()
+        provider.truncate()
+        feats = []
+        for link, pts in link_geometries(getattr(self.omrat, 'segment_data', None) or {}):
+            feat = QgsFeature(layer.fields())
+            feat.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(x, y) for x, y in pts]))
+            feat.setAttributes([link.kind, link.src, link.dst, link.label])
+            feats.append(feat)
+        provider.addFeatures(feats)
+        layer.updateExtents()
+        layer.triggerRepaint()
+        if self._highlight_seg is not None:
+            self.highlight_traffic_links(self._highlight_seg)
+
+    def _ensure_traffic_links_layer(self) -> "QgsVectorLayer | None":
+        layer = self.traffic_links_layer
+        try:
+            if layer is not None and QgsProject.instance().mapLayer(layer.id()) is not None:
+                return layer
+        except RuntimeError:
+            pass
+        layer = QgsVectorLayer("LineString?crs=EPSG:4326", self.LINKS_LAYER_NAME, "memory")
+        fields = QgsFields()
+        for name in ('kind', 'src', 'dst', 'label'):
+            fields.append(QgsField(name, QMetaType.Type.QString))
+        layer.dataProvider().addAttributes(fields.toList())
+        layer.updateFields()
+        self._style_traffic_links_layer(layer)
+        QgsProject.instance().addMapLayer(layer)
+        self.traffic_links_layer = layer
+        return layer
+
+    def _style_traffic_links_layer(self, layer: QgsVectorLayer) -> None:
+        """Categorised on ``kind``: coloured line + arrow head at the target."""
+        from qgis.core import (
+            Qgis, QgsCategorizedSymbolRenderer, QgsMarkerLineSymbolLayer, QgsMarkerSymbol,
+            QgsRendererCategory,
+        )
+        cats = []
+        for kind, (colour, pen, legend) in self._LINK_STYLE.items():
+            symbol = QgsLineSymbol()
+            line = symbol.symbolLayer(0)
+            line.setColor(QColor(colour))
+            line.setWidth(0.7)
+            line.setPenStyle(pen)
+            head = QgsMarkerLineSymbolLayer()
+            try:
+                head.setPlacements(Qgis.MarkerLinePlacements(Qgis.MarkerLinePlacement.LastVertex))
+            except (AttributeError, TypeError):
+                pass
+            head.setSubSymbol(QgsMarkerSymbol.createSimple(
+                {'name': 'filled_arrowhead', 'color': colour, 'outline_style': 'no', 'size': '3.5'}))
+            symbol.appendSymbolLayer(head)
+            cats.append(QgsRendererCategory(kind, symbol, legend))
+        layer.setRenderer(QgsCategorizedSymbolRenderer('kind', cats))
+        settings = QgsPalLayerSettings()
+        settings.fieldName = "label"
+        settings.placement = QgsPalLayerSettings.Placement.Curved
+        settings.enabled = True
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+        layer.setLabelsEnabled(True)
+
+    def _remove_traffic_links_layer(self) -> None:
+        layer = self.traffic_links_layer
+        self.traffic_links_layer = None
+        if layer is None:
+            return
+        try:
+            if QgsProject.instance().mapLayer(layer.id()) is not None:
+                QgsProject.instance().removeMapLayer(layer.id())
+        except RuntimeError:
+            pass
+
+    def highlight_traffic_links(self, segment_id: int | str) -> None:
+        """Highlight leg ``segment_id`` (yellow) and every leg its traffic
+        is linked with (orange) on the canvas."""
+        from omrat_utils.traffic_links import related_legs
+        self._clear_link_highlight()
+        seg = str(segment_id)
+        segs = getattr(self.omrat, 'segment_data', None) or {}
+        related = related_legs(seg, segs)
+        self._highlight_seg = seg
+        if not related:
+            return
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is None:
+            return
+        crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        for leg, colour in [(seg, QColor(255, 220, 0, 200))] + [(r, QColor(255, 120, 0, 170)) for r in sorted(related)]:
+            seg_d = segs.get(leg)
+            if not isinstance(seg_d, dict):
+                continue
+            try:
+                geom = QgsGeometry.fromWkt(f"LINESTRING({seg_d['Start_Point']}, {seg_d['End_Point']})")
+                band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
+                band.setColor(colour)
+                band.setWidth(8)
+                band.setToGeometry(geom, crs)
+                self._link_bands.append(band)
+            except Exception:  # nosec B110 B112
+                continue
+
+    def highlighted_legs(self) -> int:
+        """Number of highlight bands on the canvas (for tests)."""
+        return len(self._link_bands)
+
+    def _clear_link_highlight(self) -> None:
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        for band in self._link_bands:
+            try:
+                band.reset(QgsWkbTypes.GeometryType.LineGeometry)
+                if canvas is not None:
+                    canvas.scene().removeItem(band)
+            except Exception:  # nosec B110 B112
+                pass
+        self._link_bands = []
+        self._highlight_seg = None
 
     def start_move_tangent(self) -> None:
         """One-click entry point for dragging a tangent line.
@@ -1133,6 +1391,8 @@ class HandleQGISIface:
                 self.omrat.distributions.run_update_plot(segment_id)
             except ValueError:
                 pass  # Handle or log invalid segment_id if needed
+            if getattr(self, '_links_shown', False):
+                self.highlight_traffic_links(segment_id_item.text())
 
     def update_segment_data(self, point: QgsPoint) -> None:
         main_widget = self.omrat.main_widget
@@ -1554,6 +1814,7 @@ class HandleQGISIface:
             locked = item.checkState() == Qt.CheckState.Checked
             if locked != is_locked(self.omrat.segment_data, str(segment_id)):
                 set_locked(self.omrat.segment_data, str(segment_id), locked)
+                _refresh_link_views(self, 'refresh_traffic_link_views')
                 self._notify(
                     self.omrat.tr("Leg {leg} is now {state} for AIS updates.").format(
                         leg=segment_id, state=self.omrat.tr("locked") if locked else self.omrat.tr("unlocked"),
@@ -1745,6 +2006,8 @@ class HandleQGISIface:
         matrix, so the next **Update AIS** on any leg re-counts them
         instead of skipping the junction pass (``AIS.junction_pass_needed``).
         """
+        # A moved / resized leg moves its traffic-link arrows too.
+        _refresh_link_views(self, 'refresh_traffic_links')
         handler = getattr(self.omrat, 'junctions', None)
         if handler is None or not leg_ids:
             return

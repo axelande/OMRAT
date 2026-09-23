@@ -78,6 +78,15 @@ class TrafficData(RootModel[Dict[str, TrafficLeg]]):
     pass
 
 
+class TrafficRedirectEntry(BaseModel):
+    """One row of a suppressed leg's ``traffic_redirect`` (see
+    ``compute/traffic_redirect.py``)."""
+    from_dir: int
+    leg: str
+    dir: int
+    share: float
+
+
 class Segment(BaseModel):
     Start_Point: str
     End_Point: str
@@ -117,6 +126,10 @@ class Segment(BaseModel):
     u_max2: float
     u_p2: int
     ai2: float
+    # Scenario: leg left out of compute, its traffic moved to other legs.
+    suppressed: Optional[bool] = None
+    traffic_redirect: Optional[List[TrafficRedirectEntry]] = None
+    suppressed_with: Optional[str] = None
 
 
 class SegmentData(RootModel[Dict[str, Segment]]):

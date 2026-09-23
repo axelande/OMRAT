@@ -48,7 +48,7 @@ is set up when the dialog is constructed:
 
 .. container:: source-code-ref pipeline
 
-   **Button wiring:** ``omrat.py:1028`` -- `self.main_widget.pbRunModel.clicked.connect(self.run_calculation) <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1028>`__
+   **Button wiring:** ``omrat.py:1238`` -- `self.main_widget.pbRunModel.clicked.connect(self.run_calculation) <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1238>`__
 
 When the button is clicked, :meth:`omrat.OMRAT.run_calculation` runs on
 the Qt main thread:
@@ -76,7 +76,7 @@ the Qt main thread:
 
 .. container:: source-code-ref pipeline
 
-   **Orchestrator:** ``omrat.py:724`` -- `run_calculation() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L724>`__
+   **Orchestrator:** ``omrat.py:931`` -- `run_calculation() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L931>`__
 
 
 Background orchestration: :class:`~compute.calculation_task.CalculationTask`
@@ -141,6 +141,15 @@ phase weights:
 
 The four phases, in order
 -------------------------
+
+Before the phases start, ``run()`` prepares its private copy of
+``data``: it applies the traffic scaling
+(:func:`compute.data_preparation.apply_traffic_scaling`) and then
+resolves suppressed legs
+(:func:`compute.traffic_redirect.apply_traffic_redirects`).  That step
+moves their traffic onto the target legs and removes them from the
+segments, the traffic and the junction matrices (see
+:ref:`suppress-leg`).  Every move is written to the QGIS log.
 
 ``CalculationTask.run()`` executes four phases **sequentially** on the
 same ``Calculation`` instance.  Each phase writes its results into
@@ -341,4 +350,4 @@ menu with **Load on map**, **Compare selected**, and **Delete**.
 
 .. container:: source-code-ref pipeline
 
-   **Completion handler:** ``omrat.py:813`` -- `_on_calculation_finished() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L813>`__
+   **Completion handler:** ``omrat.py:1020`` -- `_on_calculation_finished() <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1020>`__

@@ -41,6 +41,8 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import transform as shapely_transform
 import shapely.wkt as sw
 
+from geometries.boundary_edges import boundary_edges
+
 from ui.show_geom_res import ShowGeomRes
 
 
@@ -228,45 +230,22 @@ def _extract_edges_local(
     Returns an ``(M, 2, 2)`` array of edge endpoints ``[[along, lateral], ...]``
     or ``None`` if no edges were found (e.g. a Point obstacle, which a
     zero-width ray cannot hit).
+
+    Edge ``k`` of the returned array is boundary edge ``k`` of
+    :func:`geometries.boundary_edges.boundary_edges`, the same numbering
+    the result layers use for ``segment_idx`` -- that is what lets the
+    caster report *which* edge a ray hit.
     """
     if geom is None or getattr(geom, 'is_empty', True):
         return None
-
-    rings: list[np.ndarray] = []
-
-    def _collect(g):
-        gt = g.geom_type
-        if gt == 'Polygon':
-            if g.exterior is not None:
-                rings.append(np.asarray(g.exterior.coords, dtype=float))
-            for interior in g.interiors:
-                rings.append(np.asarray(interior.coords, dtype=float))
-        elif gt in ('LineString', 'LinearRing'):
-            rings.append(np.asarray(g.coords, dtype=float))
-        elif gt in ('MultiPolygon', 'MultiLineString', 'GeometryCollection'):
-            for sub in g.geoms:
-                _collect(sub)
-        # Points / MultiPoints: measure-zero; skip.
-
-    _collect(geom)
-    if not rings:
+    edges = boundary_edges(geom)
+    if not edges:
         return None
-
-    edges_list: list[np.ndarray] = []
-    for ring in rings:
-        if ring.shape[0] < 2:
-            continue
-        # Transform into local frame: along = (p - origin) . along_dir,
-        # lateral = (p - origin) . perp_dir.
-        diff = ring - turn_pt
-        along = diff @ along_dir
-        lateral = diff @ perp_dir
-        local = np.stack([along, lateral], axis=1)
-        edges_list.append(np.stack([local[:-1], local[1:]], axis=1))
-
-    if not edges_list:
-        return None
-    return np.concatenate(edges_list, axis=0)
+    arr = np.asarray(edges, dtype=float).reshape(-1, 2, 2)      # (M, 2 endpoints, xy)
+    diff = arr - turn_pt
+    along = diff @ along_dir
+    lateral = diff @ perp_dir
+    return np.stack([along, lateral], axis=2)
 
 
 def _build_hit_matrix(
@@ -279,13 +258,35 @@ def _build_hit_matrix(
 ) -> np.ndarray:
     """Along-track distance from ``turn_pt`` to each obstacle, per ray.
 
+    Thin wrapper over :func:`_build_hit_and_edge_matrices` for callers
+    that only need the distances.
+    """
+    return _build_hit_and_edge_matrices(offsets, obstacles, turn_pt, ext_dir, perp, max_range)[0]
+
+
+def _build_hit_and_edge_matrices(
+    offsets: np.ndarray,
+    obstacles: list[tuple[dict, str]],
+    turn_pt: np.ndarray,
+    ext_dir: np.ndarray,
+    perp: np.ndarray,
+    max_range: float = MAX_RANGE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Along-track distance *and* hit edge index per (ray, obstacle).
+
     Rays start at ``turn_pt + offset * perp`` and travel along ``ext_dir``.
     Hits closer than ``0`` or at/after ``max_range`` are ignored; Cat II
     passes the default 50 km, Cat I passes the leg length so only the
     stretch between the two waypoints counts.
+
+    Returns ``(hit_matrix, edge_matrix)``: ``hit_matrix[i, j]`` is the
+    distance from ray ``i`` to obstacle ``j`` (``inf`` for a miss) and
+    ``edge_matrix[i, j]`` the canonical boundary-edge index that was hit
+    (``-1`` for a miss).
     """
     n_rays = len(offsets)
     hit_matrix = np.full((n_rays, len(obstacles)), np.inf, dtype=float)
+    edge_matrix = np.full((n_rays, len(obstacles)), -1, dtype=int)
     ray_ys = offsets[:, None]
     for obs_idx, (obs, _kind) in enumerate(obstacles):
         # Bounding-box pre-filter: skip obstacles entirely behind the origin
@@ -309,14 +310,27 @@ def _build_hit_matrix(
             t = (ray_ys - y0[None, :]) / dy
             along = x0[None, :] + t * (x1 - x0)[None, :]
         valid = crosses & (along > 0) & (along < max_range)
-        hit_matrix[:, obs_idx] = np.min(np.where(valid, along, np.inf), axis=1)
-    return hit_matrix
+        along_valid = np.where(valid, along, np.inf)
+        best_edge = np.argmin(along_valid, axis=1)
+        best_along = along_valid[np.arange(n_rays), best_edge]
+        hit_matrix[:, obs_idx] = best_along
+        edge_matrix[:, obs_idx] = np.where(np.isfinite(best_along), best_edge, -1)
+    return hit_matrix, edge_matrix
 
 
 def _accumulate_obs_hits(
     offsets: np.ndarray, masses: np.ndarray,
     hit_matrix: np.ndarray, obstacles: list, recovery: float,
+    edge_matrix: np.ndarray | None = None,
 ) -> tuple[list, dict]:
+    """Sum ray masses per first-hit obstacle (and per hit edge when given).
+
+    ``edge_matrix`` is the second value of :func:`_build_hit_and_edge_matrices`;
+    with it every accumulator entry also carries ``edges`` -- a
+    ``{edge_idx: {mass, weighted_dist, n_rays}}`` split of the same rays,
+    which is what the result layers need to colour boundary edges
+    individually.
+    """
     n_rays = len(offsets)
     best_obs_idx = np.argmin(hit_matrix, axis=1)
     best_dists = hit_matrix[np.arange(n_rays), best_obs_idx]
@@ -325,6 +339,7 @@ def _accumulate_obs_hits(
     obs_accum: dict = defaultdict(lambda: {
         "mass": 0.0, "weighted_dist": 0.0, "p_integral": 0.0,
         "n_rays": 0, "ray_offsets": [], "ray_dists": [], "obs": None, "kind": None,
+        "edges": {},
     })
     for i in range(n_rays):
         off, m_i = float(offsets[i]), float(masses[i])
@@ -343,8 +358,28 @@ def _accumulate_obs_hits(
         oa["ray_offsets"].append(off)
         oa["ray_dists"].append(best_d)
         oa["obs"], oa["kind"] = obs, kind
+        if edge_matrix is not None:
+            e_idx = int(edge_matrix[i, int(best_obs_idx[i])])
+            if e_idx >= 0:
+                ea = oa["edges"].setdefault(e_idx, {"mass": 0.0, "weighted_dist": 0.0, "n_rays": 0})
+                ea["mass"] += m_i
+                ea["weighted_dist"] += m_i * best_d
+                ea["n_rays"] += 1
         ray_data.append((off, m_i, best_key, best_d))
     return ray_data, obs_accum
+
+
+def _edge_summaries(edge_accum: dict) -> dict[int, dict]:
+    """``{edge_idx: {mass, mean_dist, n_rays}}`` from the per-edge accumulator."""
+    out: dict[int, dict] = {}
+    for e_idx, ea in edge_accum.items():
+        mass = ea["mass"]
+        out[int(e_idx)] = {
+            "mass": mass,
+            "mean_dist": ea["weighted_dist"] / mass if mass > 0 else 0.0,
+            "n_rays": ea["n_rays"],
+        }
+    return out
 
 
 def _build_summaries(obs_accum: dict, ai: float, speed_ms: float) -> dict:
@@ -361,6 +396,7 @@ def _build_summaries(obs_accum: dict, ai: float, speed_ms: float) -> dict:
             "ray_dists": oa["ray_dists"],
             "obs": oa["obs"],
             "kind": oa["kind"],
+            "edges": _edge_summaries(oa.get("edges", {})),
         }
     return summaries
 
@@ -387,9 +423,9 @@ def _compute_cat2_with_shadows(
     if not obstacles:
         return ({}, [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
                 offsets, pdf_vals)
-    hit_matrix = _build_hit_matrix(offsets, obstacles, turn_pt, ext_dir, perp)
+    hit_matrix, edge_matrix = _build_hit_and_edge_matrices(offsets, obstacles, turn_pt, ext_dir, perp)
     ray_data, obs_accum = _accumulate_obs_hits(offsets, masses, hit_matrix, obstacles,
-                                               ai * speed_ms)
+                                               ai * speed_ms, edge_matrix=edge_matrix)
     return _build_summaries(obs_accum, ai, speed_ms), ray_data, offsets, pdf_vals
 
 
@@ -419,6 +455,7 @@ def _build_cat1_summaries(obs_accum: dict) -> dict:
             "ray_dists": oa["ray_dists"],
             "obs": oa["obs"],
             "kind": oa["kind"],
+            "edges": _edge_summaries(oa.get("edges", {})),
         }
     return summaries
 
@@ -457,9 +494,10 @@ def _compute_cat1_in_lane(
     if not obstacles or leg_length <= 0:
         return ({}, [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
                 offsets, pdf_vals)
-    hit_matrix = _build_hit_matrix(offsets, obstacles, origin, along_dir, perp,
-                                   max_range=leg_length)
-    ray_data, obs_accum = _accumulate_obs_hits(offsets, masses, hit_matrix, obstacles, 0.0)
+    hit_matrix, edge_matrix = _build_hit_and_edge_matrices(
+        offsets, obstacles, origin, along_dir, perp, max_range=leg_length)
+    ray_data, obs_accum = _accumulate_obs_hits(offsets, masses, hit_matrix, obstacles, 0.0,
+                                               edge_matrix=edge_matrix)
     return _build_cat1_summaries(obs_accum), ray_data, offsets, pdf_vals
 
 

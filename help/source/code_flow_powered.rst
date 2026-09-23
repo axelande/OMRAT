@@ -39,9 +39,9 @@ multiply by per-cell frequency.
 
 .. container:: source-code-ref pipeline
 
-   **Grounding entry:** ``compute/powered_model.py:301`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L301>`__
+   **Grounding entry:** ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__
 
-   **Allision entry:** ``compute/powered_model.py:334`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L334>`__
+   **Allision entry:** ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__
 
 
 Top-level call tree
@@ -133,7 +133,7 @@ kilometres.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:51`` -- `SimpleProjector <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L51>`__
+   **Source:** ``geometries/get_powered_overlap.py:63`` -- `SimpleProjector <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L63>`__
 
 .. code-block:: python
 
@@ -155,7 +155,7 @@ obstacle once.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/powered_model.py:301`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L301>`__
+   **Source:** ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__
 
 Flow:
 
@@ -209,7 +209,7 @@ Flow:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/powered_model.py:334`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L334>`__
+   **Source:** ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__
 
 Structurally identical to grounding but:
 
@@ -229,7 +229,7 @@ cell iteration) is the same pattern as grounding.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:491`` -- `_build_legs_and_obstacles() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L491>`__
+   **Source:** ``geometries/get_powered_overlap.py:622`` -- `_build_legs_and_obstacles() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L622>`__
 
 Purpose: given ``data`` + projector + mode (+ ``max_draft``), produce
 all the geometry the ray cast needs in one local-frame dict.
@@ -263,7 +263,7 @@ by the total frequency.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:517`` -- `_run_all_computations() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L517>`__
+   **Source:** ``geometries/get_powered_overlap.py:648`` -- `_run_all_computations() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L648>`__
 
 Loops every ``(seg_id, dir_idx)`` with non-zero speed and returns a
 list of ``computation`` dicts:
@@ -341,7 +341,7 @@ multiplies by ``Q`` and by the category's causation factor
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:350`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L350>`__
+   **Source:** ``geometries/get_powered_overlap.py:404`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L404>`__
 
 This is the **core** of the powered model.  It casts
 ``N_RAYS = 500`` parallel rays across the lateral distribution and for
@@ -402,7 +402,7 @@ end-to-end runtime; the vectorised form is ~74 x faster on the same
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:205`` -- `_extract_edges_local() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L205>`__
+   **Source:** ``geometries/get_powered_overlap.py:217`` -- `_extract_edges_local() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L217>`__
 
 Helper used by :func:`_compute_cat2_with_shadows`.  Walks the
 geometry (Polygon, MultiPolygon, LineString, MultiLineString,
@@ -452,7 +452,7 @@ waterfall breakdown.
 
 .. container:: source-code-ref pipeline
 
-   **Visualiser:** ``geometries/get_powered_overlap.py:566`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L566>`__
+   **Visualiser:** ``geometries/get_powered_overlap.py:716`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L716>`__
 
 
 Function reference

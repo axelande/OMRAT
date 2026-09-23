@@ -217,10 +217,10 @@ Orchestrates drift corridor generation for all legs and directions:
 
 .. container:: source-code-ref
 
-   ``geometries/drift/generator.py:77`` -- `DriftCorridorGenerator <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L77>`__ |
-   ``geometries/drift/generator.py:117`` -- `precollect_data() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L117>`__ |
-   ``geometries/drift/generator.py:364`` -- `generate_corridors() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L364>`__ |
-   ``geometries/drift/generator.py:459`` -- `_create_single_corridor() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L459>`__
+   ``geometries/drift/generator.py:107`` -- `DriftCorridorGenerator <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L107>`__ |
+   ``geometries/drift/generator.py:147`` -- `precollect_data() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L147>`__ |
+   ``geometries/drift/generator.py:394`` -- `generate_corridors() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L394>`__ |
+   ``geometries/drift/generator.py:489`` -- `_create_single_corridor() <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L489>`__
 
 HandleQGISIface (geometries/handle_qgis_iface.py)
 ---------------------------------------------------
@@ -267,6 +267,16 @@ Every downstream model reads the post-scaling Frequency, so the
 per-row "follow global" / global-spinbox UI on the Traffic Data tab is
 inherited by ship-ship, powered, drifting and consequence without
 any per-model code change.
+
+Directly after the scaling, ``compute.traffic_redirect.apply_traffic_redirects``
+resolves suppressed legs (``segment_data[seg]['suppressed']``, see
+:ref:`suppress-leg`).  It adds their traffic to the target legs listed
+in ``traffic_redirect`` and then removes the suppressed legs from
+``segment_data``, ``traffic_data`` and the junction matrices.  The
+models therefore never see a suppressed leg and need no code of their
+own for it.  The sensitivity runner
+(``omrat_utils/sensitivity_task.run_phases_on_stub``) and the IWRAP
+export run the same step.
 
 Segment Data
 ------------
@@ -369,8 +379,11 @@ OMRAT supports bidirectional conversion with IWRAP XML format:
 **Export** (``write_iwrap_xml``):
 
 1. Gather project data via ``GatherData``
-2. Build XML tree with waypoints, legs, traffic distributions, obstacles
-3. Write formatted XML file
+2. Resolve suppressed legs on a copy
+   (``compute.traffic_redirect.prepare_export_data``).  If there are
+   any, a warning lists the moves and the user can cancel.
+3. Build XML tree with waypoints, legs, traffic distributions, obstacles
+4. Write formatted XML file
 
 **Import** (``parse_iwrap_xml``):
 

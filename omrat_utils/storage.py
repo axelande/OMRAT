@@ -284,6 +284,7 @@ class Storage:
                 ('Width', seg.get('Width', 0)),
                 ('Tangent_Pos', 0.5),
                 ('traffic_locked', False),
+                ('suppressed', False),
             ]:
                 seg.setdefault(key, default)
             seg.setdefault('dist1', [])

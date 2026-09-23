@@ -604,6 +604,10 @@ def split_leg_at_points(
         if traffic_data is not None and parent_traffic is not None:
             traffic_data[sub_id] = _copy.deepcopy(parent_traffic)
 
+    # Suppressed-leg redirects: move the parent's ships only once and
+    # point redirects that targeted the parent at every sub-leg.
+    from compute.traffic_redirect import after_split
+    after_split(segment_data, leg_id, all_ids)
     return all_ids
 
 

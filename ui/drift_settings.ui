@@ -302,6 +302,35 @@
              <string>12.5</string>
             </property>
            </widget>
+           <widget class="QPushButton" name="pbCheckRose">
+            <property name="geometry">
+             <rect>
+              <x>185</x>
+              <y>40</y>
+              <width>100</width>
+              <height>22</height>
+             </rect>
+            </property>
+            <property name="toolTip">
+             <string>Check that the eight directions sum to 100 %. If they do not, every value is scaled proportionally so the total becomes 100 %. Both . and , are accepted as decimal mark.</string>
+            </property>
+            <property name="text">
+             <string>Check sum</string>
+            </property>
+           </widget>
+           <widget class="QLabel" name="lblRoseSum">
+            <property name="geometry">
+             <rect>
+              <x>185</x>
+              <y>270</y>
+              <width>120</width>
+              <height>20</height>
+             </rect>
+            </property>
+            <property name="text">
+             <string>Sum: 100.0 %</string>
+            </property>
+           </widget>
           </widget>
           <widget class="QWidget" name="tab_11">
            <attribute name="title">

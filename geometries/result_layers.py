@@ -415,48 +415,18 @@ def _extract_line_segments_with_normals(geom) -> list[tuple[float, float, float,
     Returns:
         List of (x1, y1, x2, y2, normal_angle) tuples representing line segments
         where normal_angle is the outward-facing direction in compass degrees
+
+    The segment order (and therefore ``segment_idx``) is defined by
+    :func:`geometries.boundary_edges.boundary_edges`, which the powered ray
+    caster shares, so ``seg_<idx>`` keys in ``by_obstacle_segment_legdir``
+    refer to the same edge as the feature with that ``segment_idx``.
     """
-    from shapely.geometry import Polygon, MultiPolygon, LineString, LinearRing
-    from shapely.geometry import polygon as shapely_polygon
+    from geometries.boundary_edges import boundary_edges
 
-    segments: list[tuple[float, float, float, float, float]] = []
-
-    def extract_from_ring(ring_coords):
-        """Extract segments from a ring's coordinates."""
-        coords = list(ring_coords)
-        for i in range(len(coords) - 1):
-            x1, y1 = coords[i][:2]
-            x2, y2 = coords[i + 1][:2]
-            # Skip zero-length segments
-            if (x1, y1) != (x2, y2):
-                normal = _segment_normal_angle(x1, y1, x2, y2)
-                segments.append((x1, y1, x2, y2, normal))
-
-    if isinstance(geom, Polygon):
-        # Normalize polygon to CCW exterior, CW holes using shapely's orient()
-        # This ensures consistent outward normal calculation
-        oriented_geom = shapely_polygon.orient(geom, sign=1.0)  # 1.0 = CCW exterior
-        # Extract exterior ring segments
-        extract_from_ring(oriented_geom.exterior.coords)
-        # Extract interior rings (holes) if any
-        for interior in oriented_geom.interiors:
-            extract_from_ring(interior.coords)
-    elif isinstance(geom, MultiPolygon):
-        for poly in geom.geoms:
-            segments.extend(_extract_line_segments_with_normals(poly))
-    elif isinstance(geom, (LineString, LinearRing)):
-        extract_from_ring(geom.coords)
-    elif hasattr(geom, 'boundary'):
-        # For other geometry types, try to get boundary
-        boundary = geom.boundary
-        if hasattr(boundary, 'coords'):
-            extract_from_ring(boundary.coords)
-        elif hasattr(boundary, 'geoms'):
-            # MultiLineString boundary
-            for line in boundary.geoms:
-                extract_from_ring(line.coords)
-
-    return segments
+    return [
+        (x1, y1, x2, y2, _segment_normal_angle(x1, y1, x2, y2))
+        for x1, y1, x2, y2 in boundary_edges(geom)
+    ]
 
 
 def _calculate_segment_probability(
@@ -1066,12 +1036,14 @@ def _build_powered_layer(
     add_to_project: bool,
     by_obstacle_leg: dict[str, dict[str, float]] | None = None,
     segment_data: dict[str, dict[str, Any]] | None = None,
+    by_obstacle_segment_legdir: dict[str, dict[str, dict[str, float]]] | None = None,
 ) -> QgsVectorLayer | None:
     """Obstacle boundary-segment layer coloured by powered probability.
 
     Each feature is a boundary segment of a depth contour or structure
-    polygon, coloured by that obstacle's total powered probability.
-    Mirrors the drifting grounding/allision result layer layout.
+    polygon, coloured by the powered probability the ray caster assigned
+    to that edge.  Mirrors the drifting grounding/allision result layer
+    layout.
     """
     if not by_obstacle:
         return None
@@ -1083,6 +1055,7 @@ def _build_powered_layer(
         by_obstacle_leg=by_obstacle_leg,
         add_to_project=add_to_project,
         segment_data=segment_data,
+        by_obstacle_segment_legdir=by_obstacle_segment_legdir,
     )
 
 
@@ -1095,15 +1068,23 @@ def _build_powered_layer_per_obstacle_segments(
     by_obstacle_leg: dict[str, dict[str, float]] | None,
     add_to_project: bool,
     segment_data: dict[str, dict[str, Any]] | None = None,
+    by_obstacle_segment_legdir: dict[str, dict[str, dict[str, float]]] | None = None,
 ) -> QgsVectorLayer | None:
     """Per-obstacle boundary-segment layer for powered grounding/allision.
 
     Each boundary segment of the obstacle polygon becomes one LineString
-    feature.  When ``segment_data`` is available, the segment probability
-    is the obstacle's total leg contribution weighted by the cosine exposure
-    factor between the leg bearing and the segment's outward normal —
-    matching the approach used by the drifting grounding layer.  Without
-    ``segment_data`` every segment gets the obstacle's total probability.
+    feature, numbered by :func:`_extract_line_segments_with_normals`.
+
+    * With ``by_obstacle_segment_legdir`` (emitted by the powered model
+      since the ray caster started recording the hit edge) the feature's
+      ``total_edge_probability`` is the sum of that edge's ``seg_<idx>``
+      entries and the ``leg_<id>`` columns hold the per-edge split, so the
+      edges of one obstacle add up to its ``object_probability`` and edges
+      no ray reaches are zero.
+    * Without it (reports from older runs) the layer falls back to the
+      obstacle total spread by the cosine between leg bearing and edge
+      normal -- a heuristic that gives every similarly oriented edge the
+      same value and does not sum to the obstacle total.
     """
     import shapely.wkt as shapely_wkt
 
@@ -1148,11 +1129,13 @@ def _build_powered_layer_per_obstacle_segments(
         except (TypeError, ValueError):
             value = 0.0
         obs_leg_contribs = (by_obstacle_leg or {}).get(str(obs_id), {})
+        seg_root = (by_obstacle_segment_legdir or {}).get(str(obs_id))
 
         # Pre-compute bearings for each leg-direction key ("seg_id:dir_idx").
         # dir_idx 0 = forward (Start→End); dir_idx 1 = reverse (+180°).
+        # Only needed for the heuristic fallback.
         leg_bearings: dict[str, float | None] = {}
-        if segment_data and obs_leg_contribs:
+        if seg_root is None and segment_data and obs_leg_contribs:
             for leg_dir_key in obs_leg_contribs:
                 parts = leg_dir_key.rsplit(':', 1)
                 seg_key = parts[0]
@@ -1164,9 +1147,15 @@ def _build_powered_layer_per_obstacle_segments(
                 leg_bearings[leg_dir_key] = bearing
 
         for seg_idx, (x1, y1, x2, y2, seg_normal) in enumerate(segments):
-            # Per-segment probability: sum each leg's contribution weighted by
-            # how directly the leg bearing faces this segment edge.
-            if segment_data and obs_leg_contribs:
+            if seg_root is not None:
+                # Ray-cast result: what actually landed on this edge, per
+                # leg-direction.  Edges never hit stay at zero.
+                seg_leg_vals: dict[str, float] = seg_root.get(f'seg_{seg_idx}', {}) or {}
+                seg_prob = float(sum(seg_leg_vals.values()))
+            elif segment_data and obs_leg_contribs:
+                # Heuristic fallback: spread the obstacle total by how
+                # directly the leg bearing faces this edge.
+                seg_leg_vals = obs_leg_contribs
                 seg_prob = 0.0
                 for leg_dir_key, leg_contrib in obs_leg_contribs.items():
                     bearing = leg_bearings.get(leg_dir_key)
@@ -1175,6 +1164,7 @@ def _build_powered_layer_per_obstacle_segments(
                     else:
                         seg_prob += leg_contrib * _exposure_factor(seg_normal, bearing)
             else:
+                seg_leg_vals = obs_leg_contribs
                 seg_prob = float(prob)
 
             feat = QgsFeature(layer.fields())
@@ -1185,7 +1175,7 @@ def _build_powered_layer_per_obstacle_segments(
             feat.setAttribute('object_probability', float(prob))
             feat.setAttribute('value', value)
             for leg_id, field_name in leg_to_field.items():
-                feat.setAttribute(field_name, float(obs_leg_contribs.get(leg_id, 0.0) or 0.0))
+                feat.setAttribute(field_name, float(seg_leg_vals.get(leg_id, 0.0) or 0.0))
             feats.append(feat)
 
     if not feats:
@@ -1225,8 +1215,9 @@ def create_powered_grounding_layer(
     """Depth-contour boundary-segment layer coloured by powered-grounding probability.
 
     Each feature is a boundary segment of a depth contour polygon,
-    coloured by that contour's total powered-grounding probability.
-    Per-leg contributions are kept as ``leg_<id>`` columns.
+    coloured by the powered-grounding probability the ray caster put on
+    that edge (``by_obstacle_segment_legdir``).  Per-leg contributions are
+    kept as ``leg_<id>`` columns.
     """
     if not powered_grounding_report:
         return None
@@ -1239,6 +1230,7 @@ def create_powered_grounding_layer(
         by_obstacle, depths, 'depth', add_to_project,
         by_obstacle_leg=by_obstacle_leg,
         segment_data=segment_data,
+        by_obstacle_segment_legdir=powered_grounding_report.get('by_obstacle_segment_legdir') or None,
     )
 
 
@@ -1251,8 +1243,9 @@ def create_powered_allision_layer(
     """Structure boundary-segment layer coloured by powered-allision probability.
 
     Each feature is a boundary segment of a structure polygon, coloured
-    by that structure's total powered-allision probability. Per-leg
-    contributions are kept as ``leg_<id>`` columns.
+    by the powered-allision probability the ray caster put on that edge
+    (``by_obstacle_segment_legdir``).  Per-leg contributions are kept as
+    ``leg_<id>`` columns.
     """
     if not powered_allision_report:
         return None
@@ -1265,4 +1258,5 @@ def create_powered_allision_layer(
         by_obstacle, structures, 'height', add_to_project,
         by_obstacle_leg=by_obstacle_leg,
         segment_data=segment_data,
+        by_obstacle_segment_legdir=powered_allision_report.get('by_obstacle_segment_legdir') or None,
     )
