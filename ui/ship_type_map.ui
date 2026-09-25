@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ShipTypeMapDialog</class>
+ <widget class="QDialog" name="ShipTypeMapDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>680</width>
+    <height>560</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Custom ship type mapping</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="lblHelp">
+     <property name="text">
+      <string>Override the AIS ship type per vessel.  The mapping is a table in the AIS database (mmsi, imo, ship_type, note); ship_type is the OMRAT category index 0-20.  When traffic is fetched, an IMO match wins over an MMSI match, which wins over the external vessel lookup and the broadcast AIS type code.  Legs already fetched keep their categories until you run Update AIS again.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="cbEnabled">
+     <property name="text">
+      <string>Use the custom ship type mapping when fetching AIS traffic</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="lblSchema">
+       <property name="text">
+        <string>Schema</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QLineEdit" name="leSchema">
+       <property name="toolTip">
+        <string>Schema in the AIS database the mapping table lives in (created if missing when you import).</string>
+       </property>
+       <property name="placeholderText">
+        <string>e.g. omrat</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="lblTable">
+       <property name="text">
+        <string>Table</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QLineEdit" name="leTable">
+       <property name="text">
+        <string>ship_type_map</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonRow">
+     <item>
+      <widget class="QPushButton" name="pbImport">
+       <property name="toolTip">
+        <string>Load a CSV with an mmsi and/or imo column plus a ship_type column (index 0-20, AIS type code 30-89 or a name such as Tanker, Cargo, Passenger) and an optional note column.  The table is created when missing and its rows are replaced.</string>
+       </property>
+       <property name="text">
+        <string>Import CSV...</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pbExport">
+       <property name="toolTip">
+        <string>Write the current table to a CSV you can edit and import again.</string>
+       </property>
+       <property name="text">
+        <string>Export CSV...</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="pbRefresh">
+       <property name="text">
+        <string>Refresh</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblStatus">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableWidget" name="twPreview">
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="alternatingRowColors">
+      <bool>true</bool>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <attribute name="verticalHeaderVisible">
+      <bool>false</bool>
+     </attribute>
+     <column>
+      <property name="text">
+       <string>MMSI</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>IMO</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Ship type</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Note</string>
+      </property>
+     </column>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Save</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <tabstops>
+  <tabstop>cbEnabled</tabstop>
+  <tabstop>leSchema</tabstop>
+  <tabstop>leTable</tabstop>
+  <tabstop>pbImport</tabstop>
+  <tabstop>pbExport</tabstop>
+  <tabstop>pbRefresh</tabstop>
+  <tabstop>twPreview</tabstop>
+ </tabstops>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>accepted()</signal>
+   <receiver>ShipTypeMapDialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>340</x>
+     <y>540</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>340</x>
+     <y>280</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>rejected()</signal>
+   <receiver>ShipTypeMapDialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>340</x>
+     <y>540</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>340</x>
+     <y>280</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>

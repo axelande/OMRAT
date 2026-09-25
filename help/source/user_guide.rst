@@ -210,6 +210,35 @@ selector.  You can tick or untick the box by hand at any time, for
 example to protect a leg whose matrices you edited manually.  The
 flag and the source leg are saved in the project file.
 
+**Unlocking a copy releases it.**  The lock and the copy belong
+together: an unlocked copy is replaced by the leg's own AIS traffic on
+the next **Update AIS**.  So unticking **AIS lock** on a copied leg also
+removes its link to the source leg.  The leg label loses ``copy of ...``,
+the green *Traffic links* arrow disappears, and the junctions next to the
+leg stop forcing 100 % continuation with the source.  The message bar
+says which link was removed.  The copied numbers stay in the leg until
+the next AIS update replaces them; ticking the box again locks those
+numbers but does not bring the link back (copy again to restore it).  In
+the same way, an AIS update that writes a leg, for example a copy made
+with **Lock target legs** unticked, clears that leg's link.
+
+.. list-table:: Example: ``LEG_2_3_b`` was copied from ``LEG_2_3_a``
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Action
+     - Leg label
+     - What the next Update AIS does
+   * - After **Copy traffic** (locked)
+     - ``LEG_2_3_b (id 16) [locked, copy of LEG_2_3_a]``
+     - skips the leg; the copy stays
+   * - Untick **AIS lock**
+     - ``LEG_2_3_b (id 16)``
+     - replaces the copied numbers with the leg's own AIS traffic
+   * - Tick **AIS lock** again
+     - ``LEG_2_3_b (id 16) [locked]``
+     - skips the leg; whatever it holds now stays
+
 Locking does not stop the leg's passages from being counted for the
 junction transition matrices; those still come from AIS (or your
 manual edits) as described below.
@@ -571,6 +600,11 @@ Common questions
 
 *Can a target leg be a locked copy?*
    Yes.  See "Things you do not need to do" in Example 3.
+
+*I unlocked a copied leg and it no longer says "copy of ...".*
+   That is intended: unlocking releases the copy (see
+   :ref:`copy-traffic`).  To make it a copy again, run **Copy traffic...**
+   onto it.
 
 *How do I compare the scenario with today's traffic?*
    Run the model with the legs restored (the baseline), suppress them, run

@@ -17,7 +17,11 @@ Data model
 legs are skipped by :meth:`omrat_utils.handle_ais.AIS.update_legs` (both
 the bulk and the per-leg button).
 ``segment_data[seg]['traffic_source']``  the leg id the data was copied
-from.  :func:`geometries.junctions.linked_partners` reads it: at a
+from.  The link describes the *data*, so it goes when the copy stops
+being true: unticking the AIS lock releases the copy
+(:func:`release_copy`, the next AIS update replaces it) and an AIS update
+that writes the leg clears it (``AisUpdateTask._apply_leg_result``).
+:func:`geometries.junctions.linked_partners` reads it: at a
 junction shared by the source and the target the transition matrix
 defaults to 100 % continuation between them (the two sub-legs are one
 route again).
@@ -63,6 +67,24 @@ def set_locked(segment_data: dict[str, Any], seg: str, locked: bool) -> bool:
         return False
     seg_d[LOCK_KEY] = bool(locked)
     return True
+
+
+def release_copy(segment_data: dict[str, Any], seg: str) -> str | None:
+    """Unlock ``seg`` and drop its copy link.
+
+    Returns the leg the traffic had been copied from (``None`` when the
+    leg was not a copy).  Called when the user unticks **AIS lock**: an
+    unlocked copy is replaced by the leg's own AIS traffic on the next
+    update, so keeping the link would leave the labels, the Traffic links
+    arrows and the junction continuation rows claiming a copy that is
+    about to be gone.
+    """
+    seg_d = segment_data.get(str(seg))
+    if not isinstance(seg_d, dict):
+        return None
+    seg_d[LOCK_KEY] = False
+    src = seg_d.pop(SOURCE_KEY, None)
+    return str(src) if src not in (None, '') else None
 
 
 def locked_legs(segment_data: dict[str, Any]) -> list[str]:

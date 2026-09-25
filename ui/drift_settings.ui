@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>447</width>
-    <height>526</height>
+    <width>460</width>
+    <height>640</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -23,15 +23,6 @@
       <attribute name="title">
        <string>Probability and direction</string>
       </attribute>
-      <widget class="QWidget" name="verticalLayoutWidget">
-       <property name="geometry">
-        <rect>
-         <x>0</x>
-         <y>0</y>
-         <width>611</width>
-         <height>441</height>
-        </rect>
-       </property>
        <layout class="QVBoxLayout" name="verticalLayout">
         <item>
          <layout class="QFormLayout" name="formLayout">
@@ -150,187 +141,232 @@
            <attribute name="title">
             <string>Total drift</string>
            </attribute>
-           <widget class="QLabel" name="label_9">
-            <property name="geometry">
-             <rect>
-              <x>8</x>
-              <y>10</y>
-              <width>191</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>Average drift speed (knots):</string>
-            </property>
-            <property name="alignment">
-             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftSpeed">
-            <property name="geometry">
-             <rect>
-              <x>200</x>
-              <y>10</y>
-              <width>51</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>1.0</string>
-            </property>
-           </widget>
-           <widget class="QLabel" name="label_11">
-            <property name="geometry">
-             <rect>
-              <x>70</x>
-              <y>70</y>
-              <width>171</width>
-              <height>191</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string/>
-            </property>
-            <property name="pixmap">
-             <pixmap>../img/CompassRose2.svg</pixmap>
-            </property>
-            <property name="scaledContents">
-             <bool>true</bool>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftN">
-            <property name="geometry">
-             <rect>
-              <x>140</x>
-              <y>40</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftNE">
-            <property name="geometry">
-             <rect>
-              <x>230</x>
-              <y>70</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftE">
-            <property name="geometry">
-             <rect>
-              <x>260</x>
-              <y>150</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftSE">
-            <property name="geometry">
-             <rect>
-              <x>220</x>
-              <y>230</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftS">
-            <property name="geometry">
-             <rect>
-              <x>140</x>
-              <y>270</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftSW">
-            <property name="geometry">
-             <rect>
-              <x>50</x>
-              <y>240</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftW">
-            <property name="geometry">
-             <rect>
-              <x>20</x>
-              <y>150</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QLineEdit" name="leDriftNW">
-            <property name="geometry">
-             <rect>
-              <x>50</x>
-              <y>70</y>
-              <width>31</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>12.5</string>
-            </property>
-           </widget>
-           <widget class="QPushButton" name="pbCheckRose">
-            <property name="geometry">
-             <rect>
-              <x>185</x>
-              <y>40</y>
-              <width>100</width>
-              <height>22</height>
-             </rect>
-            </property>
-            <property name="toolTip">
-             <string>Check that the eight directions sum to 100 %. If they do not, every value is scaled proportionally so the total becomes 100 %. Both . and , are accepted as decimal mark.</string>
-            </property>
-            <property name="text">
-             <string>Check sum</string>
-            </property>
-           </widget>
-           <widget class="QLabel" name="lblRoseSum">
-            <property name="geometry">
-             <rect>
-              <x>185</x>
-              <y>270</y>
-              <width>120</width>
-              <height>20</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>Sum: 100.0 %</string>
-            </property>
-           </widget>
+           <layout class="QGridLayout" name="gridRose" columnstretch="1,1,0,1,1">
+            <item row="0" column="0" colspan="3">
+             <widget class="QLabel" name="label_9">
+              <property name="text">
+               <string>Average drift speed (knots):</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="3" colspan="2" alignment="Qt::AlignLeft|Qt::AlignVCenter">
+             <widget class="QLineEdit" name="leDriftSpeed">
+              <property name="maximumSize">
+               <size>
+                <width>60</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <property name="text">
+               <string>1.0</string>
+              </property>
+             </widget>
+            </item>
+           <item row="1" column="2" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftN">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="3" colspan="2" alignment="Qt::AlignLeft|Qt::AlignVCenter">
+            <widget class="QPushButton" name="pbCheckRose">
+             <property name="toolTip">
+              <string>Check that the eight directions sum to 100 %. If they do not, every value is scaled proportionally so the total becomes 100 %. Both . and , are accepted as decimal mark.</string>
+             </property>
+             <property name="text">
+              <string>Check sum</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftNW">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="3" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftNE">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftW">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="2">
+            <widget class="QLabel" name="label_11">
+             <property name="minimumSize">
+              <size>
+               <width>150</width>
+               <height>165</height>
+              </size>
+             </property>
+             <property name="text">
+              <string/>
+             </property>
+             <property name="pixmap">
+              <pixmap>../img/CompassRose2.svg</pixmap>
+             </property>
+             <property name="scaledContents">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="4" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftE">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftSW">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="3" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftSE">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="2" alignment="Qt::AlignHCenter|Qt::AlignVCenter">
+            <widget class="QLineEdit" name="leDriftS">
+             <property name="minimumSize">
+              <size>
+               <width>55</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>60</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>12.5</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="3" colspan="2">
+            <widget class="QLabel" name="lblRoseSum">
+             <property name="text">
+              <string>Sum: 100.0 %</string>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="2">
+            <spacer name="roseSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>0</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
           </widget>
           <widget class="QWidget" name="tab_11">
            <attribute name="title">
@@ -350,7 +386,6 @@
          </widget>
         </item>
        </layout>
-      </widget>
      </widget>
      <widget class="QWidget" name="tab_2">
       <attribute name="title">

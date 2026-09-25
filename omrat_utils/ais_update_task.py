@@ -241,6 +241,10 @@ class AisUpdateTask(QgsTask):
             sd[f'u_p{j}'] = 0
         sd['ai1'] = 180
         sd['ai2'] = 180
+        # The leg now carries its own AIS traffic: it is no longer a copy.
+        # Cleared before ``_refresh_junction_registry`` so the junction
+        # defaults stop forcing continuation with the old source.
+        sd.pop('traffic_source', None)
 
     def _update_last_leg_display(self, omrat: Any) -> None:
         if not self.last_key or self.last_key not in self.results:
@@ -347,4 +351,10 @@ class AisUpdateTask(QgsTask):
             self._apply_leg_result(omrat, leg_key, res)
         self._update_last_leg_display(omrat)
         self._refresh_junction_registry(omrat)
+        qg = getattr(omrat, 'qgis_geoms', None)
+        if qg is not None and hasattr(qg, 'refresh_traffic_link_views'):
+            try:
+                qg.refresh_traffic_link_views()
+            except Exception:  # nosec B110 B112
+                pass
         self._prompt_remove_bad_legs(omrat)

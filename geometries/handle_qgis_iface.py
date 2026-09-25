@@ -19,7 +19,7 @@ from qgis.PyQt.QtWidgets import QTableWidgetItem, QPushButton
 
 
 from omrat_utils import PointTool
-from omrat_utils.copy_traffic import LOCK_KEY, SOURCE_KEY, is_locked, set_locked
+from omrat_utils.copy_traffic import LOCK_KEY, SOURCE_KEY, is_locked, release_copy, set_locked
 from omrat_utils.layer_styles import apply_stored_style
 from omrat_utils.leg_numbering import leg_name, max_leg_number, next_free_segment_id
 from omrat_utils.leg_sort import SORTABLE_COLUMNS, sort_segment_data
@@ -1085,10 +1085,36 @@ class HandleQGISIface:
         return item
 
     def set_traffic_locked(self, segment_id: int | str, locked: bool) -> None:
-        """Store the lock flag and mirror it into the route table."""
-        set_locked(self.omrat.segment_data, str(segment_id), locked)
+        """Store the lock flag and mirror it into the route table.
+        Unlocking a copy also releases its copy link (:meth:`_apply_lock`)."""
+        self._apply_lock(segment_id, locked)
         self.sync_lock_column(segment_id)
+
+    def _apply_lock(self, segment_id: int | str, locked: bool) -> str | None:
+        """Lock / unlock one leg.  Unlocking a copy drops its
+        ``traffic_source`` and re-derives the junctions it touches (the
+        link forced 100 % continuation there, see
+        ``geometries.junctions.linked_partners``).  Returns the released
+        source leg, or ``None``."""
+        seg = str(segment_id)
+        src = None
+        if locked:
+            set_locked(self.omrat.segment_data, seg, True)
+        else:
+            src = release_copy(self.omrat.segment_data, seg)
+        if src is not None:
+            handler = getattr(self.omrat, 'junctions', None)
+            if handler is not None:
+                try:
+                    # AIS-sourced junctions fall back to geometry (and are
+                    # re-counted by the next update); geometry ones are
+                    # recomputed without the link by the rebuild.
+                    handler.invalidate_legs([seg], self.omrat.segment_data)
+                    handler.rebuild_from_segments(self.omrat.segment_data, prefer_user=True)
+                except Exception:  # nosec B110 B112
+                    pass
         _refresh_link_views(self, 'refresh_traffic_link_views')
+        return src
 
     def sync_lock_column(self, segment_id: int | str) -> None:
         """Redraw the lock checkbox of one row from ``segment_data``."""
@@ -1813,13 +1839,17 @@ class HandleQGISIface:
         elif column == 8:  # AIS lock checkbox
             locked = item.checkState() == Qt.CheckState.Checked
             if locked != is_locked(self.omrat.segment_data, str(segment_id)):
-                set_locked(self.omrat.segment_data, str(segment_id), locked)
-                _refresh_link_views(self, 'refresh_traffic_link_views')
+                src = self._apply_lock(segment_id, locked)
+                msg = self.omrat.tr("Leg {leg} is now {state} for AIS updates.").format(
+                    leg=segment_id, state=self.omrat.tr("locked") if locked else self.omrat.tr("unlocked"),
+                )
+                if src is not None:
+                    msg += " " + self.omrat.tr(
+                        "Its link to leg {src} was removed; the next Update AIS replaces the copied traffic."
+                    ).format(src=src)
                 self._notify(
-                    self.omrat.tr("Leg {leg} is now {state} for AIS updates.").format(
-                        leg=segment_id, state=self.omrat.tr("locked") if locked else self.omrat.tr("unlocked"),
-                    ),
-                    duration=5,
+                    msg,
+                    duration=8 if src is not None else 5,
                 )
 
         elif column == 6:  # Tangent position (%)

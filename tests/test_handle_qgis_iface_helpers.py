@@ -477,6 +477,24 @@ class TestAisLockColumn:
         assert item.checkState() == Qt.CheckState.Unchecked
         assert bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
+    def test_unticking_a_copy_releases_its_link(self, hqi, two_legs):
+        from qgis.PyQt.QtCore import Qt
+        from omrat_utils.copy_traffic_dialog import apply_copy
+        from omrat_utils.traffic_links import build_links, status_suffix
+        tbl = two_legs
+        apply_copy(hqi.omrat, '77', ['78'])                     # locked copy 77 -> 78
+        sd = hqi.omrat.segment_data
+        assert sd['78']['traffic_source'] == '77'
+        assert status_suffix('78', sd) == '  [locked, copy of LEG_1_77]'
+        tbl.item(1, 8).setCheckState(Qt.CheckState.Unchecked)  # fires itemChanged
+        assert sd['78']['traffic_locked'] is False
+        assert 'traffic_source' not in sd['78']
+        assert status_suffix('78', sd) == ''
+        assert [lk for lk in build_links(sd) if lk.kind == 'copy'] == []
+        # Locking again does not invent a link.
+        tbl.item(1, 8).setCheckState(Qt.CheckState.Checked)
+        assert status_suffix('78', sd) == '  [locked]'
+
     def test_ticking_box_locks_leg(self, hqi, two_legs):
         from qgis.PyQt.QtCore import Qt
         tbl = two_legs

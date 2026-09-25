@@ -19,6 +19,7 @@ from omrat_utils.copy_traffic import (  # noqa: E402
     describe_targets,
     is_locked,
     locked_legs,
+    release_copy,
     set_locked,
     split_locked,
 )
@@ -171,3 +172,28 @@ class TestLock:
     def test_describe_targets(self, data):
         _traffic, segs = data
         assert describe_targets(['a', 'q'], segs) == 'LEG_5_12_a (a), q'
+
+
+class TestReleaseCopy:
+    """Unticking the AIS lock releases the copy: lock off, link gone."""
+
+    def test_unlocks_and_drops_the_link(self):
+        segs = {'d': {LOCK_KEY: True, SOURCE_KEY: 'a'}}
+        assert release_copy(segs, 'd') == 'a'
+        assert segs['d'][LOCK_KEY] is False
+        assert SOURCE_KEY not in segs['d']
+
+    def test_plain_locked_leg_has_nothing_to_release(self):
+        segs = {'d': {LOCK_KEY: True}}
+        assert release_copy(segs, 'd') is None
+        assert segs['d'][LOCK_KEY] is False
+
+    def test_unknown_leg(self):
+        assert release_copy({}, 'x') is None
+
+    def test_junction_link_goes_with_it(self):
+        from geometries.junctions import traffic_link_root
+        segs = {'a': {}, 'd': {LOCK_KEY: True, SOURCE_KEY: 'a'}}
+        assert traffic_link_root(segs, 'd') == 'a'
+        release_copy(segs, 'd')
+        assert traffic_link_root(segs, 'd') == 'd'

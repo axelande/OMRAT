@@ -1058,3 +1058,32 @@ class TestRunSqlShipTypeMap:
         ais_with_mocks.set_type_map(cfg)
         assert ais_with_mocks.type_map is cfg
         assert ais_with_mocks._imo_probe == {}
+
+
+
+class TestAisWriteClearsCopyLink:
+    """An AIS update that writes a leg gives it its own traffic, so the
+    leg is no longer a copy of anything."""
+
+    @staticmethod
+    def _apply(segment_data, key='d'):
+        from types import SimpleNamespace
+        import numpy as np
+        from omrat_utils.ais_update_task import AisUpdateTask
+        omrat = SimpleNamespace(segment_data=segment_data, traffic=SimpleNamespace(traffic_data={}))
+        task = SimpleNamespace(ais=SimpleNamespace(dist_data={}))
+        res = {'traffic': {'E': {}, 'W': {}}, 'line1': np.array([1.0, 3.0]), 'line2': np.array([])}
+        AisUpdateTask._apply_leg_result(task, omrat, key, res)
+        return omrat
+
+    def test_unlocked_copy_loses_its_link(self):
+        segs = {'d': {'traffic_source': 'a', 'traffic_locked': False}}
+        om = self._apply(segs)
+        assert 'traffic_source' not in segs['d']
+        assert om.traffic.traffic_data['d'] == {'E': {}, 'W': {}}
+
+    def test_locked_copy_is_left_alone(self):
+        segs = {'d': {'traffic_source': 'a', 'traffic_locked': True}}
+        om = self._apply(segs)
+        assert segs['d']['traffic_source'] == 'a'
+        assert 'd' not in om.traffic.traffic_data
