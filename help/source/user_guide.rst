@@ -78,6 +78,11 @@ naturally, so ``LEG_1_2`` comes before ``LEG_1_10`` and ``LEG_5_12_a``
 before ``LEG_5_12_b``.  The leg selector on the Traffic tab follows the
 same order, and so does the saved project.
 
+**Editing Width and Tangent (%).**  One click on a **Width** or
+**Tangent (%)** cell opens it for typing; press Enter to apply (Esc
+cancels).  The map redraws the tangent line and its distribution curves
+right away.  The other columns keep Qt's usual double-click.
+
 Digitising a route
 ------------------
 
@@ -165,6 +170,52 @@ crossing, the sub-legs start at 50 % again.
    You never need to save the *Tangent Line* layer's edits.  OMRAT
    discards the raw drag and redraws the line itself; the layer is a
    temporary memory layer that is rebuilt from the project file.
+
+.. _distribution-curves:
+
+Distribution curves on the tangent line
+---------------------------------------
+
+As in IWRAP, every tangent line also shows the leg's two lateral
+distributions, drawn to scale on the map.  They are always on and are part
+of the *Tangent Line* layer, so hiding that layer hides them too.
+
+.. image:: _static/images/tangent_distribution_curves.svg
+   :alt: A leg drawn northwards with its tangent line. The North going
+         curve has its peak east of the leg and bulges north; the South
+         going curve has its peak west of the leg and bulges south.
+   :width: 75%
+
+How to read them:
+
+* **Along the tangent line** the curve is the fitted distribution in
+  true scale: the peak sits where the ships actually pass.  The curve is
+  the one the calculation uses (up to three normal components plus the
+  uniform part, from the lateral distribution panel), not the raw AIS
+  histogram.
+* **Each direction bulges towards the side its ships sail to.**
+  Direction 1 (the drawn direction, *Start -> End*) bulges towards the
+  leg's end point and is **blue**.  Direction 2 bulges towards the start
+  point and is **green**, the same colours as the distribution plot.  In
+  the picture the North going ships keep to their starboard side (east)
+  and the South going ships to theirs (west), as in right-hand traffic.
+* **Heights share one scale per leg.**  The taller of the two peaks is
+  1/4 of the leg width and both curves have the same area, so a narrow
+  distribution stands out as a tall, thin curve.  The height carries no
+  ship count.
+* The curves span the tangent line.  A tail that reaches beyond the leg
+  width is cut off where the tangent line ends.
+
+The curves follow every change: an edit in the distribution panel, a new
+width or tangent position, **Update AIS**, **Copy traffic**, a vertex
+drag and a project load.  A leg without a distribution (all weights 0)
+has no curves.  Dragging a curve does nothing; it snaps back.
+
+In the **Layers** panel the *Tangent Line* layer has three legend entries:
+*Tangent line*, *Lateral distribution, direction 1 (drawn direction)* and
+*Lateral distribution, direction 2 (reverse)*.  Restyle them there like
+any rule-based layer; the style is saved in the project with the other
+layer styles.
 
 .. _copy-traffic:
 
@@ -258,6 +309,17 @@ and allision or drifting towards the farm).
 drawn dashed, but is left out of the calculation, and its ships are moved
 onto the legs you choose.  The total number of ships is unchanged, and
 **Restore leg** brings the baseline back at any time.
+
+.. tip::
+
+   **Run Copy traffic first.**  The first time you open **Suppress
+   leg...**, a warning recommends it and offers to open **Copy
+   traffic...**.  The warning is shown once per computer.  Copy the
+   traffic of each route's cleanest leg onto its other sub-legs (see
+   :ref:`copy-traffic`).  The sub-legs then carry the same traffic and
+   are linked as one route at their junctions.  This matters most for the
+   *detour* route: the moved ships are added to its legs, so they should
+   start from consistent traffic.
 
 Copy, move or suppress together?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -427,16 +489,22 @@ The four route-7 legs carry the *same* ships.  If each of them had
 targets, route 2 would receive those ships four times (right-hand
 picture).  So:
 
+#. Before you start, run **Copy traffic...** along route 2, the detour,
+   so its sub-legs carry the traffic of its cleanest leg (in this project
+   ``LEG_2_3_b`` and ``LEG_2_3_c`` are locked copies of ``LEG_2_3_a``).
 #. Pick the leg with the cleanest AIS sample as the **lead**, usually the
    one furthest from any crossing.  Here that is ``LEG_7_3_b``, with 497
    ships/year West going and 444 East going.
-#. Open **Suppress leg...**, pick ``LEG_7_3_b`` and add eight rows: both
-   directions, 100 %, onto each of the four route-2 legs (rule 1: route 2
-   is one detour in a row).  **To direction** is filled in from the leg
-   bearings; check it once.
-#. In **Suppress together with this leg**, tick ``LEG_7_3_c``,
+#. Open **Suppress leg...** and pick ``LEG_7_3_b``.
+#. In **1. Suppress together with this leg**, tick ``LEG_7_3_c``,
    ``LEG_7_3_a`` and ``LEG_7_2``.
+#. In **2. Where the ships go**, add eight rows: both directions, 100 %,
+   onto each of the four route-2 legs (rule 1: route 2 is one detour in a
+   row).  **To direction** is filled in from the leg bearings; check it
+   once.
 #. Click **Suppress & move traffic**.
+
+The dialog then looks like the picture in the next section.
 
 Result:
 
@@ -465,9 +533,10 @@ Result:
 
 Things you do **not** need to do:
 
-* **Copy the lead's traffic onto the other route-7 legs first.**  A leg
-  suppressed together with the lead is never read, so its traffic does
-  not matter.
+* **Copy the lead's traffic onto the other route-7 legs to change the
+  result.**  A leg suppressed together with the lead is never read, so its
+  traffic does not matter.  Copying along the *detour* route (step 1) is
+  what counts.
 * **Unlock the target legs.**  A lock only stops **Update AIS** from
   overwriting a leg's *stored* traffic.  The move happens during the
   calculation on a copy of the data, so locked legs (such as copies) are
@@ -478,29 +547,45 @@ Things you do **not** need to do:
 back.  If you open one of the other route-7 legs in the dialog, it tells
 you which lead it belongs to.
 
+.. _suppress-dialog:
+
 The dialog, field by field
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+.. figure:: _static/screenshots/ui_suppress_leg_dialog.png
+   :width: 85%
+   :alt: The Suppress leg dialog filled in for Example 3: LEG_7_3_b as
+         the lead, three route-7 legs ticked under "Suppress together
+         with this leg" and eight 100 % rows onto the route-2 legs.
+
+   **Suppress leg...** filled in for Example 3.  Top: the lead leg and its
+   ships per direction.  Group 1: the rest of route 7, suppressed with
+   it.  Group 2: where the ships go.
+
 The dialog does not block QGIS, so you can pan the map while you fill it
-in.
+in.  Work through it from the top:
 
 * **Leg to suppress** -- the leg whose ships are moved (the lead, for a
   whole route).  Its ships per year per direction are shown underneath.
-* **Target rows** (**Add target** / **Remove target**), one per target leg
-  and direction:
+  If the leg is already suppressed together with another lead, a note
+  says so.
+* **1. Suppress together with this leg** -- tick the other legs of the
+  same route (rule 2).  Leave it empty when only this leg is suppressed.
+  Legs already suppressed elsewhere are greyed out.  A leg cannot be both
+  ticked here and a target.
+* **2. Where the ships go (targets)** -- one row per target leg and
+  direction (**Add target** / **Remove target**):
 
   * **From direction** -- which of this leg's two directions is moved.
   * **To leg** -- a leg the ships sail instead.  Suppressed legs are not
-    offered.
+    offered.  The label shows where each leg's traffic comes from, for
+    example ``[locked, copy of LEG_2_3_a]``.
   * **To direction** -- the direction on the target leg.  It is
     pre-filled with the one pointing the same way, so a target drawn in
     the opposite direction is handled for you.
   * **Share (%)** -- the percentage of the *From direction* ships that
     sail this target leg.
 
-* **Suppress together with this leg** -- the other legs of the same
-  route (rule 2).  Legs already suppressed elsewhere are greyed out.  A
-  leg cannot be both a target and ticked here.
 * **Suppress & move traffic** -- stores everything and dashes the legs.
   If a direction that carries ships has no target, you are asked first,
   because those ships would then drop out of the calculation.
@@ -644,6 +729,12 @@ in the UI:
   edit how traffic distributes at each junction.  Rows default from
   geometry (deflection-angle heuristic) and are overwritten by AIS
   counts when a database is connected; user edits stick.
+* After **Update all distributions** the editor **opens by itself** when
+  at least one junction has three or more legs, that is, where legs
+  merge, diverge or cross.  It shows the first such junction and zooms
+  the map to it; the message bar says how many there are.  A plain bend
+  (two legs) always continues 100 % and does not open it.  The per-leg
+  **Update AIS** button never opens it.
 
 See :ref:`junctions` for the math and the AIS-vs-geometry-vs-user
 hierarchy.

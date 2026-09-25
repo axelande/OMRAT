@@ -193,3 +193,50 @@ def test_traffic_links_button_is_checkable_and_wired(hqi):
     btn = getattr(hqi.omrat.main_widget, 'pbTrafficLinks', None)
     assert btn is not None and btn.isCheckable()
     assert btn.receivers(btn.toggled) > 0
+
+
+def test_together_list_comes_before_the_targets(hqi, legs):
+    from omrat_utils import suppress_leg_dialog
+    suppress_leg_dialog.run(hqi.omrat)
+    dlg = hqi.omrat._suppress_leg_dlg
+    layout = dlg.layout()
+    order = [layout.itemAt(i).widget() for i in range(layout.count())]
+    assert order.index(dlg.grp_with) < order.index(dlg.grp_targets)
+    assert dlg.lst_with.parent() is dlg.grp_with
+    assert dlg.table.parent() is dlg.grp_targets
+
+
+class _FakeSettings:
+    def __init__(self, value=None):
+        self.store = {} if value is None else {'omrat/suppress_leg_copy_tip_shown': value}
+
+    def value(self, key, default=None):
+        return self.store.get(key, default)
+
+    def setValue(self, key, value):
+        self.store[key] = value
+
+
+def test_copy_tip_is_shown_once_and_can_open_copy_traffic(hqi, legs, monkeypatch):
+    from qgis.PyQt.QtWidgets import QMessageBox
+    from omrat_utils import copy_traffic_dialog, suppress_leg_dialog
+    shown, opened = [], []
+
+    def _exec(box):
+        shown.append(box.text())
+        box_buttons = [b for b in box.buttons() if b.text().startswith('Open Copy traffic')]
+        box._clicked = box_buttons[0]
+        return 0
+
+    monkeypatch.setattr(QMessageBox, 'exec', _exec)
+    monkeypatch.setattr(QMessageBox, 'clickedButton', lambda box: box._clicked)
+    monkeypatch.setattr(copy_traffic_dialog, 'run', lambda om: opened.append(om))
+    settings = _FakeSettings()
+    assert suppress_leg_dialog.maybe_show_copy_tip(hqi.omrat, settings=settings) is True
+    assert len(shown) == 1 and 'Copy traffic' in shown[0]
+    assert opened == [hqi.omrat]
+    # Second time: nothing.
+    assert suppress_leg_dialog.maybe_show_copy_tip(hqi.omrat, settings=settings) is False
+    assert len(shown) == 1
+    # Windows QSettings returns the flag as the string "true".
+    assert suppress_leg_dialog.maybe_show_copy_tip(hqi.omrat, settings=_FakeSettings('true')) is False

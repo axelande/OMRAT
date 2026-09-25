@@ -230,13 +230,19 @@ def apply_styles(omrat: "OMRAT", styles: dict[str, Any] | None) -> dict[str, int
             if apply_style(layer, qml):
                 n += 1
         applied[key] = n
-    if 'legs' in clean:
-        geoms = getattr(omrat, 'qgis_geoms', None)
-        if geoms is not None and hasattr(geoms, 'refresh_suppressed_styles'):
-            try:
-                geoms.refresh_suppressed_styles()
-            except Exception:  # nosec B110 B112
-                pass
+    geoms = getattr(omrat, 'qgis_geoms', None)
+    if 'legs' in clean and geoms is not None and hasattr(geoms, 'refresh_suppressed_styles'):
+        try:
+            geoms.refresh_suppressed_styles()
+        except Exception:  # nosec B110 B112
+            pass
+    if 'tangent' in clean and geoms is not None and hasattr(geoms, 'ensure_tangent_renderer'):
+        # A style saved before the distribution curves existed is a
+        # single-symbol one: keep its tangent symbol, add the curve rules.
+        try:
+            geoms.ensure_tangent_renderer()
+        except Exception:  # nosec B110 B112
+            pass
     return applied
 
 

@@ -502,6 +502,7 @@ class AIS:
             var_defaults=dict(self.omrat.traffic._var_cell_defaults),
             leg_dirs=leg_dirs,
             fetch_junctions=fetch_junctions,
+            bulk=key is None,
         )
         btn = getattr(self.omrat.main_widget, 'pbUpdateAIS', None)
         if btn is not None:

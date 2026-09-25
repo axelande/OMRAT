@@ -631,3 +631,107 @@ class TestRouteTableSorting:
         header = hqi.omrat.main_widget.twRouteList.horizontalHeader()
         header.sectionClicked.emit(2)
         assert self._names(hqi)[0] == 'LEG_1_1'
+
+
+class TestSingleClickEdit:
+    """Width (col 5) and Tangent % (col 6) open their editor on one click."""
+
+    def test_width_and_tangent_edit_on_a_single_click(self, hqi, leg77):
+        from qgis.PyQt.QtWidgets import QAbstractItemView
+        from omrat_utils.gather_data import GatherData
+        tbl = hqi.omrat.main_widget.twRouteList
+        hqi.omrat.reset_route_table()
+        hqi.suspend_route_table_signal()
+        GatherData(hqi.omrat).populate_segment_tbl({'77': hqi.omrat.segment_data['77']}, tbl)
+        for col in (5, 6):
+            tbl.reset()
+            tbl.cellClicked.emit(0, col)
+            assert tbl.state() == QAbstractItemView.State.EditingState, col
+        tbl.reset()
+        tbl.cellClicked.emit(0, 2)                      # Leg_name keeps double-click
+        assert tbl.state() != QAbstractItemView.State.EditingState
+        tbl.reset()
+
+
+class TestDistributionCurves:
+    """IWRAP-style lateral distribution curves on the Tangent Line layer.
+
+    ``leg77`` is drawn eastwards at 55 N, 2 km wide, tangent at 14.1 E.
+    Direction 1 (East going) keeps to its starboard (south), direction 2
+    (West going) to the north."""
+
+    @pytest.fixture
+    def curves(self, hqi, leg77):
+        sd = hqi.omrat.segment_data['77']
+        sd.update({'mean1_1': -400.0, 'std1_1': 150.0, 'weight1_1': 100,
+                   'mean2_1': 300.0, 'std2_1': 250.0, 'weight2_1': 100, 'u_p1': 0, 'u_p2': 0})
+        hqi.refresh_distribution_curves(['77'], force=True)
+        return {f['type']: f for f in hqi.tangent_layer.getFeatures() if f['type'].endswith(' 77')}
+
+    def test_one_tangent_and_two_curves(self, curves):
+        assert sorted(curves) == ['Distribution 1 77', 'Distribution 2 77', 'Tangent Line 77']
+
+    def test_curves_start_and_end_on_the_tangent_line(self, curves):
+        tangent = curves['Tangent Line 77'].geometry().asPolyline()
+        for key in ('Distribution 1 77', 'Distribution 2 77'):
+            pts = curves[key].geometry().asPolyline()
+            assert pts[0].distance(tangent[0]) < 1e-7
+            assert pts[-1].distance(tangent[-1]) < 1e-7
+
+    def test_each_direction_on_its_own_side(self, curves):
+        d1 = curves['Distribution 1 77'].geometry().asPolyline()
+        d2 = curves['Distribution 2 77'].geometry().asPolyline()
+        tip1 = max(d1, key=lambda p: p.x())            # bulges towards End_Point (east)
+        tip2 = min(d2, key=lambda p: p.x())            # bulges towards Start_Point (west)
+        assert tip1.x() > 14.1 and tip1.y() < 55.0     # East going ships keep south (starboard)
+        assert tip2.x() < 14.1 and tip2.y() > 55.0
+        # Shared scale: the narrower direction 1 peaks higher (1/4 of 2 km = 500 m).
+        assert (tip1.x() - 14.1) > (14.1 - tip2.x())
+
+    def test_redraw_keeps_one_pair(self, hqi, curves):
+        from qgis.core import QgsPointXY
+        hqi.create_offset_lines(QgsPointXY(14.0, 55.0), QgsPointXY(14.2, 55.0), 1000.0, 77)
+        types = [f['type'] for f in hqi.tangent_layer.getFeatures() if f['type'].endswith(' 77')]
+        assert sorted(types) == ['Distribution 1 77', 'Distribution 2 77', 'Tangent Line 77']
+
+    def test_distribution_edit_redraws_and_unchanged_is_skipped(self, hqi, curves):
+        before = curves['Distribution 1 77'].geometry().asWkt()
+        hqi.refresh_distribution_curves(['77'])        # nothing changed: kept as it is
+        same = next(f for f in hqi.tangent_layer.getFeatures() if f['type'] == 'Distribution 1 77')
+        assert same.id() == curves['Distribution 1 77'].id()
+        hqi.omrat.segment_data['77']['mean1_1'] = -700.0
+        hqi.refresh_distribution_curves(['77'])
+        moved = next(f for f in hqi.tangent_layer.getFeatures() if f['type'] == 'Distribution 1 77')
+        assert moved.geometry().asWkt() != before
+
+    def test_removing_the_tangent_removes_the_curves(self, hqi, curves):
+        hqi.remove_existing_tangent(77)
+        assert not [f for f in hqi.tangent_layer.getFeatures() if f['type'].endswith(' 77')]
+
+    def test_renderer_keeps_the_tangent_and_colours_the_curves(self, hqi, curves):
+        from qgis.core import QgsRuleBasedRenderer
+        renderer = hqi.tangent_layer.renderer()
+        assert isinstance(renderer, QgsRuleBasedRenderer)
+        labels = [r.label() for r in renderer.rootRule().children()]
+        assert labels == [hqi.TANGENT_RULE_LABEL, hqi.CURVE_RULE_LABELS[1], hqi.CURVE_RULE_LABELS[2]]
+        # Applying a (pre-curves) single-symbol project style keeps the rules.
+        from qgis.core import QgsLineSymbol, QgsSingleSymbolRenderer
+        hqi.tangent_layer.setRenderer(QgsSingleSymbolRenderer(QgsLineSymbol()))
+        hqi.ensure_tangent_renderer()
+        assert isinstance(hqi.tangent_layer.renderer(), QgsRuleBasedRenderer)
+
+    def test_dragging_a_curve_snaps_back(self, hqi, curves):
+        from qgis.core import QgsGeometry
+        feat = curves['Distribution 1 77']
+        original = feat.geometry().asWkt()
+        hqi.tangent_layer.startEditing()
+        hqi.tangent_layer.changeGeometry(feat.id(), QgsGeometry.fromWkt('LINESTRING(0 0, 1 1)'))
+        now = next(f for f in hqi.tangent_layer.getFeatures() if f['type'] == 'Distribution 1 77')
+        assert now.geometry().asWkt() == original
+
+    def test_leg_without_distribution_has_no_curves(self, hqi, leg77):
+        for k in ('weight1_1', 'weight2_1'):
+            hqi.omrat.segment_data['77'][k] = 0
+        hqi.refresh_distribution_curves(['77'], force=True)
+        types = [f['type'] for f in hqi.tangent_layer.getFeatures() if f['type'].endswith(' 77')]
+        assert types == ['Tangent Line 77']

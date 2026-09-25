@@ -30,6 +30,7 @@ class AisUpdateTask(QgsTask):
         var_defaults: dict[str, Any],
         leg_dirs: dict[str, list[str]],
         fetch_junctions: bool = True,
+        bulk: bool = False,
     ) -> None:
         super().__init__("OMRAT: Fetching AIS data", QgsTask.Flag.CanCancel)
         self.ais = ais
@@ -45,6 +46,10 @@ class AisUpdateTask(QgsTask):
         # refresh): the junction pass is then skipped and the stored
         # matrices are kept by ``_refresh_junction_registry``.
         self.fetch_junctions = fetch_junctions
+        # True for **Update all distributions** (``update_legs()`` without
+        # a leg): the junction matrix editor opens afterwards when legs
+        # merge or cross somewhere.
+        self.bulk = bulk
 
         # Populated in run(), consumed in finished()
         self.results: dict[str, dict] = {}
@@ -279,6 +284,18 @@ class AisUpdateTask(QgsTask):
         except Exception as exc:
             QgsMessageLog.logMessage(f"Junction transition refresh skipped: {exc}", "OMRAT", Qgis.MessageLevel.Warning)
 
+    @staticmethod
+    def _open_junction_matrix(omrat: Any) -> None:
+        """After **Update all distributions**: open the junction matrix
+        editor on the first junction where legs merge or cross, so the
+        freshly counted shares are reviewed.  Plain bends (two legs) need
+        no review and do not open it."""
+        try:
+            from omrat_utils.junction_matrix_dialog import open_after_update
+            open_after_update(omrat)
+        except Exception as exc:  # nosec B110 - never fail the AIS update on this
+            QgsMessageLog.logMessage(f"Junction matrix not opened: {exc}", "OMRAT", Qgis.MessageLevel.Warning)
+
     def _prompt_remove_bad_legs(self, omrat: Any) -> None:
         """Ask the user whether to remove legs that had invalid geometry."""
         if not self.bad_legs:
@@ -355,6 +372,9 @@ class AisUpdateTask(QgsTask):
         if qg is not None and hasattr(qg, 'refresh_traffic_link_views'):
             try:
                 qg.refresh_traffic_link_views()
+                qg.refresh_distribution_curves(list(self.results))
             except Exception:  # nosec B110 B112
                 pass
         self._prompt_remove_bad_legs(omrat)
+        if self.bulk:
+            self._open_junction_matrix(omrat)

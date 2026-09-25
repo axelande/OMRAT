@@ -479,6 +479,10 @@ class GatherData:
             geoms.refresh_suppressed_styles()
         if geoms is not None and hasattr(geoms, 'refresh_traffic_links'):
             geoms.refresh_traffic_links()
+        if geoms is not None and hasattr(geoms, 'refresh_distribution_curves'):
+            # The tangents were drawn by load_lines *before* the new
+            # segment_data was assigned, so redraw every curve now.
+            geoms.refresh_distribution_curves(force=True)
 
     def populate_ship_categories(self, ship_categories: dict[str, Any]):
         """Populate ship types and length intervals into the ship categories widget.

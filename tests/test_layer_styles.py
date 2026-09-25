@@ -43,13 +43,23 @@ SEG = {
 }
 
 
+def _main_symbol(layer):
+    """The single symbol, or -- for the Tangent Line layer, which is
+    rule-based since it also carries the distribution curves -- the
+    symbol of its first rule (the tangent line itself)."""
+    renderer = layer.renderer()
+    if hasattr(renderer, 'symbol'):
+        return renderer.symbol()
+    return renderer.rootRule().children()[0].symbol()
+
+
 def _leg_color(layer) -> str:
-    return layer.renderer().symbol().color().name()
+    return _main_symbol(layer).color().name()
 
 
 def _set_leg_color(layer, hex_color: str, width: float | None = None) -> None:
     from qgis.PyQt.QtGui import QColor
-    sym = layer.renderer().symbol()
+    sym = _main_symbol(layer)
     sym.setColor(QColor(hex_color))
     if width is not None:
         sym.setWidth(width)

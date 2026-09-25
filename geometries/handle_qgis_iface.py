@@ -126,6 +126,9 @@ class HandleQGISIface:
         self._links_shown = False
         self._link_bands: list[QgsRubberBand] = []
         self._highlight_seg: str | None = None
+        # What each leg's distribution curves were last drawn from
+        # (geometries/distribution_curves.signature), to skip redraws.
+        self._curve_sig: dict[str, tuple] = {}
         # Re-entrancy guards: our own tangent redraws / table writes must
         # not be mistaken for user edits.
         self._tangent_guard = False
@@ -463,7 +466,8 @@ class HandleQGISIface:
                 pass
         self.vector_layers = []
 
-        # Remove tangent layer
+        # Remove tangent layer (the distribution curves live in it)
+        self._curve_sig = {}
         if self.tangent_layer is not None:
             try:
                 QgsProject.instance().removeMapLayer(self.tangent_layer.id())
@@ -1408,8 +1412,17 @@ class HandleQGISIface:
         except Exception:  # nosec B110 B112
             pass
 
+    #: Route-table columns that open their editor on a single click
+    #: (Width, Tangent %); the others keep Qt's double-click default.
+    SINGLE_CLICK_EDIT_COLUMNS = (5, 6)
+
     def on_route_table_cell_clicked(self, row: int, column: int):
         """Called when any cell in the route table is clicked."""
+        table = self.omrat.main_widget.twRouteList
+        if column in HandleQGISIface.SINGLE_CLICK_EDIT_COLUMNS:
+            cell = table.item(row, column)
+            if cell is not None and bool(cell.flags() & Qt.ItemFlag.ItemIsEditable):
+                table.editItem(cell)
         segment_id_item = self.omrat.main_widget.twRouteList.item(row, 0)
         if segment_id_item is not None:
             try:
@@ -1529,6 +1542,7 @@ class HandleQGISIface:
             # edit and snap the line back onto the leg.
             self.tangent_layer.geometryChanged.connect(self._on_tangent_geometry_changed)
             apply_stored_style(self.omrat, 'tangent', self.tangent_layer)
+            self.ensure_tangent_renderer()
         self.tangent_layer.startEditing()
 
     def ensure_tangent_fields(self):
@@ -1565,7 +1579,13 @@ class HandleQGISIface:
         return mid_utm, transform_to_utm, transform_to_canvas
 
     def remove_existing_tangent(self, segment_id: int):
-        ids = [f.id() for f in self.tangent_layer.getFeatures() if f["type"] == f"Tangent Line {segment_id}"]
+        """Delete leg ``segment_id``'s tangent line *and* its two
+        distribution curves (they are redrawn with the tangent)."""
+        wanted = {f"Tangent Line {segment_id}"} | {
+            self._curve_type(d, segment_id) for d in (1, 2)
+        }
+        ids = [f.id() for f in self.tangent_layer.getFeatures() if f["type"] in wanted]
+        self._curve_sig.pop(str(segment_id), None)
         if not ids:
             return
         # Use the data provider directly — consistent with add_tangent_feature
@@ -1620,6 +1640,7 @@ class HandleQGISIface:
         tangent_end = to_canvas.transform(tangent_end_utm)
 
         self.add_tangent_feature(tangent_start, tangent_end, segment_id)
+        self._add_distribution_curves(segment_id, mid_utm, start_utm, end_utm, to_canvas, 2.0 * offset_distance)
         self.tangent_layer.commitChanges()
         self.tangent_layer.triggerRepaint()
 
@@ -1729,9 +1750,17 @@ class HandleQGISIface:
         try:
             feat = self.tangent_layer.getFeature(fid)
             segment_id = self._segment_id_from_tangent_type(feat['type'])
+            curve_seg = self._segment_id_from_curve_type(feat['type'])
         except Exception:  # nosec B110 B112
             return
         if segment_id is None:
+            if curve_seg is not None:
+                # A distribution curve is drawn from the data; a drag on
+                # it means nothing, so it snaps back.
+                if getattr(self.omrat, 'testing', False):
+                    self._discard_curve_edit(curve_seg)
+                else:
+                    QTimer.singleShot(0, lambda: self._discard_curve_edit(curve_seg))
             return
         t = self.tangent_fraction_from_geometry(segment_id, geom)
         if t is None:
@@ -1740,6 +1769,136 @@ class HandleQGISIface:
             self._apply_tangent_drag(segment_id, t)
         else:
             QTimer.singleShot(0, lambda: self._apply_tangent_drag(segment_id, t))
+
+    # ------------------------------------------------------------------
+    # Lateral distribution curves on the tangent line (IWRAP style,
+    # geometries/distribution_curves.py)
+    # ------------------------------------------------------------------
+
+    TANGENT_RULE_LABEL = 'Tangent line'
+    CURVE_RULE_LABELS = {1: 'Lateral distribution, direction 1 (drawn direction)',
+                         2: 'Lateral distribution, direction 2 (reverse)'}
+    CURVE_COLOURS = {1: '#1f5fd6', 2: '#1a9641'}   # blue / green like the Distributions plot
+
+    @staticmethod
+    def _curve_type(direction: int, segment_id: int | str) -> str:
+        """``type`` attribute of a curve feature: ``'Distribution 1 12'``."""
+        return f"Distribution {direction} {segment_id}"
+
+    @staticmethod
+    def _segment_id_from_curve_type(type_text: object) -> str | None:
+        """``'Distribution 2 12' -> '12'``; ``None`` for anything else."""
+        if not isinstance(type_text, str) or not type_text.startswith('Distribution '):
+            return None
+        parts = type_text.split(' ')
+        return parts[2] if len(parts) == 3 and parts[1] in ('1', '2') and parts[2] else None
+
+    def ensure_tangent_renderer(self) -> None:
+        """Give the Tangent Line layer a rule-based renderer: the tangent
+        keeps its (stored) symbol, the two curves are blue / green.  A
+        project style that already has these rules is left alone."""
+        from qgis.core import QgsRuleBasedRenderer
+        layer = self.tangent_layer
+        if layer is None:
+            return
+        renderer = layer.renderer()
+        wanted = {self.TANGENT_RULE_LABEL, *self.CURVE_RULE_LABELS.values()}
+        base = None
+        if isinstance(renderer, QgsRuleBasedRenderer):
+            children = renderer.rootRule().children()
+            if wanted <= {rule.label() for rule in children}:
+                return
+            base = next((rule.symbol() for rule in children if rule.symbol() is not None), None)
+        elif isinstance(renderer, QgsSingleSymbolRenderer):
+            base = renderer.symbol()
+        base = base.clone() if base is not None else QgsLineSymbol()
+        root = QgsRuleBasedRenderer.Rule(None)
+        root.appendChild(QgsRuleBasedRenderer.Rule(
+            base, 0, 0, "\"type\" LIKE 'Tangent Line %'", self.TANGENT_RULE_LABEL))
+        for d, label in self.CURVE_RULE_LABELS.items():
+            sym = QgsLineSymbol()
+            sym.setColor(QColor(self.CURVE_COLOURS[d]))
+            sym.setWidth(0.5)
+            root.appendChild(QgsRuleBasedRenderer.Rule(
+                sym, 0, 0, f"\"type\" LIKE 'Distribution {d} %'", label))
+        layer.setRenderer(QgsRuleBasedRenderer(root))
+        layer.triggerRepaint()
+
+    def _add_distribution_curves(
+        self, segment_id: int | str, mid_utm: QgsPointXY, start_utm: QgsPointXY, end_utm: QgsPointXY,
+        to_canvas: QgsCoordinateTransform, width: float,
+    ) -> None:
+        """Add leg ``segment_id``'s two curves to the tangent layer (the
+        caller has removed the old ones)."""
+        from geometries.distribution_curves import curve_points, curve_profiles, signature
+        seg_key = str(segment_id)
+        seg = (getattr(self.omrat, 'segment_data', None) or {}).get(seg_key)
+        dx, dy = end_utm.x() - start_utm.x(), end_utm.y() - start_utm.y()
+        length = (dx ** 2 + dy ** 2) ** 0.5
+        if not isinstance(seg, dict) or length < 1e-9:
+            return
+        unit = (dx / length, dy / length)
+        feats = []
+        for d, profile in curve_profiles(seg, width).items():
+            pts = curve_points((mid_utm.x(), mid_utm.y()), unit, profile, d)
+            canvas_pts = [to_canvas.transform(QgsPointXY(x, y)) for x, y in pts]
+            fet = QgsFeature()
+            fet.setGeometry(QgsGeometry.fromPolylineXY(canvas_pts))
+            fet.setAttributes([self._curve_type(d + 1, segment_id)])
+            feats.append(fet)
+        if feats:
+            self.tangent_layer.dataProvider().addFeatures(feats)
+        self._curve_sig[seg_key] = signature(
+            seg, width, seg.get(TANGENT_POS_KEY), (start_utm.x(), start_utm.y(), end_utm.x(), end_utm.y()))
+
+    def refresh_distribution_curves(self, segment_ids=None, *, force: bool = False) -> None:
+        """Redraw the curves of ``segment_ids`` (default: every leg) from
+        ``segment_data``.  Legs whose distribution, width, tangent position
+        and ends are unchanged are skipped unless ``force``."""
+        from geometries.distribution_curves import signature
+        if self.tangent_layer is None or not self._tangent_layer_in_project():
+            return
+        segs = getattr(self.omrat, 'segment_data', None) or {}
+        ids = [str(s) for s in (segs.keys() if segment_ids is None else segment_ids)]
+        changed = False
+        for seg_key in ids:
+            ends = self._leg_endpoints(seg_key)
+            seg = segs.get(seg_key)
+            if ends is None or not isinstance(seg, dict):
+                continue
+            start, end, width = ends
+            t = self.stored_tangent_pos(seg_key)
+            mid_utm, to_utm, to_canvas = self.calculate_midpoint_utm(start, end, t)
+            start_utm, end_utm = to_utm.transform(start), to_utm.transform(end)
+            sig = signature(seg, width, seg.get(TANGENT_POS_KEY),
+                            (start_utm.x(), start_utm.y(), end_utm.x(), end_utm.y()))
+            if not force and self._curve_sig.get(seg_key) == sig:
+                continue
+            old = [f.id() for f in self.tangent_layer.getFeatures()
+                   if f["type"] in {self._curve_type(1, seg_key), self._curve_type(2, seg_key)}]
+            if old:
+                self.tangent_layer.dataProvider().deleteFeatures(old)
+            self._add_distribution_curves(seg_key, mid_utm, start_utm, end_utm, to_canvas, width)
+            changed = True
+        if changed:
+            self.tangent_layer.triggerRepaint()
+
+    def _discard_curve_edit(self, segment_id: str) -> None:
+        """Throw away a user edit of a curve feature and redraw it."""
+        layer = self.tangent_layer
+        if layer is None:
+            return
+        self._tangent_guard = True
+        try:
+            try:
+                if layer.isEditable():
+                    layer.rollBack()
+                layer.startEditing()
+            except RuntimeError:
+                return
+            self.refresh_distribution_curves([segment_id], force=True)
+        finally:
+            self._tangent_guard = False
 
     def _apply_tangent_drag(self, segment_id: int, tangent_pos: float) -> None:
         """Discard the user's raw edit and redraw the tangent at ``tangent_pos``."""

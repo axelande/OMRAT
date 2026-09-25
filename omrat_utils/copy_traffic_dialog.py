@@ -119,6 +119,8 @@ def apply_copy(
             geoms.sync_lock_column(dst)
     if geoms is not None and hasattr(geoms, 'refresh_traffic_link_views'):
         geoms.refresh_traffic_link_views()
+    if geoms is not None and hasattr(geoms, 'refresh_distribution_curves'):
+        geoms.refresh_distribution_curves(done)
 
     # Traffic tab: same dict object, but the direction combo and the
     # matrix must be re-rendered if the shown leg was a target.

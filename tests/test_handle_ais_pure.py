@@ -952,6 +952,18 @@ class TestUpdateLegsSkipsLocked:
             ais_with_mocks.update_legs()
         assert sorted(submitted[0]['legs']) == ['L1', 'L2']
 
+    def test_only_update_all_is_a_bulk_update(self, ais_with_mocks, monkeypatch):
+        """``bulk`` makes the task open the junction matrix editor afterwards."""
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+        segs = {'L1': {'Dirs': ['E', 'W']}, 'L2': {'Dirs': ['E', 'W']}}
+        submitted = self._setup(ais_with_mocks, monkeypatch, segs)
+        monkeypatch.setattr(ais_with_mocks, 'junction_pass_needed', lambda: True)
+        with patch.object(mod, 'QMessageBox'):
+            ais_with_mocks.update_legs()          # Update all distributions
+            ais_with_mocks.update_legs('L1')      # the per-leg Update AIS button
+        assert [kw['bulk'] for kw in submitted] == [True, False]
+
 
 # ---------------------------------------------------------------------------
 # Custom ship-type mapping (IMO / MMSI -> OMRAT category) in run_sql

@@ -196,6 +196,30 @@ class JunctionMatrixDialog(QDialog):
 
     # ------------------------------------------------------------------
 
+    def reload(self) -> None:
+        """Re-read the registry (it may have been rebuilt since the dialog
+        opened, e.g. by **Update all distributions**)."""
+        segment_data = getattr(self.omrat, 'segment_data', None) or {}
+        self._name_for = build_leg_name_resolver(segment_data)
+        self.cmb.blockSignals(True)
+        self._populate_combo()
+        self.cmb.blockSignals(False)
+        if self._junction_ids:
+            self.cmb.setCurrentIndex(0)
+            self._render_for_index(0)
+
+    def select_junction(self, junction_id: str) -> bool:
+        """Show ``junction_id`` (and zoom to it); ``False`` if unknown."""
+        if junction_id not in self._junction_ids:
+            return False
+        index = self._junction_ids.index(junction_id)
+        if self.cmb.currentIndex() == index:
+            self._render_for_index(index)
+            self._zoom_to_junction(index)
+        else:
+            self.cmb.setCurrentIndex(index)      # renders + zooms
+        return True
+
     def _populate_combo(self) -> None:
         self.cmb.clear()
         handler = getattr(self.omrat, 'junctions', None)
@@ -282,11 +306,44 @@ class JunctionMatrixDialog(QDialog):
         )
 
 
+def junctions_to_review(registry: dict) -> list[str]:
+    """Ids of junctions where three or more legs meet (merging, diverging
+    or crossing traffic), sorted like the dialog's picker.  A two-leg
+    junction is a plain bend whose matrix is always 100 %."""
+    return sorted(jid for jid, j in (registry or {}).items() if j.degree() >= 3)
+
+
+def open_after_update(omrat: "OMRAT") -> bool:
+    """Open the editor on the first junction to review, if there is one.
+    Returns ``True`` when the dialog was opened."""
+    handler = getattr(omrat, 'junctions', None)
+    review = junctions_to_review(getattr(handler, 'registry', None) or {})
+    notifier = getattr(omrat, 'notifier', None)
+    if not review:
+        return False
+    open_junction_dialog(omrat)
+    dlg = getattr(omrat, '_junction_matrix_dialog', None)
+    if dlg is not None:
+        dlg.select_junction(review[0])
+    if notifier is not None:
+        try:
+            notifier.display_message(
+                f"{len(review)} junction(s) where legs merge or cross: check their transition "
+                "matrices (Settings -> Junction transition matrix).",
+                duration=10,
+            )
+        except Exception:  # nosec B110 B112
+            pass
+    return True
+
+
 def open_junction_dialog(omrat: "OMRAT") -> None:
     """Convenience entry point used by the menu action."""
-    # Re-use an existing open dialog rather than stacking multiple ones.
+    # Re-use an existing open dialog rather than stacking multiple ones;
+    # re-read the registry, which may have been rebuilt meanwhile.
     existing = getattr(omrat, '_junction_matrix_dialog', None)
     if existing is not None and existing.isVisible():
+        existing.reload()
         existing.raise_()
         existing.activateWindow()
         return

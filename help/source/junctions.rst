@@ -101,7 +101,12 @@ Editing a matrix manually
 ==========================
 
 Open **Settings > Junction transition matrix...** to inspect or edit
-the per-junction transition matrices.
+the per-junction transition matrices.  The editor also opens by itself
+after **Update all distributions** when at least one junction has three
+or more legs (merging, diverging or crossing traffic).  It then starts on
+the first such junction, because those are the matrices worth checking
+after a fresh AIS count.  If the editor is already open, it re-reads the
+rebuilt registry.
 
 .. figure:: _static/screenshots/ui_settings_junction_matrix.png
    :width: 90%

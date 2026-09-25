@@ -236,6 +236,14 @@ class Distributions:
             seg[key] = value
         seg['u_p1'] = self.dw.sbUniformP1.value()
         seg['u_p2'] = self.dw.sbUniformP2.value()
+        # Keep the curves on the tangent line in step (skipped when the
+        # values did not change).
+        _geoms = getattr(self.omrat, 'qgis_geoms', None)
+        if _geoms is not None and hasattr(_geoms, 'refresh_distribution_curves'):
+            try:
+                _geoms.refresh_distribution_curves([l_id])
+            except Exception:  # nosec B110 B112
+                pass
         if not rejected:
             return []
         for _label, _text, widget, key in rejected:

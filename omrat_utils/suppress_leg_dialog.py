@@ -13,13 +13,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import QSettings, Qt
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -100,26 +101,40 @@ class _SuppressDialog(QDialog):
         self.omrat = omrat
         self.setWindowTitle(omrat.tr("Suppress leg and move its traffic"))
         self.setModal(False)
-        self.resize(720, 460)
+        self.resize(760, 620)
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel(omrat.tr("Leg to suppress:")))
+        layout.addWidget(QLabel(omrat.tr("Leg to suppress (for a whole route: the leg with the best AIS sample):")))
         self.cb_src = QComboBox()
         layout.addWidget(self.cb_src)
         self.lbl_totals = QLabel()
         layout.addWidget(self.lbl_totals)
+        self.lbl_note = QLabel()
+        self.lbl_note.setWordWrap(True)
+        layout.addWidget(self.lbl_note)
 
+        # 1. The rest of the route first: it decides whether this leg is
+        # the lead of a whole route.
+        self.grp_with = QGroupBox(omrat.tr("1.  Suppress together with this leg"))
+        box_with = QVBoxLayout(self.grp_with)
+        with_txt = QLabel(omrat.tr(
+            "Tick the other legs of the same route.  They carry the same ships, so they are left out "
+            "and nothing is moved again.  Leave empty when only this leg is suppressed."))
+        with_txt.setWordWrap(True)
+        box_with.addWidget(with_txt)
+        self.lst_with = QListWidget()
+        self.lst_with.setMaximumHeight(130)
+        box_with.addWidget(self.lst_with)
+        layout.addWidget(self.grp_with)
+
+        # 2. Where the ships go.
+        self.grp_targets = QGroupBox(omrat.tr("2.  Where the ships go (targets)"))
+        box_to = QVBoxLayout(self.grp_targets)
         help_txt = QLabel(omrat.tr(
-            "Where does the traffic go?  Share = % of that direction's ships sailing the target leg.\n"
-            "Legs of one detour in series each get the full share (e.g. 100 % on every leg); "
-            "alternative routes split it (e.g. 80 % / 20 %).\n"
-            "Whole route: give only this leg (the one with the best AIS sample) the targets and tick the "
-            "route's other legs below -- they carry the same ships, so nothing is moved twice.\n"
-            "Suppressed legs are left out of the calculation, drawn dashed, and can be restored."
-        ))
+            "Share = % of that direction's ships that sail the target leg.  A detour of several legs in "
+            "a row: 100 % on every leg.  Alternative routes: split it (e.g. 80 % / 20 %)."))
         help_txt.setWordWrap(True)
-        layout.addWidget(help_txt)
-
+        box_to.addWidget(help_txt)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels([
             omrat.tr("From direction"), omrat.tr("To leg"), omrat.tr("To direction"), omrat.tr("Share (%)"),
@@ -127,24 +142,24 @@ class _SuppressDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(COL_LEG, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.table)
-
+        # Direction and share columns fit their combos ("West going" must
+        # not be cut off); the leg column takes the rest.
+        for col in (COL_FROM, COL_DIR, COL_SHARE):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        box_to.addWidget(self.table)
         row_btns = QHBoxLayout()
         self.pb_add = QPushButton(omrat.tr("Add target"))
         self.pb_remove = QPushButton(omrat.tr("Remove target"))
         row_btns.addWidget(self.pb_add)
         row_btns.addWidget(self.pb_remove)
         row_btns.addStretch(1)
-        layout.addLayout(row_btns)
+        box_to.addLayout(row_btns)
+        layout.addWidget(self.grp_targets, 1)
 
-        layout.addWidget(QLabel(omrat.tr(
-            "Suppress together with this leg (same ships -- left out, nothing moved again):")))
-        self.lst_with = QListWidget()
-        self.lst_with.setMaximumHeight(120)
-        layout.addWidget(self.lst_with)
-        self.lbl_note = QLabel()
-        self.lbl_note.setWordWrap(True)
-        layout.addWidget(self.lbl_note)
+        footer = QLabel(omrat.tr(
+            "Suppressed legs are left out of the calculation, drawn dashed, and can be restored."))
+        footer.setWordWrap(True)
+        layout.addWidget(footer)
 
         self.buttons = QDialogButtonBox()
         self.pb_suppress = self.buttons.addButton(
@@ -370,6 +385,47 @@ class _SuppressDialog(QDialog):
                 pass
 
 
+COPY_TIP_KEY = 'omrat/suppress_leg_copy_tip_shown'
+
+COPY_TIP_TEXT = (
+    "Before you suppress legs, run Copy traffic... first.\n\n"
+    "Routes that cross other routes are split into sub-legs, and the AIS sample of a sub-leg near "
+    "a crossing mixes in ships from the other routes.  Copy the traffic of each route's cleanest leg "
+    "onto its other sub-legs.  This gives the sub-legs the same traffic and links them as one route "
+    "at their junctions, so the moved ships are added to a consistent route.\n\n"
+    "Do this at least for the detour route that will receive the ships.\n\n"
+    "This warning is shown once.  See the user guide, \"Moving traffic to another route\"."
+)
+
+
+def _tip_shown(settings: Any) -> bool:
+    raw = settings.value(COPY_TIP_KEY, False)
+    if isinstance(raw, str):          # QSettings on Windows stores "true" / "false"
+        return raw.strip().lower() == 'true'
+    return bool(raw)
+
+
+def maybe_show_copy_tip(omrat: "OMRAT", parent: Any = None, settings: Any = None) -> bool:
+    """Warn, the first time Suppress leg is opened, that Copy traffic
+    should be run first.  Offers to open it.  Returns ``True`` when the
+    warning was shown (it is then never shown again on this machine)."""
+    settings = QSettings() if settings is None else settings
+    if _tip_shown(settings):
+        return False
+    settings.setValue(COPY_TIP_KEY, True)
+    box = QMessageBox(parent if parent is not None else omrat.main_widget)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(omrat.tr("Copy traffic first"))
+    box.setText(omrat.tr(COPY_TIP_TEXT))
+    open_copy = box.addButton(omrat.tr("Open Copy traffic..."), QMessageBox.ButtonRole.ActionRole)
+    box.addButton(omrat.tr("Continue"), QMessageBox.ButtonRole.AcceptRole)
+    box.exec()
+    if box.clickedButton() is open_copy:
+        from omrat_utils import copy_traffic_dialog
+        copy_traffic_dialog.run(omrat)
+    return True
+
+
 def run(omrat: "OMRAT") -> None:
     """Open (or raise) the modeless Suppress leg dialog."""
     existing = getattr(omrat, '_suppress_leg_dlg', None)
@@ -392,3 +448,5 @@ def run(omrat: "OMRAT") -> None:
     # Keep a Python reference, otherwise the modeless dialog is collected.
     omrat._suppress_leg_dlg = dlg
     dlg.show()
+    if not getattr(omrat, 'testing', False):
+        maybe_show_copy_tip(omrat, dlg)
