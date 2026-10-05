@@ -66,13 +66,15 @@ from omrat_utils.drift_analysis_mixin import DriftAnalysisMixin  # noqa: E402
 from omrat_utils.iwrap_io_mixin import IwrapIOMixin  # noqa: E402
 from omrat_utils.run_history_mixin import RunHistoryMixin  # noqa: E402
 from omrat_utils.sensitivity_mixin import SensitivityMixin  # noqa: E402
+from omrat_utils.calculation_matrix_dialog import CalculationMatrixMixin  # noqa: E402
+from compute.run_phases import PHASES, normalize_phases, skipped_totals  # noqa: E402
 from omrat_utils.notifier import MessageBarNotifier  # noqa: E402
 from geometries.tangent_position import normalize_tangent_pos  # noqa: E402
 
 
 class OMRAT(
     IwrapIOMixin, CompareMixin, DriftAnalysisMixin, RunHistoryMixin,
-    AccidentResultsMixin, SensitivityMixin,
+    AccidentResultsMixin, SensitivityMixin, CalculationMatrixMixin,
 ):
     """QGIS Plugin Implementation.
 
@@ -123,6 +125,11 @@ class OMRAT(
         self.toolbar.setObjectName(u'OMRAT')
 
         self.pluginIsActive = False
+        # The dock widget lives as long as the plugin; its signals are
+        # connected once, on the first ``run()`` (see ``_wire_dock``).
+        self._dock_wired = False
+        # Model parts Run model calculates (Calculation matrix).
+        self.run_phases: tuple[str, ...] = PHASES
         self.segment_id = 0
         self.traffic_data: dict[str, dict[str, dict[str, Any]]] = {}
         self.segment_data: dict[str, Any] = {}
@@ -502,8 +509,10 @@ class OMRAT(
         ]:
             field.setText('')
         self.main_widget.LEModelName.setText('')
+        if hasattr(self.main_widget, 'LEProjectName'):
+            self.main_widget.LEProjectName.setText('')
         try:
-            self.refresh_previous_runs_table()
+            self.show_current_project_runs()
         except Exception:  # nosec B110 B112
             self.main_widget.TWPreviousRuns.setRowCount(0)
         self.main_widget.laDir1.setText('')
@@ -543,30 +552,9 @@ class OMRAT(
             )
 
     def onClosePlugin(self):
-        """Cleanup necessary items here when plugin main_widget is closed"""
-
-        # Disconnect signals
-        if self.main_widget.is_active:
-            self.main_widget.pbAddRoute.clicked.disconnect()
-            self.main_widget.pbStopRoute.clicked.disconnect()
-            self.main_widget.pbRemoveRoute.clicked.disconnect()
-            self.main_widget.pbAddSimpleDepth.clicked.disconnect()
-            self.main_widget.pbLoadDepth.clicked.disconnect()
-            self.main_widget.pbRemoveDepth.clicked.disconnect()
-            self.main_widget.pbAddSimpleObject.clicked.disconnect()
-            self.main_widget.pbLoadObject.clicked.disconnect()
-            self.main_widget.pbRemoveObject.clicked.disconnect()
-            self.main_widget.pbRunModel.clicked.disconnect()
-            try:
-                self.main_widget.pbLoadRoute.clicked.disconnect()
-            except TypeError:
-                pass
-            try:
-                self.main_widget.pbSensitivity.clicked.disconnect()
-            except (TypeError, AttributeError, RuntimeError):
-                pass
-
-        # Set plugin state to inactive
+        """The dock was closed (hidden).  Its signals stay connected:
+        ``run()`` wires them only once, so reopening does not add a second
+        connection to every button."""
         self.pluginIsActive = False
         self.main_widget.is_active = False
 
@@ -621,10 +609,8 @@ class OMRAT(
         except Exception as e:
             print(f"Error during onClosePlugin: {e}")
         try:
-            self.main_widget.pbGetGebcoDephts.clicked.disconnect()
-            self.main_widget.PBUpdateDepthIntervals.clicked.disconnect()
             self.main_widget.deleteLater()
-        except TypeError:
+        except RuntimeError:
             pass
         gc.collect()
         self._unload_modules()
@@ -927,6 +913,7 @@ class OMRAT(
         if choice == 'clear':
             self.clear_model()
         store.load_from_path(file_path)
+        self.show_current_project_runs()
 
     def run_calculation(self):
         """Run calculation in a background QgsTask for better UI responsiveness."""
@@ -973,11 +960,20 @@ class OMRAT(
             )
             return
 
+        phases = normalize_phases(self.run_phases)
+        if not phases:
+            QMessageBox.information(
+                self.main_widget, self.tr('Nothing to calculate'),
+                self.tr('Tick at least one model part in Calculation matrix... before running the model.'),
+            )
+            return
+
         # Create and configure the background task
         task = CalculationTask(
             description='OMRAT: Starting calculations...',
             calc_object=self.calc,
-            data=data
+            data=data,
+            phases=phases,
         )
 
         # Connect signals for progress updates and completion
@@ -1024,6 +1020,8 @@ class OMRAT(
             'OMRAT',
             Qgis.MessageLevel.Success
         )
+        # Parts left out in the Calculation matrix have no value now.
+        self._clear_accident_results(skipped_totals(getattr(calc_object, 'run_phases', None)))
         # Catastrophe-level exceedance table on the Run Analysis tab.
         try:
             self._populate_catastrophe_results_table(
@@ -1235,19 +1233,31 @@ class OMRAT(
 
     def run(self):
         """Run method that loads and starts the plugin"""
-        if not self.pluginIsActive:
-            self.pluginIsActive = True
-            self._connect_toolbar_buttons()
-            fileMenu = self._build_menubar()
-            self._connect_geometry_buttons()
-            self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
-            self._wire_report_path_widgets()
-            self._wire_drift_button()
-            self._init_results_ui(fileMenu)
-            self.reset_route_table()
-            self.run_traffic_module()
-            self.mark_project_saved()
-            self.main_widget.show()
+        if self.pluginIsActive:
+            return
+        self.pluginIsActive = True
+        self.main_widget.is_active = True
+        if not self._dock_wired:
+            self._wire_dock()
+            self._dock_wired = True
+        self.reset_route_table()
+        self.run_traffic_module()
+        self.mark_project_saved()
+        self.main_widget.show()
+
+    def _wire_dock(self) -> None:
+        """Connect the dock's buttons and build its menubar / extra
+        widgets.  Closing the dock only hides it, so this must run once:
+        it used to run on every open, and each reopen added another
+        connection (Update all distributions started 2-3 AIS fetches) and
+        another "Add selected run results to map" button."""
+        self._connect_toolbar_buttons()
+        fileMenu = self._build_menubar()
+        self._connect_geometry_buttons()
+        self.main_widget.pbRunModel.clicked.connect(self.run_calculation)
+        self._wire_report_path_widgets()
+        self._wire_drift_button()
+        self._init_results_ui(fileMenu)
 
     def _connect_toolbar_buttons(self) -> None:
         self.main_widget.pbAddRoute.clicked.connect(self.qgis_geoms.add_new_route)
@@ -1355,6 +1365,11 @@ class OMRAT(
         except Exception as e:
             QgsMessageLog.logMessage(
                 f'Could not initialise sensitivity button: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
+        try:
+            self._setup_calculation_matrix_button()
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f'Could not initialise Calculation matrix button: {e}', 'OMRAT', Qgis.MessageLevel.Warning)
         try:
             fileMenu.addSeparator()
             fileMenu.addAction('Manage previous runs...', self.open_previous_runs_dialog)

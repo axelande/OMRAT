@@ -193,6 +193,12 @@ How to read them:
   the one the calculation uses (up to three normal components plus the
   uniform part, from the lateral distribution panel), not the raw AIS
   histogram.
+* **Short dashed ticks mark the powered model's ray span.**  Two per
+  direction, in the curve's colour, at :math:`\mu \pm 6\sigma` of the
+  first normal component: that is where the Category I and II rays
+  start and stop (see :ref:`ray-sampling`).  A tick beyond the end of
+  the tangent line, joined to it by a thin dashed extension, means the
+  rays reach past the drawn lane.
 * **Each direction bulges towards the side its ships sail to.**
   Direction 1 (the drawn direction, *Start -> End*) bulges towards the
   leg's end point and is **blue**.  Direction 2 bulges towards the start
@@ -649,10 +655,13 @@ same as in the pictures above:
    * - grey, dotted
      - A leg suppressed together with a lead (the arrow points to the lead).
 
-While the view is on, click a leg in the route table to highlight it in
-yellow and every leg linked with it in orange.  In Example 3, clicking
-``LEG_7_3_b`` lights up all of route 7 and route 2.  The layer follows
-every change and is not saved; press the button again to remove it.
+Clicking a leg in the route table highlights it on the map in yellow,
+and every leg linked with it in orange -- with or without this view, and
+also for a leg that has no links (yellow only).  In Example 3, clicking
+``LEG_7_3_b`` lights up all of route 7 and route 2.  The highlight
+follows the leg when it is moved and disappears when it is removed.
+The layer follows every change and is not saved; press the button again
+to remove it.
 
 **3. The QGIS log** (*View -> Panels -> Log Messages*, tab *OMRAT*).
 Every run lists each move, for example::
@@ -728,7 +737,9 @@ in the UI:
 * Open **Settings -> Junction transition matrix...** to inspect or
   edit how traffic distributes at each junction.  Rows default from
   geometry (deflection-angle heuristic) and are overwritten by AIS
-  counts when a database is connected; user edits stick.
+  counts when a database is connected: trips (``route_id``) that cross
+  one leg's tangent line towards the junction and another's away from
+  it (:ref:`junction-ais-counts`).  User edits stick.
 * After **Update all distributions** the editor **opens by itself** when
   at least one junction has three or more legs, that is, where legs
   merge, diverge or cross.  It shows the first such junction and zooms
@@ -1175,6 +1186,28 @@ drifting, ship-ship collision, powered grounding and powered allision
 models in sequence, followed by the oil-spill consequence step.  The
 task runs in the background so QGIS stays responsive.
 
+.. _calculation-matrix:
+
+**Calculation matrix...** (right of **Run model**) picks the model
+parts a run calculates: **Drifting** (drifting allision and grounding),
+**Ship-ship collisions** (all five types), **Powered grounding** and
+**Powered allision**.  Use it to re-run only what a change affects --
+after moving a wind-farm structure, for example, tick only Drifting and
+Powered allision.  A part that is not ticked is left out of the run,
+not counted as zero:
+
+* its rows in the result table are blank (a calculated zero shows
+  ``0``);
+* the Markdown report starts with a *Partial run* line naming the
+  skipped parts, and the GeoPackage and JSON sidecars hold only the
+  calculated parts;
+* its columns in the run history stay empty, so **View** on a skipped
+  row tells you to pick a run that includes it;
+* the oil-spill consequence step uses the calculated parts only.
+
+While parts are left out the button reads **Run model (2 of 4 parts)**
+and its tooltip lists them.  The selection lasts for the QGIS session.
+
 Results land in two tables: **Accident probabilities** (one row per
 accident type, with a **View** drill-down button) and
 **Catastrophe-level exceedance (events/year)**.  **Previous runs**
@@ -1200,7 +1233,10 @@ A zero frequency shows as ``∞`` in years mode.
 
 The **View** button on a ship-ship collision row opens a per-leg (or
 per-leg-pair) table with the absolute probability and a **% of total**
-column, i.e. each leg's share of that accident type.
+column, i.e. each leg's share of that accident type.  The drifting and
+powered **View** dialogs list their legs the same way -- route-table
+names (``LEG_6_1_b East going``) and a **% of total** column -- next
+to their figures (see :ref:`powered-visualization`).
 
 Result fields
 -------------
@@ -1245,10 +1281,12 @@ events/year or roughly one event every 9 years).
    distinct rows.  See :ref:`merging-collisions` and the
    crossing-formula warning in :ref:`collisions`.
 
-The **View** button next to each row opens a drill-down dialog with
-per-segment and per-obstacle contributions for the run selected in
-**Previous runs**.  These are useful for locating the single obstacle
-that dominates the total risk.
+The **View** button next to each row opens a drill-down dialog for the
+run selected in **Previous runs**: each leg's (and direction's)
+contribution with its **% of total**, and -- for the drifting and
+powered rows -- a figure of the selected leg with the obstacles it
+hits.  These are useful for locating the leg and the obstacle that
+dominate the total risk.
 
 .. _sensitivity-analysis:
 
@@ -1285,7 +1323,8 @@ Dialog controls:
 * **Baseline** -- *Reuse the results of the last model run* (fastest;
   it assumes the inputs have not changed since that run) or
   *Recompute the baseline first*.  Only the second option is offered
-  before the first **Run model** of the session.
+  before the first **Run model** of the session, and after a run that
+  left parts out in the :ref:`Calculation matrix <calculation-matrix>`.
 * **Rank by** -- the output the ranking uses: all accidents, all
   grounding / allision / collisions, or a single accident type.  It
   can be switched after the run without recomputing.
@@ -1384,6 +1423,15 @@ merging factor was added in v0.14.0 and defaults to the crossing value
 :ref:`merging-collisions`).  The two Cat I factors were added in
 v0.15.0 together with the Category-I powered model and default to the
 same figures as their Cat II counterparts, as IWRAP does.
+
+Below the factors sits the **Category I start zone** group: a checkbox
+and a percentage (default on, 10 %).  With it on, Category I ignores
+in-lane hits whose first edge crossing lies within that share of the
+leg, measured from the waypoint the ships come from, for powered
+grounding and allision alike.  It exists because the ships' lateral
+positions right after a junction are not yet described by the new leg's
+fitted distribution; see :ref:`cat1-start-zone` for the reasoning and a
+worked example.  Turn it off to reproduce IWRAP's plain Category I.
 
 Ship Categories
 ---------------
@@ -1485,6 +1533,23 @@ remembered between sessions.  If you trigger the run some other way
 with either field empty, a popup names the missing one and nothing
 runs.
 
+Projects
+--------
+
+The **Project name** field at the top of the Run Analysis tab names
+the project the runs belong to.  It is saved in the ``.omrat`` file, so
+loading the project brings it back, and every run made from the
+project is stored under it.  Leave it empty and a run is grouped under
+the name of its output folder (the last folder of **File path**) --
+the same rule applies to every run recorded before projects existed,
+so an existing history is grouped by folder without any work.
+
+Run on the wrong project?  Select the runs in **Previous runs**,
+right-click and pick **Set project...**: choose a project, type a new
+name, or clear the text to go back to the output folder name.  To
+rename a whole project, show it in the **Project** filter, select all
+its rows (``Ctrl+A``) and use **Set project...** once.
+
 Naming a run
 ------------
 
@@ -1505,10 +1570,19 @@ below) when you want to look at them.
 The Previous runs table
 ------------------------
 
-The **Previous runs** table on the Run Analysis tab shows four
-columns: **Name**, **Main**, **Date**, **Duration** -- enough to pick a
-run without scrolling.  The newest run is selected automatically after
-a calculation finishes.  Selecting rows adds columns to the
+The **Previous runs** table on the Run Analysis tab shows **Name**,
+**Main**, **Date**, **Duration**, **Version** (the OMRAT version that
+produced the run) and **Project**.  The **Project** selector above the
+table shows one project at a time, with the number of runs in each, or
+**All projects**; the **Project** column only appears for **All
+projects**.  The selector follows the current project (its project
+name, else its output folder) until you pick one yourself, and returns
+to it when a project is loaded or a run finishes.  The newest run is
+selected automatically after a calculation finishes.
+
+For runs recorded before the version was stored, **Version** is read
+once from the run's ``.omrat`` snapshot; it shows a dash when the
+snapshot is older than the version stamp or no longer on disk.  Selecting rows adds columns to the
 **Accident probabilities** table below:
 
 * **Single selection** -- one probability column for that run plus a
@@ -1535,14 +1609,30 @@ The right-click context menu on the table provides:
 
 * **Add results to map** -- same as the button (single selection
   only).
+* **Set project...** -- move the selected runs to another project (see
+  *Projects* above).
 * **Delete from history** -- removes only the row from the master
   DB; the per-run ``.gpkg`` file stays on disk so you can keep
   archived results around if you want.
 * **Delete from history + remove .gpkg file** -- removes both.
   Asks for confirmation.
 
-You can also reach the table via **File -> Manage previous runs...**,
-which switches to the Run Analysis tab and refreshes the table.
+Manage previous runs
+--------------------
+
+**File -> Manage previous runs...** opens the whole history in one
+window, across all projects: name, project, date, duration, version,
+output folder and whether the result GeoPackage is still on disk
+(click a header to sort; newest first by default).  The line at the top
+gives the number of runs, projects and missing result files, and the
+path of the history file.  From there you can:
+
+* **Set project...** -- move the selected runs to another project;
+* **Open output folder** -- of the selected run;
+* **Select runs with missing files** -- e.g. to delete runs whose
+  results were moved or removed;
+* **Delete from history** / **Delete + remove .gpkg file** -- same as
+  the right-click menu of the Previous runs table.
 
 Result-layer attributes
 -----------------------
@@ -1565,7 +1655,7 @@ total is zero is skipped):
        (alias *Object probability*), ``value`` (the structure's
        height), the drift diagnostics ``normal_deg``,
        ``edge_dist_m``, ``reach_width_m``, ``edge_p_nr``,
-       ``edge_h_eff``, and a ``leg_<id>`` column per contributing
+       ``edge_h_eff``, and one column per contributing leg named as in the route table (``LEG_1_2_b``; ``leg_<id>`` only for a leg that no longer exists) for each contributing
        leg.
    * - Grounding Results (drifting)
      - Line
@@ -1578,14 +1668,14 @@ total is zero is skipped):
        ``total_edge_probability`` is the share of the ships that hit
        *this* edge first, so the edges of one structure add up to its
        ``object_probability`` and edges no ship can reach are zero.
-       ``obstacle_id``, ``segment_idx``, ``value``, plus a ``leg_<id>``
+       ``obstacle_id``, ``segment_idx``, ``value``, plus a ``LEG_<route>_<n>_<direction>`` (e.g. ``LEG_1_2_b_East_going``; ``leg_<id>_<dir>`` only for a leg that no longer exists)
        column per contributing leg direction holding that edge's share.
    * - Powered Grounding Results
      - Line
      - Same shape, over depth-contour edges.
    * - Ship-Ship Collision (per leg)
      - Line
-     - ``leg_id``, ``head_on``, ``overtaking``, ``combined``.
+     - ``leg_id`` (segment id), ``leg_name`` (route-table name), ``head_on``, ``overtaking``, ``combined``.
    * - Ship-Ship Collision (waypoints)
      - Point
      - ``waypoint``, ``crossing``, ``merging``, ``bend``,
@@ -1626,6 +1716,28 @@ panel.  Each group holds the model's **Depth Areas**, **Structures**,
 result layers on top.  Legs, tangent lines and result layers are
 tinted red for A and blue for B.  **Clear model** removes the groups
 again.
+
+**Add difference layers to QGIS (B - A)** answers "where on the map did
+the risk move?".  It joins the two runs' result GeoPackages feature by
+feature -- obstacle edge for the drifting and powered layers, leg for
+collision lines, waypoint for collision points -- and adds one
+**Diff ...** layer per result type in a group of its own.  Each feature
+carries ``p_a``, ``p_b``, ``delta`` (``p_b - p_a`` in events/year),
+``ratio``, ``pct_change``, ``delta_share_pct`` (this feature's share of
+the layer's total change) and ``rank`` (1 = largest absolute change).
+The layers are styled on ``delta``: blue = decrease, grey = no change,
+red = increase, with class edges at 1, 10, 50 and 100 % of the largest
+change.  Sort the attribute table on ``rank`` to list the movers.
+
+.. note::
+
+   Do **not** restyle a diff layer on ``pct_change``.  Relative change is
+   dominated by features whose probability is negligible in both runs:
+   halving a wind-rose direction shows ``-40 %`` on thousands of far-away
+   edges that together move the total by a fraction of a percent, while
+   the handful of edges that carry the actual increase disappear in the
+   middle of the ramp.  ``delta`` and ``delta_share_pct`` do not have that
+   problem.
 
 
 Tips and best practices

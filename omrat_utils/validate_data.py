@@ -11,6 +11,10 @@ class PC(BaseModel):
     bend: float = 1.3E-4
     grounding: float = 1.6E-4
     allision: float = 1.9E-4
+    # Category-I start zone (compute/cat1_start_zone.py): skip in-lane hits
+    # within the first ``cat1_skip_start_pct`` % of a leg.  Default on, 10 %.
+    cat1_skip_start: bool = True
+    cat1_skip_start_pct: float = 10.0
 
 
 class Rose(RootModel[Dict[str, float]]):
@@ -246,3 +250,5 @@ class RootModelSchema(BaseModel):
     waypoints: Optional[Dict[str, List[float]]] = None
     # Plugin version that wrote the file (traceability; absent in old files).
     omrat_version: Optional[str] = None
+    # Project the runs are grouped under in Previous runs (optional).
+    project_name: Optional[str] = None

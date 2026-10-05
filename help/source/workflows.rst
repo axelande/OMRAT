@@ -133,8 +133,12 @@ single polygon is contributing the most.
    (the newest is selected automatically).
 #. Click **View** on the row of interest in the **Accident
    probabilities** table (e.g. *Drifting grounding*).
-#. A dialog opens with per-obstacle contributions sorted by
-   probability.
+#. A dialog opens.  For the drifting and powered rows, its table
+   lists every leg and direction (route-table names) with its
+   contribution and **% of total**, largest first; pick a row and the
+   figure shows that leg with the obstacles it hits, named in the
+   panel legends.  For the collision rows it is a per-leg (or
+   per-leg-pair) table with the same **% of total** column.
 
 Alternatively, click **Add selected run results to map** and inspect
 the **Grounding Results** layer -- its features are the boundary

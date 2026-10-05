@@ -112,6 +112,47 @@ class TestRunSuccess:
 
 
 # ---------------------------------------------------------------------------
+# run() -- Calculation matrix (subset of phases)
+# ---------------------------------------------------------------------------
+
+class TestRunSelectedPhases:
+    def _task(self, phases):
+        from compute.calculation_task import CalculationTask
+        calc = MagicMock()
+        return CalculationTask("test", calc, {'x': 1}, phases=phases), calc
+
+    def test_only_selected_phases_run(self, qgis_app):
+        t, calc = self._task(['powered_allision', 'drifting'])
+        assert t.run() is True
+        calc.run_drifting_model.assert_called_once()
+        calc.run_powered_allision_model.assert_called_once()
+        calc.run_ship_collision_model.assert_not_called()
+        calc.run_powered_grounding_model.assert_not_called()
+
+    def test_phases_run_in_model_order(self, qgis_app):
+        t, calc = self._task(['powered_allision', 'collision'])
+        t.run()
+        names = [c[0] for c in calc.method_calls
+                 if c[0] in ('run_ship_collision_model', 'run_powered_allision_model')]
+        assert names == ['run_ship_collision_model', 'run_powered_allision_model']
+
+    def test_begin_run_gets_the_selection_before_any_phase(self, qgis_app):
+        t, calc = self._task(['collision'])
+        t.run()
+        calc.begin_run.assert_called_once_with({'x': 1}, ('collision',))
+        names = [c[0] for c in calc.method_calls]
+        assert names.index('begin_run') < names.index('run_ship_collision_model')
+
+    def test_none_runs_every_phase(self, qgis_app):
+        from compute.run_phases import PHASES
+        t, calc = self._task(None)
+        assert t.phases == PHASES
+        t.run()
+        calc.run_drifting_model.assert_called_once()
+        calc.run_powered_grounding_model.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # run() -- cancellation between phases
 # ---------------------------------------------------------------------------
 
@@ -122,6 +163,7 @@ class TestRunCancellation:
         cancel_state = {'cancelled': False}
 
         calc = MagicMock()
+
         def fake_drifting(data):
             cancel_state['cancelled'] = True
             return (0.0, 0.0)
@@ -129,7 +171,7 @@ class TestRunCancellation:
 
         t = CalculationTask("test", calc, {})
         # After the first phase we flip isCanceled() to return True.
-        original_is_canceled = t.isCanceled
+
         def is_canceled_now():
             return cancel_state['cancelled']
         t.isCanceled = is_canceled_now
@@ -146,6 +188,7 @@ class TestRunCancellation:
         phases_done = {'count': 0}
 
         calc = MagicMock()
+
         def track(_):
             phases_done['count'] += 1
             return None
@@ -155,6 +198,7 @@ class TestRunCancellation:
 
         t = CalculationTask("test", calc, {})
         # Cancel only after phase 2 has completed.
+
         def is_canceled_now():
             return phases_done['count'] >= 2
         t.isCanceled = is_canceled_now

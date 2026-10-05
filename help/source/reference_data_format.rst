@@ -38,6 +38,12 @@ An ``.omrat`` file is a single JSON object.  The top-level keys are:
      "traffic_scaling": { ... global multiplier + per-row follow flags ... }
    }
 
+``project_name`` (optional string) is the **Project name** from the Run
+Analysis tab; Previous runs groups the project's runs under it.  It is
+left out when the field is empty, and older files without it load
+unchanged.  ``omrat_version`` records the OMRAT release that wrote the
+file.
+
 Some optional keys are also emitted by the plugin when present:
 ``results``, ``drifting_report``, ``collision_report``.  These are
 calculation **outputs**, not inputs; they're round-tripped so a saved
@@ -562,8 +568,8 @@ Existing installs that have an older ``omrat_history.gpkg`` (or
 next plugin start: the file is renamed in place; nothing is lost
 because the format is identical.
 
-Single table: ``omrat_runs``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Table ``omrat_runs``
+~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -597,6 +603,32 @@ Single table: ``omrat_runs``
    * - ``notes``
      - Free-text user note (currently unused; reserved).
 
+Table ``omrat_run_info``
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Project tag and OMRAT version per run.  It is a separate table so that
+adding it needs no change to ``omrat_runs``: it is created on the next
+plugin start in any existing history file, runs recorded before it
+simply have no row, and an older OMRAT still reads ``omrat_runs``
+unchanged.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Column
+     - Meaning
+   * - ``run_id``
+     - The ``omrat_runs`` row this belongs to.
+   * - ``project``
+     - The project name (**Project name** on the Run Analysis tab, or
+       **Set project...**).  ``NULL`` = not tagged: the run is grouped
+       under the last folder of ``output_dir``.
+   * - ``omrat_version``
+     - OMRAT version that produced the run.  Filled in once from the
+       run's ``.omrat`` snapshot for older runs; ``''`` when the
+       snapshot carries no version.
+
 Per-run GeoPackages
 -------------------
 
@@ -629,7 +661,8 @@ to six layers (only those with non-zero contributions are written):
        columns.
    * - ``collision_lines``
      - LineString
-     - ``leg_id``, ``head_on``, ``overtaking``, ``combined``.
+     - ``leg_id``, ``leg_name`` (route-table name), ``head_on``,
+       ``overtaking``, ``combined``.
    * - ``collision_points``
      - Point
      - ``waypoint``, ``crossing``, ``bend``, ``combined``.
@@ -638,6 +671,57 @@ Open a per-run file directly in QGIS (it's a standard OGC
 GeoPackage), or use **Add selected run results to map** on the
 Previous-runs table to load all six layers in one click with
 graduated styling applied.
+
+Files next to each run
+----------------------
+
+Each run also writes these files beside its GeoPackage, named after
+its stem (``<stem>`` = ``<slug(name)>_<YYYYMMDD_HHMMSS>``).  Each is
+written only when there is something to put in it, and each is
+optional when read back: a run recorded before a file existed simply
+lacks it, and the dialog that needs it falls back as described.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - File
+     - Content and reader
+   * - ``<stem>.omrat``
+     - Read-only snapshot of the project inputs.  The **View** dialogs
+       and the Compare tab rebuild their inputs from it.
+   * - ``<slug(name)>_<YYYYMMDD>_results_<HHMMSS>.md``
+     - Combined Markdown report of the run.
+   * - ``<stem>.collision.json``
+     - The ship-ship collision report (collision **View** tables).
+   * - ``<stem>.drifting.json``
+     - The drifting report (drifting **View** table: contributions and
+       % of total per leg, direction and drift direction).
+   * - ``<stem>.consequence.json``
+     - The catastrophe-exceedance result (catastrophe table for
+       previous runs).
+   * - ``<stem>.powered.json``
+     - Per leg-direction powered frequencies for the powered **View**
+       table (Frequency and % of total).  One block per mode, left out
+       when that model produced no report.  Keys of
+       ``by_leg_direction`` are ``"<Segment_Id>:<dir_idx>"`` (``0`` =
+       the drawn direction).  Without this file, allision is
+       recomputed from the snapshot and grounding shows ``--``.
+
+Shape of ``<stem>.powered.json`` (the ``grounding`` block, when
+present, has the same keys with ``"grounding"`` as the total):
+
+.. code-block:: json
+
+   {
+     "allision": {
+       "totals": {"allision": 1.07e-03, "cat1": 1.07e-03, "cat2": 3.36e-06},
+       "by_leg_direction": {"17:0": 6.10e-04, "17:1": 4.58e-04, "9:0": 1.18e-06},
+       "by_obstacle": {"1_0": 1.07e-03},
+       "causation_factor": 1.9e-04,
+       "causation_factor_cat1": 1.9e-04
+     }
+   }
 
 
 Minimal valid project (synthetic)

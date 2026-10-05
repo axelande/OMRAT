@@ -221,8 +221,8 @@ vessel lookup `ship_type` column -> broadcast AIS code**.  The IMO join
 needs `imo_num` in `statics_<year>`; databases built by the ingestion
 wizard have it, on others OMRAT probes `information_schema` once and
 joins on MMSI only.  Duplicate keys in the mapping table never multiply
-pings (`DISTINCT ON` in both lookups).  Junction passage counting uses
-MMSI and timestamps only and is unaffected.
+pings (`DISTINCT ON` in both lookups).  Junction passage counting reads
+only MMSI, `route_id`, time and COG, so the mapping does not affect it.
 
 ## Database schema reference
 

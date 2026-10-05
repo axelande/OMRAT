@@ -29,7 +29,7 @@ Entry point
 
 .. container:: source-code-ref pipeline
 
-   **Entry:** ``compute/drifting_model.py:2070`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L2070>`__
+   **Entry:** ``compute/drifting_model.py:2071`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L2071>`__
 
 
 Top-level call tree
@@ -714,14 +714,23 @@ plot:
 * ``split_leg_name`` / ``lookup_contribution`` - parse leg names, look
   up ``contrib_grounding`` / ``contrib_allision`` from the calc's
   ``drifting_report['by_leg_direction']``.
+* ``display_leg_name`` - ``"Leg 9-East going"`` -> the route-table
+  name ``"LEG_6_1_a East going"`` (``compute/leg_labels.py``), so the
+  dialog names legs like the report and the result layers.
+* ``contribution_total`` - denominator of the **% of total** column:
+  ``drifting_report['totals'][allision|grounding]``, or the sum of the
+  ``by_leg_direction`` contributions when the total is missing.
 * ``build_overlap_sidebar`` - construct the sortable
-  ``QTableWidget`` used as the overlap-dialog sidebar.
+  ``QTableWidget`` used as the overlap-dialog sidebar
+  (Leg | Drift direction | Allision/Grounding | % of total).
 
 ``geometries/get_drifting_overlap.py`` -- the
 :class:`DriftingOverlapVisualizer` class itself drives the three
 matplotlib axes (``ax1`` legs, ``ax2`` direction polygons, ``ax3``
-PDF).  ``show_in_dialog`` is the dialog factory used from the View
-buttons in :class:`AccidentResultsMixin`.
+PDF); the selected leg is thickened in ``ax1`` (``_highlight_leg``)
+and named in the ``ax1`` / ``ax2`` titles (``leg_display_name``).
+``show_in_dialog`` is the dialog factory used from the View buttons in
+:class:`AccidentResultsMixin`.
 
 ``geometries/drift/shadow.py``
 ------------------------------

@@ -32,7 +32,8 @@ class SensitivityMixin:
         calc = getattr(self, 'calc', None)
         if calc is None:
             return None
-        if not any(getattr(calc, attr, None) for attr in (
+        # A run that skipped parts (Calculation matrix) is no baseline.
+        if not all(getattr(calc, attr, None) is not None for attr in (
                 'drifting_report', 'collision_report',
                 'powered_grounding_report', 'powered_allision_report')):
             return None
@@ -45,7 +46,8 @@ class SensitivityMixin:
             name = (self.main_widget.LEModelName.text() or '').strip()
         except Exception:  # nosec B110 B112
             name = ''
-        if name:
+        # The report's "Project:" line: the project name, else the model name.
+        if name and not data.get('project_name'):
             data['project_name'] = name
         return data
 

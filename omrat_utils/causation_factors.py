@@ -5,6 +5,9 @@ if TYPE_CHECKING:
 
 from qgis.PyQt.QtWidgets import QDialogButtonBox
 
+from compute.cat1_start_zone import (
+    DEFAULT_ENABLED, DEFAULT_PCT, KEY_ENABLED, KEY_PCT, start_zone_enabled, start_zone_pct,
+)
 from compute.iwrap_defaults import default_pc_values
 from ui.causation_factor_widget import CausationFactorsWidget
 
@@ -34,6 +37,13 @@ class CausationFactors:
         self.data['grounding_cat1'] = float(self.cfw.leGroundingCat1Cf.text())
         self.data['allision_cat1'] = float(self.cfw.leAllisionCat1Cf.text())
 
+        # Category I start zone (compute/cat1_start_zone.py)
+        cb = getattr(self.cfw, 'cbCat1SkipStart', None)
+        sb = getattr(self.cfw, 'sbCat1SkipStartPct', None)
+        if cb is not None and sb is not None:
+            self.data[KEY_ENABLED] = bool(cb.isChecked())
+            self.data[KEY_PCT] = float(sb.value())
+
     def set_values(self):
         # Powered and drifting causation factors
         self.cfw.lePoweredPc.setText(f"{self.data['p_pc']}")
@@ -51,6 +61,20 @@ class CausationFactors:
         self.cfw.leAllisionCf.setText(f"{self.data['allision']}")
         self.cfw.leGroundingCat1Cf.setText(f"{self.data['grounding_cat1']}")
         self.cfw.leAllisionCat1Cf.setText(f"{self.data['allision_cat1']}")
+
+        # Category I start zone; projects saved before the setting existed
+        # get the defaults (on, 10 %) the same way compute does.
+        cb = getattr(self.cfw, 'cbCat1SkipStart', None)
+        sb = getattr(self.cfw, 'sbCat1SkipStartPct', None)
+        if cb is not None and sb is not None:
+            cb.setChecked(start_zone_enabled(self.data) if KEY_ENABLED in self.data else DEFAULT_ENABLED)
+            sb.setValue(start_zone_pct(self.data) if KEY_PCT in self.data else DEFAULT_PCT)
+            sb.setEnabled(cb.isChecked())
+            try:
+                cb.toggled.disconnect(sb.setEnabled)
+            except (TypeError, RuntimeError):
+                pass
+            cb.toggled.connect(sb.setEnabled)
 
     def run(self):
         self.cfw.show()

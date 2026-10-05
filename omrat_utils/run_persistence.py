@@ -73,6 +73,7 @@ def _build_memory_layers(
                 drifting_report,
                 structures or [], depths or [],
                 add_to_project=False,
+                segment_data=segment_data,
             )
             layers['drifting_allision'] = allision_layer
             layers['drifting_grounding'] = grounding_layer

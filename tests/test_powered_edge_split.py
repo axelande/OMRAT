@@ -194,9 +194,12 @@ class TestPoweredLayerPerEdge:
         edge_vals = [r['total_edge_probability'] for r in rows]
         assert sum(edge_vals) == pytest.approx(obj_p.pop(), rel=1e-9)
         assert sum(1 for v in edge_vals if v == 0.0) == 3        # back and side faces untouched
-        # The per-leg column follows the edge, not the obstacle.
-        assert 'leg_1_0' in names
-        leg_vals = [r['leg_1_0'] for r in rows]
+        # The per-leg column follows the edge, not the obstacle.  It is named
+        # after the route table ("leg 1" East going -> leg_1_East_going).
+        from compute.leg_labels import leg_field_name
+        col = leg_field_name(data['segment_data'], '1:0')
+        assert col == 'leg_1_East_going' and col in names
+        leg_vals = [r[col] for r in rows]
         assert sum(1 for v in leg_vals if v == 0.0) == 3
         assert max(leg_vals) == pytest.approx(max(edge_vals))
 

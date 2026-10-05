@@ -91,6 +91,13 @@ class GatherData:
     def get_all_for_save(self) -> dict[str, Any]:
         # Traceability: which OMRAT release wrote this file.
         self.data['omrat_version'] = plugin_version()
+        # Groups the project's runs in Previous runs (and names the IWRAP
+        # export); absent when empty, so runs fall back to their folder.
+        project_name = self._project_name()
+        if project_name:
+            self.data['project_name'] = project_name
+        else:
+            self.data.pop('project_name', None)
         self.data['pc'] = copy.deepcopy(self.p.causation_f.data)
         self.data['drift'] = copy.deepcopy(self.p.drift_values)
         self.p.distributions.change_dist_segment(self.p.distributions.last_id)  # Saves the current settings on the leg
@@ -462,7 +469,20 @@ class GatherData:
                 data.get('junctions') or {}, data.get('segment_data') or {},
             )
 
+    def _project_name(self) -> str:
+        le = getattr(self.p.main_widget, 'LEProjectName', None)
+        try:
+            return (le.text() or '').strip() if le is not None else ''
+        except Exception:  # nosec B110 B112
+            return ''
+
     def populate(self, data):
+        # Only a file that names its project sets the field: a merged
+        # file without one must not wipe the current project's name.
+        project_name = str(data.get('project_name') or '').strip()
+        le = getattr(self.p.main_widget, 'LEProjectName', None)
+        if project_name and le is not None:
+            le.setText(project_name)
         if 'ship_categories' in data and data['ship_categories']:
             self.populate_ship_categories(data['ship_categories'])
         self._populate_causation_and_traffic(data)

@@ -4,7 +4,7 @@ Owns everything tied to "what happens after **Run Model** finishes":
 
 * writing the per-run GeoPackage, ``.omrat`` snapshot, combined Markdown
   report, and JSON sidecars (collision / drifting / consequence
-  reports);
+  reports, powered per-leg shares);
 * the **Run Analysis** tab's previous-runs table (load / refresh /
   context menu / row selection -> compare columns);
 * the output-folder picker and the Run-Model-button gate.
@@ -40,6 +40,14 @@ if TYPE_CHECKING:
 # comparison columns on the Run Analysis tab are computed against.
 MAIN_RUN_SETTING = 'omrat/main_run_id'
 
+# ``cbRunProject`` item data for "All projects".
+ALL_PROJECTS = '__all_projects__'
+
+_NO_VERSION_TIP = (
+    'Not recorded: the run is older than the version stamp, '
+    'or its .omrat snapshot is missing.'
+)
+
 
 def consequence_sidecar_path(run) -> Path | None:
     """``<gpkg stem>.consequence.json`` for ``run`` (a ``RunMeta``), or
@@ -62,6 +70,40 @@ def load_consequence_sidecar(run) -> dict | None:
     unreadable.
     """
     path = consequence_sidecar_path(run)
+    if path is None or not path.is_file():
+        return None
+    try:
+        with path.open('r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception as exc:
+        QgsMessageLog.logMessage(
+            f"Could not read {path}: {exc}", 'OMRAT', Qgis.MessageLevel.Warning,
+        )
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def powered_sidecar_path(run) -> Path | None:
+    """``<gpkg stem>.powered.json`` for ``run``, or ``None`` without a GeoPackage path."""
+    from compute.powered_breakdown import SIDECAR_SUFFIX
+    try:
+        gpkg_path = run.gpkg_path() if hasattr(run, 'gpkg_path') else None
+        if gpkg_path is None:
+            return None
+        gpkg = Path(gpkg_path)
+        return gpkg.with_name(gpkg.stem + SIDECAR_SUFFIX)
+    except Exception:  # nosec B110 B112
+        return None
+
+
+def load_powered_sidecar(run) -> dict | None:
+    """``{"allision": {...}, "grounding": {...}}`` saved next to ``run``.
+
+    The blocks are ``compute.powered_breakdown.summarize_report`` output
+    (totals + per leg-direction frequencies).  ``None`` for runs recorded
+    before the sidecar existed, or when it cannot be read.
+    """
+    path = powered_sidecar_path(run)
     if path is None or not path.is_file():
         return None
     try:
@@ -120,14 +162,18 @@ class RunHistoryMixin:
     _RUNS_COL_MAIN = 1
     _RUNS_COL_DATE = 2
     _RUNS_COL_DURATION = 3
+    _RUNS_COL_VERSION = 4
+    _RUNS_COL_PROJECT = 5
 
     # ------------------------------------------------------------------
     # Auto-save after a successful run
     # ------------------------------------------------------------------
     def _auto_save_run(self, calc_object: Any) -> None:
         """Write per-run GeoPackage + record metadata in the master DB."""
+        from omrat_utils.gather_data import plugin_version
         from omrat_utils.run_history import (
-            RunHistory, make_run_filename, totals_from_calc,
+            NO_PROJECT_LABEL, RunHistory, folder_project, make_run_filename,
+            totals_from_calc,
         )
         from omrat_utils.run_persistence import write_run_results
 
@@ -167,6 +213,8 @@ class RunHistoryMixin:
 
         duration = self._compute_run_duration()
 
+        snapshot = getattr(self, '_run_input_snapshot', None)
+        project = self._run_project_tag(snapshot)
         history = RunHistory()
         run_id = history.save_run(
             name=name,
@@ -175,9 +223,12 @@ class RunHistoryMixin:
             totals=totals_from_calc(calc_object),
             output_dir=str(out_dir),
             output_filename=filename,
+            project=project,
+            omrat_version=plugin_version(),
         )
+        # Show this run's project: the refresh after a run selects row 0.
+        self._runs_project_filter = project or folder_project(str(out_dir)) or NO_PROJECT_LABEL
 
-        snapshot = getattr(self, '_run_input_snapshot', None)
         omrat_path = self._maybe_write_input_snapshot(
             snapshot, Path(out_dir), filename,
         )
@@ -193,12 +244,40 @@ class RunHistoryMixin:
         self._safe_write_consequence_sidecar(
             calc_object, Path(out_dir), filename,
         )
+        self._safe_write_powered_sidecar(
+            calc_object, Path(out_dir), filename,
+        )
 
         self._log_run_save_summary(
             name=name, run_id=run_id, gpkg_path=gpkg_path,
             written_layers=written_layers, duration=duration,
             omrat_path=omrat_path, md_path=md_path,
         )
+
+    def _run_project_tag(self, snapshot: dict | None = None) -> str:
+        """Project name of the run: the one in the input snapshot taken at
+        kick-off, else the field.  '' = untagged (output folder name)."""
+        if isinstance(snapshot, dict) and snapshot.get('project_name'):
+            return str(snapshot['project_name']).strip()
+        return self._project_name_text()
+
+    def _project_name_text(self) -> str:
+        try:
+            return (self.main_widget.LEProjectName.text() or '').strip()
+        except Exception:  # nosec B110 B112
+            return ''
+
+    def _current_project_label(self) -> str:
+        """Project a run started now would be grouped under."""
+        from omrat_utils.run_history import folder_project
+        name = self._project_name_text()
+        if name:
+            return name
+        try:
+            folder = (self.main_widget.LEReportPath.text() or '').strip()
+        except Exception:  # nosec B110 B112
+            folder = ''
+        return folder_project(folder)
 
     def _auto_save_run_name(self) -> str:
         try:
@@ -302,6 +381,21 @@ class RunHistoryMixin:
                 'OMRAT', Qgis.MessageLevel.Warning,
             )
 
+    def _safe_write_powered_sidecar(
+        self, calc_object, out_dir, filename,
+    ) -> None:
+        try:
+            self._write_powered_report_sidecar(
+                calc_object=calc_object,
+                out_dir=out_dir,
+                base_filename=filename,
+            )
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"Powered-report sidecar write failed: {exc}",
+                'OMRAT', Qgis.MessageLevel.Warning,
+            )
+
     @staticmethod
     def _log_run_save_summary(
         *, name, run_id, gpkg_path, written_layers, duration,
@@ -340,11 +434,15 @@ class RunHistoryMixin:
         Returns the path of the written file, or ``None`` when there
         wasn't enough data to produce a useful report.
         """
+        from compute.run_phases import PHASE_LABELS, skipped_phases
         from omrat_utils.full_report import build_full_report_markdown
 
         drifting_md: str | None = None
         try:
-            if hasattr(calc_object, 'generate_drifting_report_markdown'):
+            # No drifting report = drifting was not calculated; the
+            # generator would otherwise render a section of zeros.
+            if (getattr(calc_object, 'drifting_report', None) is not None
+                    and hasattr(calc_object, 'generate_drifting_report_markdown')):
                 drifting_md = calc_object.generate_drifting_report_markdown(
                     snapshot,
                 )
@@ -367,6 +465,11 @@ class RunHistoryMixin:
         ):
             return None
 
+        run_phases = getattr(calc_object, 'run_phases', None)
+        skipped = (
+            [PHASE_LABELS[p] for p in skipped_phases(run_phases)]
+            if isinstance(run_phases, (tuple, list)) else []
+        )
         content = build_full_report_markdown(
             run_name=run_name,
             timestamp=timestamp,
@@ -375,11 +478,17 @@ class RunHistoryMixin:
             powered_grounding_report=powered_grounding_report,
             powered_allision_report=powered_allision_report,
             collision_report=collision_report,
-            structures_meta=getattr(calc_object, '_last_structures', None),
+            # Drifting sets ``_last_structures``; a run without drifting
+            # still has the powered allision model's own list (heights).
+            structures_meta=(
+                getattr(calc_object, '_last_structures', None)
+                or getattr(calc_object, '_last_powered_allision_structs', None)
+            ),
             depths_meta=(
                 getattr(calc_object, '_last_depths_original', None)
                 or getattr(calc_object, '_last_depths', None)
             ),
+            skipped_parts=skipped,
         )
         md_path = out_dir / self._results_md_filename(base_filename)
         md_path.parent.mkdir(parents=True, exist_ok=True)
@@ -438,6 +547,25 @@ class RunHistoryMixin:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, default=str)
+        return path
+
+    @staticmethod
+    def _write_powered_report_sidecar(
+        *, calc_object: Any, out_dir: Path, base_filename: str,
+    ) -> Path | None:
+        """Persist the per leg-direction powered frequencies as ``<stem>.powered.json``
+        so the powered View can show each leg's share for a previous run."""
+        from compute.powered_breakdown import SIDECAR_SUFFIX, sidecar_payload
+        payload = sidecar_payload(
+            getattr(calc_object, 'powered_allision_report', None),
+            getattr(calc_object, 'powered_grounding_report', None),
+        )
+        if payload is None:
+            return None
+        path = out_dir / (Path(base_filename).stem + SIDECAR_SUFFIX)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2, default=str)
         return path
 
     def _write_input_snapshot(self, path: Path, data: dict) -> None:
@@ -516,7 +644,9 @@ class RunHistoryMixin:
         try:
             btn.setEnabled(enabled)
             if enabled:
-                btn.setToolTip('')
+                # Names the parts a partial Calculation matrix leaves out.
+                tooltip = getattr(self, '_run_model_tooltip', None)
+                btn.setToolTip(tooltip() if callable(tooltip) else '')
             elif not has_dir and not run_name:
                 btn.setToolTip(
                     'Set a model name and pick an output folder first',
@@ -538,7 +668,7 @@ class RunHistoryMixin:
         AIV = QtWidgets.QAbstractItemView
         tw = self.main_widget.TWPreviousRuns
 
-        headers = ['Name', 'Main', 'Date', 'Duration']
+        headers = ['Name', 'Main', 'Date', 'Duration', 'Version', 'Project']
         tw.setColumnCount(len(headers))
         tw.setHorizontalHeaderLabels(headers)
         tw.horizontalHeader().setStretchLastSection(True)
@@ -550,7 +680,21 @@ class RunHistoryMixin:
             )
         except Exception:  # nosec B110 B112
             pass
+        try:
+            tw.horizontalHeaderItem(self._RUNS_COL_VERSION).setToolTip(
+                'OMRAT version that produced the run')
+            tw.horizontalHeaderItem(self._RUNS_COL_PROJECT).setToolTip(
+                'Project name of the run, else the name of its output folder.  '
+                'Right-click -> Set project... to change it.')
+        except Exception:  # nosec B110 B112
+            pass
         tw.itemChanged.connect(self._on_previous_runs_item_changed)
+        cb = getattr(self.main_widget, 'cbRunProject', None)
+        if cb is not None:
+            cb.currentIndexChanged.connect(self._on_run_project_filter_changed)
+        le = getattr(self.main_widget, 'LEProjectName', None)
+        if le is not None:
+            le.editingFinished.connect(self._on_project_name_edited)
         tw.setSelectionBehavior(_qt_enum(
             AIV, 'SelectRows', 'SelectionBehavior.SelectRows',
         ))
@@ -614,7 +758,8 @@ class RunHistoryMixin:
             pass
 
     def refresh_previous_runs_table(self) -> None:
-        """Reload ``TWPreviousRuns`` from the master history DB."""
+        """Reload ``TWPreviousRuns`` from the master history DB, showing
+        the runs of the project picked in ``cbRunProject``."""
         from omrat_utils.run_history import RunHistory
         from qgis.PyQt import QtCore, QtWidgets
         user_role = _qt_enum(
@@ -622,18 +767,28 @@ class RunHistoryMixin:
         )
         tw = self.main_widget.TWPreviousRuns
         try:
-            runs = RunHistory().list_runs()
+            history = RunHistory()
+            all_runs = history.list_runs()
         except Exception as exc:
             QgsMessageLog.logMessage(
                 f'Could not read run history: {exc}', 'OMRAT', Qgis.MessageLevel.Warning,
             )
             tw.setRowCount(0)
             return
+        try:
+            # Runs from before the version column: read their snapshot once.
+            history.backfill_versions(all_runs)
+        except Exception as exc:  # nosec B110 B112 - the table must still show
+            QgsMessageLog.logMessage(
+                f'Could not fill in run versions: {exc}', 'OMRAT', Qgis.MessageLevel.Warning,
+            )
         main_id = self._get_main_run_id()
-        if main_id is not None and main_id not in {r.run_id for r in runs}:
+        if main_id is not None and main_id not in {r.run_id for r in all_runs}:
             # The main run was deleted from history: forget it.
             self._set_main_run_id(None)
             main_id = None
+        project = self._fill_run_project_combo(all_runs)
+        runs = [r for r in all_runs if project is None or r.project_label() == project]
         checked = _qt_enum(QtCore.Qt, 'Checked', 'CheckState.Checked')
         unchecked = _qt_enum(QtCore.Qt, 'Unchecked', 'CheckState.Unchecked')
         flag_enabled = _qt_enum(QtCore.Qt, 'ItemIsEnabled', 'ItemFlag.ItemIsEnabled')
@@ -669,9 +824,64 @@ class RunHistoryMixin:
                         _format_duration(run.duration_seconds),
                     ),
                 )
+                version_item = QtWidgets.QTableWidgetItem(run.omrat_version or '\u2014')
+                if not run.omrat_version:
+                    version_item.setToolTip(_NO_VERSION_TIP)
+                tw.setItem(i, self._RUNS_COL_VERSION, version_item)
+                project_item = QtWidgets.QTableWidgetItem(run.project_label())
+                project_item.setToolTip(
+                    'Project name' if (run.project or '').strip()
+                    else 'Not tagged: the name of the output folder')
+                tw.setItem(i, self._RUNS_COL_PROJECT, project_item)
         finally:
             tw.blockSignals(was_blocked)
+        # One project shown: its name in every row would be noise.
+        tw.setColumnHidden(self._RUNS_COL_PROJECT, project is not None)
         tw.resizeColumnsToContents()
+
+    def _fill_run_project_combo(self, all_runs) -> str | None:
+        """Refill ``cbRunProject`` and return the project to show (``None``
+        = all).  No explicit choice (``_runs_project_filter is None``)
+        follows the current project, or all projects when it has no runs."""
+        from omrat_utils.run_history import project_counts
+        counts = project_counts(all_runs)
+        wanted = getattr(self, '_runs_project_filter', None)
+        if wanted is not None and wanted != ALL_PROJECTS and wanted not in counts:
+            # Its runs were deleted or moved to another project.
+            self._runs_project_filter = wanted = None
+        if wanted is None:
+            current = self._current_project_label()
+            wanted = current if current in counts else ALL_PROJECTS
+        cb = getattr(self.main_widget, 'cbRunProject', None)
+        if cb is not None:
+            was_blocked = cb.blockSignals(True)
+            try:
+                cb.clear()
+                cb.addItem(f'All projects ({len(all_runs)})', ALL_PROJECTS)
+                for label, n in counts.items():
+                    cb.addItem(f'{label} ({n})', label)
+                cb.setCurrentIndex(max(0, cb.findData(wanted)))
+            finally:
+                cb.blockSignals(was_blocked)
+        return None if wanted == ALL_PROJECTS else wanted
+
+    def _on_run_project_filter_changed(self, index: int) -> None:
+        cb = getattr(self.main_widget, 'cbRunProject', None)
+        if cb is None or index < 0:
+            return
+        self._runs_project_filter = cb.itemData(index)
+        self.refresh_previous_runs_table()
+
+    def _on_project_name_edited(self) -> None:
+        """A new project name moves the default filter along with it."""
+        if getattr(self, '_runs_project_filter', None) is None:
+            self.refresh_previous_runs_table()
+
+    def show_current_project_runs(self) -> None:
+        """Drop an explicit filter choice and show the current project
+        (after a project is loaded or the model is cleared)."""
+        self._runs_project_filter = None
+        self.refresh_previous_runs_table()
 
     # ------------------------------------------------------------------
     # "Main" run (comparison baseline)
@@ -931,6 +1141,10 @@ class RunHistoryMixin:
                 'Add results to map',
                 lambda: self._add_selected_run_to_map(),
             )
+        menu.addAction(
+            'Set project...',
+            lambda: self._set_project_for_runs(run_ids),
+        )
         menu.addSeparator()
         menu.addAction(
             'Delete from history',
@@ -941,6 +1155,35 @@ class RunHistoryMixin:
             lambda: self._delete_runs(run_ids, delete_gpkg=True),
         )
         menu.exec(tw.viewport().mapToGlobal(pos))
+
+    def _ask_project_name(
+        self, n_runs: int, labels: list[str], current: str, parent=None,
+    ) -> tuple[str, bool]:
+        from qgis.PyQt.QtWidgets import QInputDialog
+        return QInputDialog.getItem(
+            parent or self.main_widget, 'Set project',
+            f'Project for {n_runs} run(s).\n'
+            'Pick one, type a new name, or clear the text to use the output folder name.',
+            labels, labels.index(current) if current in labels else 0, True,
+        )
+
+    def _set_project_for_runs(self, run_ids: list[int], parent=None) -> None:
+        """Re-tag runs saved under the wrong project (select all rows of a
+        project first to rename it).  ``parent``: the window asking."""
+        from omrat_utils.run_history import RunHistory, project_counts
+        history = RunHistory()
+        all_runs = history.list_runs()
+        ids = set(run_ids)
+        selected = [r for r in all_runs if r.run_id in ids]
+        if not selected:
+            return
+        text, ok = self._ask_project_name(
+            len(selected), list(project_counts(all_runs)), selected[0].project_label(),
+            parent=parent)
+        if not ok:
+            return
+        history.set_project([r.run_id for r in selected], text)
+        self.refresh_previous_runs_table()
 
     def _add_selected_run_to_map(self) -> None:
         """Load the selected run's per-run GeoPackage onto the canvas."""
@@ -975,7 +1218,7 @@ class RunHistoryMixin:
                 self._history_layers.append(layer)
 
     def _delete_runs(
-        self, run_ids: list[int], *, delete_gpkg: bool = False,
+        self, run_ids: list[int], *, delete_gpkg: bool = False, parent=None,
     ) -> None:
         from omrat_utils.run_history import RunHistory
         yes = _qt_enum(QMessageBox, 'Yes', 'StandardButton.Yes')
@@ -984,7 +1227,7 @@ class RunHistoryMixin:
             + (' AND remove the .gpkg files from disk?' if delete_gpkg else '?')
         )
         confirm = QMessageBox.question(
-            self.main_widget, 'Delete runs', msg,
+            parent or self.main_widget, 'Delete runs', msg,
         )
         if confirm != yes:
             return
@@ -1002,11 +1245,9 @@ class RunHistoryMixin:
         self.refresh_previous_runs_table()
 
     def open_previous_runs_dialog(self) -> None:
-        """File menu shortcut -- focuses the Results tab + the runs table."""
-        try:
-            self.main_widget.tabWidget.setCurrentWidget(
-                self.main_widget.tab_9,
-            )
-        except Exception:  # nosec B110 B112
-            pass
+        """File -> Manage previous runs...: every run of every project in
+        one dialog.  It used to only switch to the Run Analysis tab, so
+        from that tab the menu entry seemed to do nothing."""
+        from omrat_utils.previous_runs_dialog import PreviousRunsDialog
+        PreviousRunsDialog(self, self.main_widget).exec()
         self.refresh_previous_runs_table()

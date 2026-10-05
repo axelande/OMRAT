@@ -22,6 +22,8 @@ from numpy import exp
 from typing import Any, Iterator
 
 from compute.iwrap_defaults import IWRAP_PC_DEFAULTS
+from compute.cat1_start_zone import start_zone_fraction, start_zone_settings  # noqa: E402
+from compute.ray_sampling import ray_sampling_settings  # noqa: E402
 from geometries.get_powered_overlap import (
     SimpleProjector as _PoweredProjector,
     _build_legs_and_obstacles,
@@ -258,7 +260,9 @@ class PoweredModelMixin:
                 max_draft = -1.0 if bin_key is None else float(bin_key)
                 legs, all_obs, _, _, _ = _build_legs_and_obstacles(
                     data, proj, mode="grounding", max_draft=max_draft)
-                bin_results[bin_key] = _run_all_computations(legs, all_obs) if all_obs else []
+                bin_results[bin_key] = _run_all_computations(
+                    legs, all_obs, cat1_start_zone_frac=start_zone_fraction(data.get('pc')),
+                ) if all_obs else []
             except Exception:  # nosec B110 B112
                 bin_results[bin_key] = []
         return bin_results
@@ -446,6 +450,9 @@ class PoweredModelMixin:
             pc_grounding, pc_grounding_cat1,
         )
         self._finalize_grounding(acc, pc_grounding, pc_grounding_cat1, segment_data)
+        if isinstance(self.powered_grounding_report, dict):
+            self.powered_grounding_report['cat1_start_zone'] = start_zone_settings(pc_vals)
+            self.powered_grounding_report['ray_sampling'] = ray_sampling_settings()
         return acc.total
 
     def run_powered_allision_model(self, data: dict[str, Any]) -> float:
@@ -511,9 +518,13 @@ class PoweredModelMixin:
                 pass
         self._last_powered_allision_structs = structs_meta_for_layer
 
-        computations = _run_all_computations(legs, all_obstacles)
+        computations = _run_all_computations(
+            legs, all_obstacles, cat1_start_zone_frac=start_zone_fraction(pc_vals))
         acc = self._sum_allision_contribs(
             computations, traffic_data, obj_heights, pc_allision, pc_allision_cat1,
         )
         self._finalize_allision(acc, pc_allision, pc_allision_cat1, segment_data)
+        if isinstance(self.powered_allision_report, dict):
+            self.powered_allision_report['cat1_start_zone'] = start_zone_settings(pc_vals)
+            self.powered_allision_report['ray_sampling'] = ray_sampling_settings()
         return acc.total

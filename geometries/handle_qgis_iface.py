@@ -1230,18 +1230,24 @@ class HandleQGISIface:
         self.refresh_traffic_links()
 
     def show_traffic_links(self, show: bool) -> None:
-        """Switch the "Traffic links" map layer on / off (toggle button)."""
+        """Switch the "Traffic links" map layer on / off (toggle button).
+        The leg highlight is independent of it and stays."""
         self._links_shown = bool(show)
         if self._links_shown:
             self.refresh_traffic_links()
         else:
             self._remove_traffic_links_layer()
-            self._clear_link_highlight()
 
     def refresh_traffic_links(self) -> None:
-        """Rebuild the links layer from ``segment_data`` (no-op when off)."""
-        if not self._links_shown:
-            return
+        """Rebuild the links layer from ``segment_data`` (when switched on)
+        and redraw the leg highlight, so it follows a moved, re-linked or
+        removed leg (every such edit ends up here)."""
+        if self._links_shown:
+            self._rebuild_traffic_links_layer()
+        if self._highlight_seg is not None:
+            self.highlight_leg(self._highlight_seg)
+
+    def _rebuild_traffic_links_layer(self) -> None:
         from omrat_utils.traffic_links import link_geometries
         layer = self._ensure_traffic_links_layer()
         if layer is None:
@@ -1257,8 +1263,6 @@ class HandleQGISIface:
         provider.addFeatures(feats)
         layer.updateExtents()
         layer.triggerRepaint()
-        if self._highlight_seg is not None:
-            self.highlight_traffic_links(self._highlight_seg)
 
     def _ensure_traffic_links_layer(self) -> "QgsVectorLayer | None":
         layer = self.traffic_links_layer
@@ -1319,17 +1323,18 @@ class HandleQGISIface:
         except RuntimeError:
             pass
 
-    def highlight_traffic_links(self, segment_id: int | str) -> None:
-        """Highlight leg ``segment_id`` (yellow) and every leg its traffic
-        is linked with (orange) on the canvas."""
+    def highlight_leg(self, segment_id: int | str) -> None:
+        """Highlight leg ``segment_id`` (yellow) -- the leg picked in the
+        route table -- and every leg its traffic is linked with (orange:
+        copy source / copies, detours, suppressed together)."""
         from omrat_utils.traffic_links import related_legs
         self._clear_link_highlight()
         seg = str(segment_id)
         segs = getattr(self.omrat, 'segment_data', None) or {}
+        if not isinstance(segs.get(seg), dict):
+            return  # removed leg: nothing left to highlight
         related = related_legs(seg, segs)
         self._highlight_seg = seg
-        if not related:
-            return
         canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
         if canvas is None:
             return
@@ -1430,8 +1435,7 @@ class HandleQGISIface:
                 self.omrat.distributions.run_update_plot(segment_id)
             except ValueError:
                 pass  # Handle or log invalid segment_id if needed
-            if getattr(self, '_links_shown', False):
-                self.highlight_traffic_links(segment_id_item.text())
+            self.highlight_leg(segment_id_item.text())
 
     def update_segment_data(self, point: QgsPoint) -> None:
         main_widget = self.omrat.main_widget
@@ -1583,7 +1587,7 @@ class HandleQGISIface:
         distribution curves (they are redrawn with the tangent)."""
         wanted = {f"Tangent Line {segment_id}"} | {
             self._curve_type(d, segment_id) for d in (1, 2)
-        }
+        } | {self._span_type(d, segment_id) for d in (1, 2)}
         ids = [f.id() for f in self.tangent_layer.getFeatures() if f["type"] in wanted]
         self._curve_sig.pop(str(segment_id), None)
         if not ids:
@@ -1779,6 +1783,13 @@ class HandleQGISIface:
     CURVE_RULE_LABELS = {1: 'Lateral distribution, direction 1 (drawn direction)',
                          2: 'Lateral distribution, direction 2 (reverse)'}
     CURVE_COLOURS = {1: '#1f5fd6', 2: '#1a9641'}   # blue / green like the Distributions plot
+    SPAN_RULE_LABELS = {1: 'Ray span (powered model), direction 1',
+                        2: 'Ray span (powered model), direction 2'}
+
+    @staticmethod
+    def _span_type(direction: int, segment_id: int | str) -> str:
+        """``type`` attribute of a ray-span tick: ``'Ray span 1 12'``."""
+        return f"Ray span {direction} {segment_id}"
 
     @staticmethod
     def _curve_type(direction: int, segment_id: int | str) -> str:
@@ -1787,11 +1798,16 @@ class HandleQGISIface:
 
     @staticmethod
     def _segment_id_from_curve_type(type_text: object) -> str | None:
-        """``'Distribution 2 12' -> '12'``; ``None`` for anything else."""
-        if not isinstance(type_text, str) or not type_text.startswith('Distribution '):
+        """``'Distribution 2 12'`` / ``'Ray span 1 12'`` -> ``'12'``; ``None``
+        for anything else.  Both are drawn from the data, so a drag on
+        either snaps back."""
+        if not isinstance(type_text, str):
             return None
-        parts = type_text.split(' ')
-        return parts[2] if len(parts) == 3 and parts[1] in ('1', '2') and parts[2] else None
+        for prefix in ('Distribution ', 'Ray span '):
+            if type_text.startswith(prefix):
+                rest = type_text[len(prefix):].split(' ')
+                return rest[1] if len(rest) == 2 and rest[0] in ('1', '2') and rest[1] else None
+        return None
 
     def ensure_tangent_renderer(self) -> None:
         """Give the Tangent Line layer a rule-based renderer: the tangent
@@ -1802,7 +1818,7 @@ class HandleQGISIface:
         if layer is None:
             return
         renderer = layer.renderer()
-        wanted = {self.TANGENT_RULE_LABEL, *self.CURVE_RULE_LABELS.values()}
+        wanted = {self.TANGENT_RULE_LABEL, *self.CURVE_RULE_LABELS.values(), *self.SPAN_RULE_LABELS.values()}
         base = None
         if isinstance(renderer, QgsRuleBasedRenderer):
             children = renderer.rootRule().children()
@@ -1821,6 +1837,17 @@ class HandleQGISIface:
             sym.setWidth(0.5)
             root.appendChild(QgsRuleBasedRenderer.Rule(
                 sym, 0, 0, f"\"type\" LIKE 'Distribution {d} %'", label))
+        for d, label in self.SPAN_RULE_LABELS.items():
+            sym = QgsLineSymbol()
+            sym.setColor(QColor(self.CURVE_COLOURS[d]))
+            sym.setWidth(0.35)
+            try:
+                from qgis.PyQt.QtCore import Qt as _Qt
+                sym.symbolLayer(0).setPenStyle(_Qt.PenStyle.DashLine)
+            except Exception:  # nosec B110 B112 - solid tick is still a tick
+                pass
+            root.appendChild(QgsRuleBasedRenderer.Rule(
+                sym, 0, 0, f"\"type\" LIKE 'Ray span {d} %'", label))
         layer.setRenderer(QgsRuleBasedRenderer(root))
         layer.triggerRepaint()
 
@@ -1830,7 +1857,7 @@ class HandleQGISIface:
     ) -> None:
         """Add leg ``segment_id``'s two curves to the tangent layer (the
         caller has removed the old ones)."""
-        from geometries.distribution_curves import curve_points, curve_profiles, signature
+        from geometries.distribution_curves import curve_points, curve_profiles, signature, span_tick_profiles
         seg_key = str(segment_id)
         seg = (getattr(self.omrat, 'segment_data', None) or {}).get(seg_key)
         dx, dy = end_utm.x() - start_utm.x(), end_utm.y() - start_utm.y()
@@ -1846,6 +1873,16 @@ class HandleQGISIface:
             fet.setGeometry(QgsGeometry.fromPolylineXY(canvas_pts))
             fet.setAttributes([self._curve_type(d + 1, segment_id)])
             feats.append(fet)
+        # Ray-span ticks: where the powered model's rays start and stop
+        # (mean +/- RAY_SPAN_SIGMA * sigma of the first component).
+        for d, profiles in span_tick_profiles(seg, width).items():
+            for profile in profiles:
+                pts = curve_points((mid_utm.x(), mid_utm.y()), unit, profile, d)
+                canvas_pts = [to_canvas.transform(QgsPointXY(x, y)) for x, y in pts]
+                fet = QgsFeature()
+                fet.setGeometry(QgsGeometry.fromPolylineXY(canvas_pts))
+                fet.setAttributes([self._span_type(d + 1, segment_id)])
+                feats.append(fet)
         if feats:
             self.tangent_layer.dataProvider().addFeatures(feats)
         self._curve_sig[seg_key] = signature(
@@ -1874,8 +1911,9 @@ class HandleQGISIface:
                             (start_utm.x(), start_utm.y(), end_utm.x(), end_utm.y()))
             if not force and self._curve_sig.get(seg_key) == sig:
                 continue
-            old = [f.id() for f in self.tangent_layer.getFeatures()
-                   if f["type"] in {self._curve_type(1, seg_key), self._curve_type(2, seg_key)}]
+            stale = {self._curve_type(1, seg_key), self._curve_type(2, seg_key),
+                     self._span_type(1, seg_key), self._span_type(2, seg_key)}
+            old = [f.id() for f in self.tangent_layer.getFeatures() if f["type"] in stale]
             if old:
                 self.tangent_layer.dataProvider().deleteFeatures(old)
             self._add_distribution_curves(seg_key, mid_utm, start_utm, end_utm, to_canvas, width)

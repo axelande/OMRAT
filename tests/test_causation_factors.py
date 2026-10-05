@@ -38,6 +38,9 @@ class TestCausationFactorDefaults:
         # figure for both categories.
         assert d['grounding_cat1'] == pytest.approx(1.6e-4)
         assert d['allision_cat1'] == pytest.approx(1.9e-4)
+        # Category I start zone: on, 10 % (compute/cat1_start_zone.py).
+        assert d['cat1_skip_start'] is True
+        assert d['cat1_skip_start_pct'] == pytest.approx(10.0)
 
 
 class TestFieldCoverage:
@@ -109,6 +112,7 @@ class TestSetValuesAndCommitChanges:
             'crossing': 0.55, 'merging': 0.555, 'bend': 0.66,
             'grounding': 0.77, 'allision': 0.88,
             'grounding_cat1': 0.777, 'allision_cat1': 0.888,
+            'cat1_skip_start': True, 'cat1_skip_start_pct': 10.0,
         }
 
     def test_roundtrip_set_then_commit_preserves_data(self, cf):
@@ -122,4 +126,32 @@ class TestSetValuesAndCommitChanges:
         cf.data = dict(original)
         cf.set_values()
         cf.commit_changes()
-        assert cf.data == original
+        # The dialog adds the Category I start-zone keys with their defaults
+        # (on, 10 %) to a project that predates them; the factors are untouched.
+        expected = dict(original, cat1_skip_start=True, cat1_skip_start_pct=10.0)
+        assert cf.data == expected
+
+
+class TestCat1StartZoneWidgets:
+    def test_widgets_follow_data_and_commit_back(self, cf):
+        cf.data['cat1_skip_start'] = False
+        cf.data['cat1_skip_start_pct'] = 25.0
+        cf.set_values()
+        assert cf.cfw.cbCat1SkipStart.isChecked() is False
+        assert cf.cfw.sbCat1SkipStartPct.value() == pytest.approx(25.0)
+        assert cf.cfw.sbCat1SkipStartPct.isEnabled() is False
+        cf.cfw.cbCat1SkipStart.setChecked(True)
+        assert cf.cfw.sbCat1SkipStartPct.isEnabled() is True
+        cf.cfw.sbCat1SkipStartPct.setValue(7.5)
+        cf.commit_changes()
+        assert cf.data['cat1_skip_start'] is True
+        assert cf.data['cat1_skip_start_pct'] == pytest.approx(7.5)
+
+    def test_project_without_the_keys_gets_defaults(self, cf):
+        """A .omrat saved before the setting existed loads as on / 10 %."""
+        cf.data = {k: v for k, v in cf.data.items() if not k.startswith('cat1_skip_start')}
+        cf.set_values()
+        assert cf.cfw.cbCat1SkipStart.isChecked() is True
+        assert cf.cfw.sbCat1SkipStartPct.value() == pytest.approx(10.0)
+        cf.commit_changes()
+        assert cf.data['cat1_skip_start'] is True and cf.data['cat1_skip_start_pct'] == pytest.approx(10.0)

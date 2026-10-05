@@ -41,8 +41,8 @@ Current implementation notes:
 
 .. container:: source-code-ref pipeline
 
-   **Grounding pipeline:** ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__ |
-   **Allision pipeline:** ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__ |
+   **Grounding pipeline:** ``compute/powered_model.py:417`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L417>`__ |
+   **Allision pipeline:** ``compute/powered_model.py:458`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L458>`__ |
    **Exponential decay:** ``compute/basic_equations.py:96`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L96>`__
 
 
@@ -108,7 +108,7 @@ OMRAT evaluates the integral numerically with the same ray caster as
 Category II (see :ref:`shadow-ray-casting` below), so shadowing and
 arbitrary polygon shapes come for free:
 
-1. For each leg and direction, cast ``N_RAYS = 500`` rays *parallel to
+1. For each leg and direction, cast ``N_RAYS = 1000`` rays *parallel to
    the leg* from the waypoint the ships come from, each carrying the
    mass :math:`m_i = f(z_i)\,\Delta z` of its lateral offset.
 2. Clip every ray at the leg length.  An obstacle past the far
@@ -130,6 +130,43 @@ arbitrary polygon shapes come for free:
    enters.  For grounding the draught filter (depth :math:`\le` ship
    draught) and for allision the clearance check (ship height
    :math:`\ge` structure height) apply exactly as for Category II.
+
+.. _cat1-start-zone:
+
+The start zone
+~~~~~~~~~~~~~~
+
+Right after the origin waypoint the parallel-ray picture is wrong: the
+ships are still arriving from the previous leg, and their lateral
+position is not yet described by this leg's fitted distribution.  An
+obstacle lying next to a junction would otherwise collect the far tail
+of the distribution of a leg whose ships never sail there.  In the ESCOW
+case study a wind farm 5 km from a junction received 88 % of its powered
+allision from the East-going flow of the leg *leaving* that junction:
+the park began 2.4σ to starboard of the fitted mean and the 0.8 % tail
+beyond it, times 10,000 ships a year and the causation factor, gave
+1.5e-2 allisions a year, all within the first 8.5 km of a 134 km leg.
+
+**Settings > Causation factors > Category I start zone** (default **on,
+10 %**) drops every Cat I ray whose first edge crossing lies within the
+given share of the leg, measured from the waypoint the ships come from.
+Three consequences follow from the rule being applied per ray:
+
+* An obstacle straddling the line keeps the rays that cross an edge
+  beyond it; those rays are credited to the edge where they leave the
+  start zone.
+* The opposite direction is unaffected: its rays start at the far
+  waypoint, so the same obstacle is met at 90-100 % of the leg and
+  still counts (in the example the West-going ships are centred on the
+  other side of the leg and never reach the park in either case).
+* Category II is untouched.  A ship that misses the turn at the
+  junction and continues straight along the *previous* leg is still
+  scored by that leg's Category II.
+
+Switching the setting off reproduces the plain IWRAP-style Category I.
+The results Markdown states the setting under each powered section, and
+the Compare tab lists it among the settings differences when two runs
+disagree.
 
 .. container:: source-code-ref
 
@@ -256,7 +293,7 @@ The Category II equations above describe the probability for a
 *single ray* from the turning point to a single obstacle. In practice,
 the lateral traffic distribution means ships may be at any lateral
 offset when they miss the turn. OMRAT evaluates this by casting
-**500 rays** across the full lateral distribution.
+**1000 rays** across the lateral distribution, from :math:`\mu - 6\sigma` to :math:`\mu + 6\sigma`.
 
 .. image:: _static/images/shadow_ray_casting.svg
    :width: 100%
@@ -267,9 +304,9 @@ The Algorithm
 
 For each leg and direction (turning point + extension direction):
 
-1. **Sample the lateral distribution**: Generate ``N_RAYS = 500``
-   equally spaced offsets from :math:`\mu - 4\sigma` to
-   :math:`\mu + 4\sigma`, where :math:`\mu` and :math:`\sigma` are
+1. **Sample the lateral distribution**: Generate ``N_RAYS = 1000``
+   equally spaced offsets from :math:`\mu - 6\sigma` to
+   :math:`\mu + 6\sigma` (``compute/ray_sampling.py``), where :math:`\mu` and :math:`\sigma` are
    the lateral distribution parameters.
 
 2. **Compute PDF weights**: For each offset :math:`z_i`, evaluate the
@@ -329,7 +366,7 @@ significantly reduces runtime on projects with many draught entries.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:404`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L404>`__
+   ``geometries/get_powered_overlap.py:415`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L415>`__
 
 
 Shadow Effect
@@ -365,9 +402,10 @@ geometry is needed.
 precision). Each ray's mass is assigned to exactly one obstacle or
 none, so there is no double-counting.
 
-The waterfall visualisation (see :ref:`powered-visualization` below)
-shows how the lateral distribution loses mass at each obstacle in
-distance order.
+The **View** dialog (see :ref:`powered-visualization` below) makes
+this visible: the lateral distribution strip of each Cat I / Cat II
+panel is filled with the colour of the obstacle each ray hits first,
+and the rays stop at that obstacle.
 
 
 Draft Filtering for Grounding
@@ -407,7 +445,7 @@ ship draught.
 
 .. container:: source-code-ref
 
-   ``compute/powered_model.py:213`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L213>`__
+   ``compute/powered_model.py:215`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L215>`__
 
 
 Computation Pipeline
@@ -430,8 +468,8 @@ Grounding Pipeline
       c. Run _run_all_computations():
          For each (leg, direction):
            - Determine turning point and extension direction
-           - Cat II: cast 500 rays from the turning point onwards
-           - Cat I:  cast 500 rays along the leg, clipped at its length
+           - Cat II: cast 1000 rays from the turning point onwards
+           - Cat I:  cast 1000 rays along the leg, clipped at its length
            - First-hit logic assigns each ray to nearest obstacle
            - Accumulate mass and mean distance per obstacle and category
    4. For each (leg, direction, LOA class, ship type):
@@ -491,8 +529,8 @@ a short recovery distance, so the exponential drops off quickly.
 
 .. container:: source-code-ref pipeline
 
-   ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__ |
-   ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__
+   ``compute/powered_model.py:417`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L417>`__ |
+   ``compute/powered_model.py:458`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L458>`__
 
 
 .. _powered-visualization:
@@ -500,60 +538,90 @@ a short recovery distance, so the exponential drops off quickly.
 Visualization
 ==============
 
-OMRAT provides a three-panel interactive visualization for powered
-risk, implemented by ``PoweredOverlapVisualizer``. The visualizer is
-embedded in the QGIS dialog and shows the shadow-aware ray-casting
-results.
+The **View** button of the *Powered allision* and *Powered grounding*
+rows opens an interactive dialog for the run selected in **Previous
+runs**, implemented by ``PoweredOverlapVisualizer``.  It shows the
+shadow-aware ray-casting results in four panels, with a table on the
+right and a matplotlib toolbar (pan / zoom / save) above the figure.
 
-Overview Panel
----------------
+Leg table
+---------
 
-The top panel shows the full geographic context:
+One row per analysed (leg, direction), largest contributor first.  The
+table is the only way to choose what the panels show -- both directions
+of a leg run along the same line of the map, so a click there could
+not tell them apart.
 
-- **Route legs** as coloured lines with start/end markers
-- **Distribution bands** (semi-transparent) showing :math:`\pm 3\sigma`
-  around each direction's lateral mean
-- **Depth areas** in light blue (shallow, hazardous) and grey (deep,
-  ignored)
-- **Objects** (structures) in salmon
-- **Ray fans** from each turning point, coloured by which obstacle
-  the rays hit
-- **Clickable turning points** -- click to select a computation for
-  the detail panels
+- **Leg** and **Direction** -- the names of the route table
+  (``LEG_6_1_b`` / ``East going``), the same as in the Markdown report
+  and the result layers.  The tooltip adds the segment id.
+- **Frequency (/yr)** -- the leg-direction's annual powered accident
+  frequency (Cat I + Cat II, all obstacles).
+- **% of total** -- its share of the run's powered allision /
+  grounding total, as in the collision breakdown.
 
-Detail Panel
--------------
+The figures come from the ``<run>.powered.json`` file written next to
+the run's GeoPackage.  For runs saved before that file existed,
+allision frequencies are recomputed from the run's input snapshot;
+grounding shows the per-ship hit probability instead and ``--`` for
+the share (re-run the model to get them).
 
-The bottom-left panel shows a local-coordinate view for the selected
-turning point:
+Overview (top)
+--------------
 
-- **X-axis**: along-track distance from turning point
-- **Y-axis**: lateral offset from centreline
-- **Lateral distribution** drawn as a curve at :math:`x = 0`,
-  coloured by which obstacle each ray hits
-- **Sample rays** drawn from the turning point to each obstacle
-- **Shadow regions** shown as hatched areas behind each obstacle
-- **Annotation boxes** for each obstacle showing mass, mean distance,
-  and probability
+Every leg in grey and the obstacles.  The selected leg is drawn in its
+direction colour with its :math:`\pm 3\sigma` band and an arrow in the
+travel direction, labelled with its name; the title gives its annual
+frequency and share of the total.  Two dashed boxes show the areas the
+Cat I and Cat II panels below are looking at.  The legend and a short
+how-to sit to the right of the map.
 
-Waterfall Panel
-----------------
+To look closer at any panel, press the magnifier in the toolbar and
+drag a box; the arrows button pans and the house button resets.
+Picking another row starts afresh.
 
-The bottom-right panel shows how the lateral distribution *evolves*
-as obstacles consume mass:
+Cat I panel (bottom left)
+-------------------------
 
-- Obstacles are shown left-to-right in distance order
-- At each obstacle, the remaining distribution is drawn
-- The consumed portion (rays hitting that obstacle) is highlighted
-- After the last obstacle, the remaining (unconsumed) mass is shown
+The leg in its own frame: the ships enter at :math:`x = 0`, the
+turning point is the dashed line at :math:`x = L`, and the panel is
+the map *rotated* so the ships travel left to right
+(:math:`+y` = left of the heading).  It is drawn to **true scale** and
+zoomed to the obstacles that are hit (largest contributors first; a
+hit far from them is left to the toolbar zoom, and the dashed box on
+the overview shows where the window is).  The rays run from
+:math:`x = 0` to the first in-lane obstacle; the grey band at the
+start is the Cat I start zone, the light area past :math:`x = L`
+belongs to Cat II.
 
-This visualization makes the shadow effect directly visible: when
-a nearby obstacle is wide, it consumes a large fraction of the
-distribution, leaving little mass for obstacles further away.
+The strip at the left edge is the lateral distribution of the ships on
+the same lateral scale, filled with the colour of the obstacle each ray
+hits first.  When the window does not reach :math:`x = 0`, the strip
+says how far to the left the rays start.  The legend names the hit
+obstacles with their mass; the title gives
+:math:`P_I = \text{mass}`.
+
+Cat II panels (bottom right)
+----------------------------
+
+- **Geometry** (upper): the same kind of true-scale, zoomed frame
+  starting at the turning point -- ships that miss the turn continue
+  straight on, each ray stopping at the first obstacle; the legend
+  gives each obstacle's mass and mean distance :math:`d`.
+- **Probability** (lower, same x-axis): the survival curve
+  :math:`\exp(-d / (a_i V))` on a log scale.  For each obstacle the
+  open marker is the survival at :math:`d_{mean}`, the filled marker
+  :math:`P_{II} = \text{mass} \times \text{survival}`; the label spells
+  out the product.  The title shows the recovery distance
+  :math:`a_i V`.
+
+The shadow effect is visible in both categories: a ray that hits a
+nearer obstacle never reaches the ones behind it, so a wide nearby
+obstacle leaves little mass for those further away.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:716`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L716>`__
+   ``geometries/get_powered_overlap.py:869`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L869>`__
 
 
 Combined Powered Risk
@@ -639,3 +707,31 @@ Causation Factor Summary
    * - Drifting (all types)
      - :math:`1.0`
      - N/A (powerless)
+
+.. _ray-sampling:
+
+Ray span and ray count
+----------------------
+
+Both categories sample the lateral distribution with ``N_RAYS = 1000``
+rays between :math:`\mu - 6\sigma` and :math:`\mu + 6\sigma` of the
+direction's first normal component (``compute/ray_sampling.py``).  Until
+2026-10-02 the span was :math:`4\sigma` with 500 rays; the mass of a
+normal beyond :math:`4\sigma` is 6.3e-5 per side, which on a 10,000
+ships-a-year leg is an accident frequency of the order of 1e-4 per year
+once an obstacle sits out there, more than a whole Category II total on
+the ESCOW project.  Doubling the ray count keeps the spacing finer than
+before (0.012 :math:`\sigma` against 0.016).  Powered grounding time
+grows with the ray count: on the ESCOW project from 117 s to about
+200 s.
+
+The two figures are constants, not project settings, and every results
+Markdown states them under each powered section ("Ray sampling").  On
+the canvas the **Tangent Line** layer marks where the rays start and stop
+with a short dashed tick per direction at :math:`\mu \pm 6\sigma`, in
+the colour of that direction's distribution curve; when the span reaches
+past the drawn lane the tick stands at its true position with a thin
+dashed extension from the end of the tangent line, so a span wider than
+the lane is visible at a glance.  Rays beyond the lane sample a region
+the AIS fit never saw, so treat what they find as the tail of an
+assumption, not as an observation.

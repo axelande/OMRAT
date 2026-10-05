@@ -29,7 +29,6 @@ from geometries.get_powered_overlap import (  # noqa: E402
     _compute_cat1_in_lane, _total_p_for_comp,
     _extract_edges_local,
     _build_legs_and_obstacles, _run_all_computations,
-    find_closest_computation_index,
     N_RAYS, MAX_RANGE,
 )
 
@@ -597,7 +596,8 @@ class TestComputeCat2Vectorised:
         from math import exp
         from scipy.stats import norm
 
-        offsets = np.linspace(mean_offset - 4 * sigma, mean_offset + 4 * sigma, N_RAYS)
+        from compute.ray_sampling import ray_offsets
+        offsets = ray_offsets(mean_offset, sigma)
         dx = offsets[1] - offsets[0]
         masses = norm.pdf(offsets, mean_offset, sigma) * dx
         recovery = ai * speed_ms
@@ -761,40 +761,6 @@ class TestRunAllComputations:
 
 
 # ---------------------------------------------------------------------------
-# find_closest_computation_index  (refactored helper)
-# ---------------------------------------------------------------------------
-
-class TestFindClosestComputationIndex:
-    def _comps(self):
-        return [
-            {'turn_pt': np.array([0.0, 0.0]), 'name': 'A'},
-            {'turn_pt': np.array([100.0, 0.0]), 'name': 'B'},
-            {'turn_pt': np.array([0.0, 100.0]), 'name': 'C'},
-        ]
-
-    def test_within_threshold_returns_closest(self):
-        idx = find_closest_computation_index(
-            click_xy=(105.0, 5.0),  # closest to B
-            computations=self._comps(),
-            threshold=20.0,
-        )
-        assert idx == 1
-
-    def test_outside_threshold_returns_none(self):
-        idx = find_closest_computation_index(
-            click_xy=(500.0, 500.0),
-            computations=self._comps(),
-            threshold=20.0,
-        )
-        assert idx is None
-
-    def test_empty_comps_returns_none(self):
-        assert find_closest_computation_index(
-            click_xy=(0.0, 0.0), computations=[], threshold=100.0,
-        ) is None
-
-
-# ---------------------------------------------------------------------------
 # PoweredOverlapVisualizer
 # ---------------------------------------------------------------------------
 
@@ -848,9 +814,10 @@ class TestPoweredOverlapVisualizer:
         v = self._make_visualizer(qgis_iface)
         assert v.mode == 'allision'
         assert v._selected_comp_idx is None
-        # Color maps populated.
+        # Color maps populated: one colour per direction and per hit obstacle.
         assert len(v.dir_colors) == 2
-        assert len(v.leg_colors) == 1
+        hit_keys = {k for c in v.computations for k in c['summaries']}
+        assert hit_keys and hit_keys <= set(v.obs_color_map)
 
     def test_run_visualization_draws_overview_and_selects(self, qgis_iface):
         v = self._make_visualizer(qgis_iface)
@@ -876,39 +843,6 @@ class TestPoweredOverlapVisualizer:
             v._select_computation(0)
             # Detail axis has at least the centerline / annotations.
             assert v._selected_comp_idx == 0
-
-    def test_on_overview_click_wrong_axes(self, qgis_iface):
-        from types import SimpleNamespace
-        v = self._make_visualizer(qgis_iface)
-        v.run_visualization()
-        original_idx = v._selected_comp_idx
-        evt = SimpleNamespace(inaxes=v.axes['detail'], xdata=10, ydata=10)
-        v._on_overview_click(evt)
-        assert v._selected_comp_idx == original_idx
-
-    def test_on_overview_click_no_xy(self, qgis_iface):
-        from types import SimpleNamespace
-        v = self._make_visualizer(qgis_iface)
-        v.run_visualization()
-        evt = SimpleNamespace(
-            inaxes=v.axes['overview'], xdata=None, ydata=None,
-        )
-        # Should not raise.
-        v._on_overview_click(evt)
-
-    def test_on_overview_click_near_turn_point_selects(self, qgis_iface):
-        from types import SimpleNamespace
-        v = self._make_visualizer(qgis_iface)
-        v.run_visualization()
-        if not v.computations:
-            return  # nothing to click
-        tp = v.computations[0]['turn_pt']
-        evt = SimpleNamespace(
-            inaxes=v.axes['overview'],
-            xdata=float(tp[0]) + 1.0, ydata=float(tp[1]) + 1.0,
-        )
-        v._on_overview_click(evt)
-        assert v._selected_comp_idx == 0
 
     def test_no_computations_run_visualization_safe(self, qgis_iface):
         """An empty computations list should still allow run_visualization."""

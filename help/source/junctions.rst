@@ -23,8 +23,9 @@ where each row sums to 1.0.  Rows are populated from one of three
 sources, in order of preference:
 
 #. **AIS-derived** -- when a database connection is configured, OMRAT
-   walks AIS tracks across each leg pair near the junction and
-   normalises the per-MMSI counts.  This is the most accurate source.
+   counts matched transits through the junction (see
+   :ref:`junction-ais-counts` below) and normalises them per row.  This
+   is the most accurate source.
 #. **Geometry-derived** -- when AIS is unavailable, a fallback
    heuristic scores out-legs by their deflection angle from the
    inbound bearing (``exp(-deflection / 30 deg)``) and normalises.
@@ -33,6 +34,40 @@ sources, in order of preference:
    **Settings > Junction transition matrix...**, marked
    ``source="user"``, and preserved across subsequent
    *Update all distributions* runs.
+
+
+.. _junction-ais-counts:
+
+How the AIS counts are made
+===========================
+
+Every AIS segment that crosses a leg's passage line (the tangent line,
+the same line the traffic update samples) is one *crossing*.  Its COG
+sorts it into the leg's two directions with the same rule and maximum
+deviation as the traffic binning, which tells whether the ship was
+heading **towards** the junction (inbound) or **away** from it
+(outbound).
+
+Crossings are then grouped into trips by ``(mmsi, route_id)``, where the
+segments table's ``route_id`` identifies one port-to-port trip.  Within
+a trip, sorted by time, an inbound crossing on leg *i* directly followed
+by an outbound crossing on leg *j* is one transit *i -> j*:
+
+* every trip counts, so a ferry on 300 trips a year adds 300 transits;
+* a trip that passes the junction twice counts twice;
+* a U-turn (in and back out on the same leg) is not a transit.
+
+Crossings that cannot be paired -- a trip that starts or ends between
+the passage line and the junction, or whose other crossing was not
+observed -- add nothing.  Each row is normalised over its matched
+transits, so they do not change the shares.  After every junction pass
+the QGIS log (``OMRAT`` tab) reports, for each junction with three or
+more legs, how many inbound crossings were matched and how many
+crossings carried a ``route_id``.
+
+Segments without a ``route_id`` are paired per MMSI instead, and then
+the two crossings must be at most 2 h apart.  A row with no matched
+transit keeps its geometric default.
 
 
 How a transition matrix changes the calculation
@@ -188,6 +223,6 @@ Behind the scenes
   ``omrat_utils/junction_matrix_dialog.py``.
 * AIS-derived counts:
   ``compute/junction_transitions.py``
-  (pure-Python normaliser) plus
-  ``omrat_utils/handle_ais.py:compute_junction_transitions``
-  (database query).
+  (pure-Python trip pairing and normaliser) plus
+  ``omrat_utils/handle_ais.py:fetch_passages_for_leg`` /
+  ``compute_junction_transitions`` (database query and COG direction).

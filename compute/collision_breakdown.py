@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from compute.leg_labels import leg_display, pair_label  # noqa: E402
+
 PAIR_TYPES = ('crossing', 'merging')
 
 
@@ -18,7 +20,9 @@ def _f(value: Any) -> float:
         return 0.0
 
 
-def _collect(report: dict[str, Any], encounter_type: str) -> tuple[list[str], list[tuple[list[str], float]]]:
+def _collect(
+    report: dict[str, Any], encounter_type: str, segment_data: dict[str, Any] | None = None,
+) -> tuple[list[str], list[tuple[list[str], float]]]:
     """Return ``(headers_without_probability, [(text_cells, probability), ...])``."""
     rows: list[tuple[list[str], float]] = []
     if encounter_type in PAIR_TYPES:
@@ -30,7 +34,7 @@ def _collect(report: dict[str, Any], encounter_type: str) -> tuple[list[str], li
             if v <= 0.0:
                 continue
             rows.append((
-                [str(label), str(rec.get('waypoint', '')), f"{_f(rec.get('angle_deg')):.1f}"],
+                [pair_label(segment_data, label), str(rec.get('waypoint', '')), f"{_f(rec.get('angle_deg')):.1f}"],
                 v,
             ))
     elif encounter_type == 'bend':
@@ -41,7 +45,7 @@ def _collect(report: dict[str, Any], encounter_type: str) -> tuple[list[str], li
             v = _f(rec.get('bend'))
             if v <= 0.0:
                 continue
-            rows.append(([str(label), str(rec.get('waypoint', ''))], v))
+            rows.append(([pair_label(segment_data, label), str(rec.get('waypoint', ''))], v))
     else:
         headers = ['Leg']
         for leg_id, leg_vals in (report.get('by_leg', {}) or {}).items():
@@ -50,12 +54,13 @@ def _collect(report: dict[str, Any], encounter_type: str) -> tuple[list[str], li
             v = _f(leg_vals.get(encounter_type))
             if v <= 0.0:
                 continue
-            rows.append(([str(leg_id)], v))
+            rows.append(([leg_display(segment_data, leg_id)], v))
     return headers, rows
 
 
 def build_breakdown_rows(
     report: dict[str, Any] | None, encounter_type: str,
+    segment_data: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[list[str]]]:
     """Return ``(headers, rows)`` for the breakdown table.
 
@@ -66,7 +71,7 @@ def build_breakdown_rows(
     Rows are sorted by descending probability.
     """
     report = report or {}
-    headers, collected = _collect(report, encounter_type)
+    headers, collected = _collect(report, encounter_type, segment_data)
     if not collected:
         return headers + ['Probability', '% of total'], []
     collected.sort(key=lambda item: -item[1])

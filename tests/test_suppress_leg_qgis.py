@@ -173,9 +173,9 @@ def test_traffic_links_layer_and_highlight(hqi, legs):
         assert QgsProject.instance().mapLayer(layer.id()) is not None
         feats = list(layer.getFeatures())
         assert [(f['kind'], f['src'], f['dst'], f['label']) for f in feats] == [('copy', '91', '92', 'copy (locked)')]
-        hqi.highlight_traffic_links('91')
+        hqi.highlight_leg('91')
         assert hqi.highlighted_legs() == 2          # the leg itself + its copy
-        hqi.highlight_traffic_links('92')
+        hqi.highlight_leg('92')
         assert hqi.highlighted_legs() == 2
         # A new link shows up without toggling the view.
         from omrat_utils.suppress_leg_dialog import apply_suppression
@@ -186,7 +186,43 @@ def test_traffic_links_layer_and_highlight(hqi, legs):
     finally:
         hqi.show_traffic_links(False)
     assert hqi.traffic_links_layer is None
+    # The highlight belongs to the route table, not to the links view.
+    assert hqi.highlighted_legs() == 2
+
+
+def test_any_leg_is_highlighted_without_links(hqi, legs):
+    """A leg with no copy / redirect is highlighted too (yellow only), and
+    the Traffic links view does not have to be on."""
+    assert not hqi._links_shown
+    hqi.highlight_leg('91')
+    assert hqi.highlighted_legs() == 1
+
+
+def test_route_table_click_highlights_the_leg(hqi, legs):
+    from qgis.PyQt.QtWidgets import QTableWidgetItem
+    table = hqi.omrat.main_widget.twRouteList
+    table.setRowCount(1)
+    table.setItem(0, 0, QTableWidgetItem('92'))
+    try:
+        hqi.on_route_table_cell_clicked(0, 1)
+        assert hqi._highlight_seg == '92'
+        assert hqi.highlighted_legs() == 1
+    finally:
+        table.setRowCount(0)
+
+
+def test_highlight_follows_edits_and_removal(hqi, legs):
+    from qgis.core import QgsGeometry
+    om = hqi.omrat
+    hqi.highlight_leg('92')
+    om.segment_data['92']['End_Point'] = '14.300000 55.400000'
+    hqi.refresh_traffic_links()                    # what a vertex move ends with
+    band = hqi._link_bands[0].asGeometry()
+    assert band.equals(QgsGeometry.fromWkt('LINESTRING(14 55.2, 14.3 55.4)'))
+    om.segment_data.pop('92')
+    hqi.refresh_traffic_links()                    # what remove_leg ends with
     assert hqi.highlighted_legs() == 0
+    assert hqi._highlight_seg is None
 
 
 def test_traffic_links_button_is_checkable_and_wired(hqi):

@@ -682,6 +682,16 @@ class AccidentResultsMixin:
             lines.append('\t'.join(cells))
         QApplication.clipboard().setText('\n'.join(lines))
 
+    def _clear_accident_results(self, keys) -> None:
+        """Blank the rows of ``keys`` (``ACCIDENT_TOTAL_KEYS`` names): a
+        model part the last run did not calculate has no value."""
+        for row, key in enumerate(ACCIDENT_TOTAL_KEYS):
+            if key not in keys:
+                continue
+            le = getattr(self.main_widget, self._ACCIDENT_ROWS[row][1], None)
+            if le is not None:
+                le.setText('')
+
     def _on_lep_text_changed(self, row: int, text: str) -> None:
         """Forward edits on a hidden LEP* into the new accident table."""
         try:
@@ -785,6 +795,8 @@ class AccidentResultsMixin:
         run = self._require_single_selected_run()
         if run is None:
             return
+        if self._not_calculated_in_run(slot_name, run, label):
+            return
         data, collision_report, drifting_report = (
             self._load_run_inputs_and_collision_report(run)
         )
@@ -822,10 +834,44 @@ class AccidentResultsMixin:
         with self._view_progress(label):
             self._invoke_drift_or_powered_visualiser(
                 method, data, drifting_report,
+                powered_reports=self._load_powered_reports(run),
             )
+
+    def _not_calculated_in_run(self, slot_name: str, run, label: str) -> bool:
+        """Tell the user (and return True) when ``run`` skipped this
+        accident type in the Calculation matrix -- its history total is
+        empty, while every calculated type has a number (0 included)."""
+        row = next((i for i, r in enumerate(self._ACCIDENT_ROWS) if r[3] == slot_name), None)
+        if row is None:
+            return False
+        try:
+            value = run.totals_dict().get(ACCIDENT_TOTAL_KEYS[row])
+        except Exception:  # nosec B110 B112
+            return False
+        if value is not None:
+            return False
+        QMessageBox.information(
+            self.main_widget,
+            self.tr('Not calculated'),
+            self.tr(
+                "{label} was not calculated in the run '{name}' (it was "
+                "left out in the Calculation matrix).  Pick a run that "
+                "includes it."
+            ).format(label=label, name=getattr(run, 'name', '')),
+        )
+        return True
 
     def _view_progress(self, label: str):
         return _ViewProgress(self.main_widget, label)
+
+    @staticmethod
+    def _load_powered_reports(run) -> dict | None:
+        """The run's ``<stem>.powered.json`` (per-leg powered shares), or ``None``."""
+        try:
+            from omrat_utils.run_history_mixin import load_powered_sidecar
+            return load_powered_sidecar(run)
+        except Exception:  # nosec B110 B112
+            return None
 
     def _invoke_collision_breakdown(
         self, method, breakdown_key, collision_report,
@@ -838,15 +884,19 @@ class AccidentResultsMixin:
             self.calc.collision_report = previous
 
     def _invoke_drift_or_powered_visualiser(
-        self, method, data, drifting_report,
+        self, method, data, drifting_report, powered_reports=None,
     ) -> None:
         prev_dr = getattr(self.calc, 'drifting_report', None)
+        prev_pr = getattr(self.calc, 'powered_view_reports', None)
         try:
             if drifting_report is not None:
                 self.calc.drifting_report = drifting_report
+            # Always set (also to None): a previous View's run must not leak in.
+            self.calc.powered_view_reports = powered_reports
             method(data)
         finally:
             self.calc.drifting_report = prev_dr
+            self.calc.powered_view_reports = prev_pr
 
     # ------------------------------------------------------------------
     # Public View slots (one per accident type)

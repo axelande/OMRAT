@@ -1,10 +1,26 @@
-"""Pure-Python helpers for deriving junction transition counts from AIS passages.
+"""Pure-Python helpers for deriving junction transition counts from AIS crossings.
 
-The expensive part — querying the PostGIS database for which MMSIs
-transit the near-junction zone of each leg — lives in
-:mod:`omrat_utils.handle_ais`.  Once that returns ``passages_by_leg``
-(one timestamp list per MMSI per leg), the rest of the work is pure
-data manipulation, which is what this module owns.
+The expensive part -- querying the PostGIS database for the AIS segments
+that cross each leg's passage line -- lives in
+:mod:`omrat_utils.handle_ais`.  It hands over one :class:`Crossing` per
+segment, already sorted into the leg's two directions by COG with the
+same rule the traffic binning uses.  Pairing those crossings into
+``in_leg -> out_leg`` transits is pure data manipulation, which is what
+this module owns.
+
+Crossings are paired per **trip**.  The segments table carries a
+``route_id`` per port-to-port trip, so every crossing of one vessel on
+one ``route_id`` belongs to the same trip however long it took.  Rows
+without a ``route_id`` fall back to the vessel (MMSI), and then the two
+crossings must be at most ``time_window_s`` apart.
+
+Within a trip the crossings at a junction are walked in time order: an
+*inbound* crossing (heading towards the junction) on one leg directly
+followed by an *outbound* crossing on another leg is one transit.
+Everything else -- a trip that starts or ends between the passage line
+and the junction, a U-turn, a crossing whose partner was not observed --
+is unmatched and adds nothing, so the shares are normalised over the
+matched transits only.
 
 Splitting the responsibilities like this keeps the database-dependent
 code out of the standalone test suite while still letting us exercise
@@ -14,85 +30,118 @@ the transition logic end-to-end.
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import NamedTuple
 
-# Default tolerance for matching an inbound and outbound passage as
-# belonging to the same trip.  Tracks that pass two legs more than this
-# apart are not a single junction transit.  Two hours covers most port
-# manoeuvres while excluding return trips.
+# Fallback for crossings without a ``route_id``: the inbound and the
+# outbound crossing of one vessel must be at most this far apart to be a
+# single junction transit.  Two hours covers most port manoeuvres while
+# excluding return trips.
 DEFAULT_TIME_WINDOW_S = 2 * 60 * 60
 
 
-def _collect_first_seen(
-    passages_by_leg: dict[str, dict[str, list[float]]],
-) -> dict[str, dict[str, float]]:
-    first_seen: dict[str, dict[str, float]] = {}
-    for leg_id, by_mmsi in passages_by_leg.items():
-        slot: dict[str, float] = {}
-        for mmsi, times in (by_mmsi or {}).items():
-            if not times:
-                continue
-            try:
-                slot[str(mmsi)] = float(min(times))
-            except (TypeError, ValueError):
-                continue
-        first_seen[leg_id] = slot
-    return first_seen
+class Crossing(NamedTuple):
+    """One AIS segment crossing a leg's passage line."""
+
+    mmsi: str
+    route_id: int | None
+    t: float
+    # True: cog ~ leg bearing (the drawn direction, Dirs[0]); False: reciprocal.
+    along_drawn: bool
 
 
-def _count_mmsi_transitions(
-    first_seen: dict[str, dict[str, float]], time_window_s: float,
-) -> dict[str, dict[str, int]]:
-    out: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    mmsi_legs: dict[str, list[tuple[str, float]]] = defaultdict(list)
-    for leg_id, by_mmsi in first_seen.items():
-        for mmsi, t in by_mmsi.items():
-            mmsi_legs[mmsi].append((leg_id, t))
-    for mmsi, hits in mmsi_legs.items():
-        if len(hits) < 2:
-            continue
-        hits.sort(key=lambda x: x[1])
-        in_leg, in_t = hits[0]
-        recorded: set[str] = set()
-        for out_leg, out_t in hits[1:]:
-            if out_leg == in_leg or out_leg in recorded:
-                continue
-            if out_t - in_t > time_window_s:
-                in_leg, in_t = out_leg, out_t
-                recorded = set()
-                continue
-            out[in_leg][out_leg] += 1
-            recorded.add(out_leg)
-    return out
+class MatchSummary(NamedTuple):
+    """How much of a junction's AIS evidence was paired into transits."""
+
+    matched: int        # in -> out transits counted
+    inbound: int        # crossings heading towards the junction
+    with_route_id: int  # crossings that carried a route_id
 
 
-def transition_counts_from_passages(
-    passages_by_leg: dict[str, dict[str, list[float]]],
+class _Event(NamedTuple):
+    t: float
+    outbound: bool  # False sorts first, so inbound wins a tie on t
+    leg_id: str
+
+
+def is_inbound(side: str | None, along_drawn: bool) -> bool | None:
+    """Whether a crossing heads towards the junction at ``side`` of its leg.
+
+    Flow in the drawn direction (``Start_Point -> End_Point``) arrives at
+    the leg's end, so it is inbound at an ``"end"`` junction and outbound
+    at a ``"start"`` one.  ``None`` for an unknown side.
+    """
+    if side == 'end':
+        return along_drawn
+    if side == 'start':
+        return not along_drawn
+    return None
+
+
+def _trip_events(
+    crossings_by_leg: dict[str, list[Crossing]],
+    leg_sides: dict[str, str],
+) -> dict[tuple[str, int | None], list[_Event]]:
+    trips: dict[tuple[str, int | None], list[_Event]] = defaultdict(list)
+    for leg_id, crossings in crossings_by_leg.items():
+        side = leg_sides.get(leg_id)
+        for c in crossings or ():
+            inbound = is_inbound(side, c.along_drawn)
+            if inbound is None:
+                continue
+            trips[(str(c.mmsi), c.route_id)].append(_Event(float(c.t), not inbound, leg_id))
+    return trips
+
+
+def transition_counts_from_crossings(
+    crossings_by_leg: dict[str, list[Crossing]],
+    leg_sides: dict[str, str],
     *,
     time_window_s: float = DEFAULT_TIME_WINDOW_S,
 ) -> dict[str, dict[str, int]]:
-    """Count MMSI-level (in_leg -> out_leg) transitions across legs.
+    """Count ``in_leg -> out_leg`` transits at one junction.
 
-    ``passages_by_leg[leg_id][mmsi]`` is a list of UNIX-epoch timestamps
-    for every AIS ping by that vessel inside ``leg_id``'s near-junction
-    zone.  An "in_leg -> out_leg" transition is recorded when the same
-    MMSI's earliest timestamp on ``out_leg`` is later than its earliest
-    timestamp on ``in_leg`` *and* the gap is no greater than
-    ``time_window_s``.  Each MMSI contributes at most one count to
-    (in_leg, out_leg).
+    ``crossings_by_leg`` holds the passage-line crossings of every leg
+    meeting at the junction and ``leg_sides`` which end of each leg
+    touches it (``Junction.legs``).  Crossings are grouped into trips by
+    ``(mmsi, route_id)`` and sorted by time; an inbound crossing on leg
+    *i* directly followed by an outbound crossing on leg *j != i* counts
+    one *i -> j* transit.  A trip that passes the junction twice counts
+    twice.  Crossings without a ``route_id`` must also be at most
+    ``time_window_s`` apart.
 
-    Pairs where ``in_leg == out_leg`` are skipped — a ship on the same
-    leg twice is a U-turn, not a junction transition.
+    Every leg in ``crossings_by_leg`` gets a row.  A row without matched
+    transits stays empty, so the caller keeps the geometric default.
     """
-    leg_ids = list(passages_by_leg.keys())
-    if len(leg_ids) < 2:
-        return {leg_id: {} for leg_id in leg_ids}
-    first_seen = _collect_first_seen(passages_by_leg)
-    raw_counts = _count_mmsi_transitions(first_seen, time_window_s)
-    result: dict[str, dict[str, int]] = {}
-    for leg_id in leg_ids:
-        row = raw_counts.get(leg_id)
-        result[leg_id] = dict(row) if row else {}
-    return result
+    out: dict[str, dict[str, int]] = {leg_id: {} for leg_id in crossings_by_leg}
+    for (_mmsi, route_id), events in _trip_events(crossings_by_leg, leg_sides).items():
+        events.sort()
+        for prev, nxt in zip(events, events[1:]):
+            if prev.outbound or not nxt.outbound or prev.leg_id == nxt.leg_id:
+                continue
+            if route_id is None and nxt.t - prev.t > time_window_s:
+                continue
+            row = out.setdefault(prev.leg_id, {})
+            row[nxt.leg_id] = row.get(nxt.leg_id, 0) + 1
+    return out
+
+
+def match_summary(
+    crossings_by_leg: dict[str, list[Crossing]],
+    leg_sides: dict[str, str],
+    counts: dict[str, dict[str, int]],
+) -> MatchSummary:
+    """Matched transits vs inbound crossings at one junction (for the log)."""
+    inbound = 0
+    with_route_id = 0
+    for leg_id, crossings in crossings_by_leg.items():
+        side = leg_sides.get(leg_id)
+        for c in crossings or ():
+            if is_inbound(side, c.along_drawn):
+                inbound += 1
+            if c.route_id is not None:
+                with_route_id += 1
+    matched = sum(sum(row.values()) for row in counts.values())
+    return MatchSummary(matched, inbound, with_route_id)
 
 
 def normalise_counts_to_shares(

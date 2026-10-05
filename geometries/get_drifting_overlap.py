@@ -54,6 +54,7 @@ from geometries.drift_overlap_plot import visualize
 from geometries.drift_overlap_sidebar import (
     DIRECTION_LABELS,
     build_overlap_sidebar,
+    display_leg_name,
 )
 from ui.show_geom_res import ShowGeomRes
 
@@ -104,6 +105,7 @@ class DriftingOverlapVisualizer:
         self.data = data
         self.distance = distance
 
+        self.current_leg_idx: int | None = None
         self.current_line: LineString | None = None
         self.current_base_polygon: Polygon | None = None
         self.current_extended_polygons: list[BaseGeometry] | None = None
@@ -131,6 +133,26 @@ class DriftingOverlapVisualizer:
         self.ax1.set_title("Route legs (select via the table on the right)")
         self.ax2.set_title("Drift directions")
         self.ax3.set_title("Probability Density Function (PDF)")
+
+    def leg_display_name(self, idx: int | None) -> str:
+        """Route-table name of leg ``idx`` (``LEG_6_1_a East going``)."""
+        if idx is None or not (0 <= idx < len(self.line_names)):
+            return ''
+        return display_leg_name(
+            self.line_names[idx], (self.data or {}).get('segment_data'),
+        )
+
+    def _highlight_leg(self, idx: int) -> None:
+        """Thicken the selected leg in ``ax1`` and fade the others."""
+        for i, artist in enumerate(self.ax1.get_lines()[:len(self.lines)]):
+            selected = i == idx
+            artist.set_linewidth(4.0 if selected else 1.5)
+            artist.set_alpha(1.0 if selected else 0.35)
+            artist.set_zorder(5 if selected else 2)
+        self.ax1.set_title(
+            f"Route legs -- selected: {self.leg_display_name(idx)}",
+            fontsize=9,
+        )
 
     def connect_events(self) -> None:
         self.fig.canvas.mpl_connect('pick_event', self.on_line_click)
@@ -213,6 +235,7 @@ class DriftingOverlapVisualizer:
         """Programmatic equivalent of clicking on a leg in ``ax1``."""
         if idx < 0 or idx >= len(self.lines):
             return
+        self.current_leg_idx = idx
         self._set_current_line_state(idx)
         if (self.current_line is None
                 or self.current_distribution is None
@@ -235,6 +258,7 @@ class DriftingOverlapVisualizer:
             self.current_extended_polygons, self.objs_gdf_list,
         )
         covered = self._update_coverages_and_distances(results)
+        self._highlight_leg(idx)
         self._plot_polygons(covered)
         self._plot_objects()
         self._auto_select_polygon(direction_idx)
@@ -464,7 +488,10 @@ class DriftingOverlapVisualizer:
             objs_gdf.plot(
                 ax=self.ax2, color='red', alpha=0.7, label='Objects',
             )
-        self.ax2.set_title("Drift directions")
+        name = self.leg_display_name(self.current_leg_idx)
+        self.ax2.set_title(
+            f"Drift directions -- {name}" if name else "Drift directions",
+        )
         self.fig.canvas.draw()
 
     def _render_polygon_panel(self, i: int) -> None:
@@ -565,6 +592,7 @@ class DriftingOverlapVisualizer:
 
         sidebar = build_overlap_sidebar(
             line_names, drifting_report, accident_kind,
+            segment_data=(data or {}).get('segment_data'),
         )
         cls._install_canvas_and_sidebar(dialog, canvas, sidebar)
 

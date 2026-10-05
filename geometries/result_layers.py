@@ -33,6 +33,8 @@ from qgis.core import (
 from qgis.PyQt.QtGui import QColor
 import logging
 
+from compute.leg_labels import leg_field_map, leg_label  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Human-readable aliases for the result-layer fields. Keys are the QGIS field
@@ -482,6 +484,7 @@ def _collect_all_leg_keys(obstacle_data: dict[str, dict[str, Any]]) -> set[str]:
 
 def _init_result_layer(
     name: str, all_leg_keys: set[str],
+    segment_data: dict[str, Any] | None = None,
 ) -> tuple[QgsVectorLayer, Any, dict[str, str]]:
     layer = QgsVectorLayer("LineString?crs=epsg:4326", name, "memory")
     provider = layer.dataProvider()
@@ -505,11 +508,11 @@ def _init_result_layer(
         QgsField("min_edge_dist_m", QVariant.Double),
         QgsField("max_reach_width_m", QVariant.Double),
     ]
-    leg_key_to_field: dict[str, str] = {}
+    # One column per contributing leg, named after the route table
+    # (``LEG_1_2_b``) when ``segment_data`` is known, else ``leg_<id>``.
+    leg_key_to_field: dict[str, str] = leg_field_map(segment_data, all_leg_keys)
     for leg_key in sorted(all_leg_keys):
-        safe_name = f"leg_{leg_key}"
-        leg_key_to_field[leg_key] = safe_name
-        fields.append(QgsField(safe_name, QVariant.Double))
+        fields.append(QgsField(leg_key_to_field[leg_key], QVariant.Double))
     provider.addAttributes(fields)
     layer.updateFields()
     _set_result_field_aliases(layer)
@@ -625,6 +628,7 @@ def create_result_layer(
     name: str,
     obstacle_data: dict[str, dict[str, Any]],
     layer_type: str = 'allision',
+    segment_data: dict[str, Any] | None = None,
 ) -> QgsVectorLayer | None:
     """
     Create a QGIS vector layer with obstacle geometries and probability attributes.
@@ -647,7 +651,7 @@ def create_result_layer(
         logger.info(f"No {layer_type} data to create layer")
         return None
     all_leg_keys = _collect_all_leg_keys(obstacle_data)
-    layer, provider, leg_key_to_field = _init_result_layer(name, all_leg_keys)
+    layer, provider, leg_key_to_field = _init_result_layer(name, all_leg_keys, segment_data)
     if provider is None:
         return None
     features: list[QgsFeature] = []
@@ -737,6 +741,7 @@ def create_result_layers(
     structures: list[dict[str, Any]],
     depths: list[dict[str, Any]],
     add_to_project: bool = True,
+    segment_data: dict[str, Any] | None = None,
 ) -> tuple[QgsVectorLayer | None, QgsVectorLayer | None]:
     """
     Create grounding and allision result layers from calculation results.
@@ -765,14 +770,12 @@ def create_result_layers(
     allision_layer = create_result_layer(
         "Allision Results",
         allision_data,
-        "allision",
-    )
+        "allision", segment_data=segment_data)
 
     grounding_layer = create_result_layer(
         "Grounding Results",
         grounding_data,
-        "grounding",
-    )
+        "grounding", segment_data=segment_data)
 
     # Apply symbology
     if allision_layer is not None:
@@ -882,6 +885,7 @@ def _build_collision_line_layer(
     lp = layer.dataProvider()
     lp.addAttributes([
         QgsField('leg_id', QVariant.String),
+        QgsField('leg_name', QVariant.String),
         QgsField('head_on', QVariant.Double),
         QgsField('overtaking', QVariant.Double),
         QgsField('combined', QVariant.Double),
@@ -906,6 +910,7 @@ def _build_collision_line_layer(
         feat = QgsFeature(layer.fields())
         feat.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(sp[0], sp[1]), QgsPointXY(ep[0], ep[1])]))
         feat.setAttribute('leg_id', str(leg_id))
+        feat.setAttribute('leg_name', leg_label(segment_data, leg_id))
         feat.setAttribute('head_on', head_on)
         feat.setAttribute('overtaking', overtaking)
         feat.setAttribute('combined', combined)
@@ -1088,7 +1093,7 @@ def _build_powered_layer_per_obstacle_segments(
     """
     import shapely.wkt as shapely_wkt
 
-    all_leg_ids, leg_to_field = _collect_leg_fields(by_obstacle_leg)
+    all_leg_ids, leg_to_field = _collect_leg_fields(by_obstacle_leg, segment_data)
     layer = QgsVectorLayer('LineString?crs=EPSG:4326', name, 'memory')
     pr = layer.dataProvider()
     fields = [
@@ -1190,6 +1195,7 @@ def _build_powered_layer_per_obstacle_segments(
 
 def _collect_leg_fields(
     by_obstacle_leg: dict | None,
+    segment_data: dict[str, Any] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     all_leg_ids: list[str] = []
     leg_to_field: dict[str, str] = {}
@@ -1201,8 +1207,8 @@ def _collect_leg_fields(
                     seen.add(leg_id)
                     all_leg_ids.append(str(leg_id))
         all_leg_ids.sort()
-        for leg_id in all_leg_ids:
-            leg_to_field[leg_id] = f'leg_{leg_id.replace(":", "_")}'
+        # ``LEG_1_2_b_East_going`` when the leg is known, else ``leg_9_0``.
+        leg_to_field = leg_field_map(segment_data, all_leg_ids)
     return all_leg_ids, leg_to_field
 
 

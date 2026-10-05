@@ -7,7 +7,7 @@ name=OMRAT - Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.30
 qgisMaximumVersion=4.9
 description=OMRAT Open Maritime Risk Analysis Tool. This is an open source implementation of Pedersens and Friis-Hansen equations to calculate the probability of maritime accidents. The full documentation of the plugin could be found here: https://axelande.github.io/OMRAT/
-version=0.16.7
+version=0.17.0
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 license=GPL-3
@@ -24,6 +24,10 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.17.0 (2026-10-05) - Updated junction matrix calculation, highlighting selected legs.
+  Version 0.16.10 (2026-10-02)- Powered-model rays now span +/- 6 sigma with 1000 rays (was 4 sigma / 500), stated in the report and marked by ticks on the tangent line.
+  Version 0.16.9 (2026-10-01) - New Category I start zone setting (Causation factors, default on 10 %): in-lane hits right after the origin waypoint are ignored. Result layers, the results Markdown and the View breakdown name legs as in the route table (LEG_1_2_b East going) instead of leg_9_0.
+  Version 0.16.8 (2026-09-28) - Compare tab can add difference layers (B - A) showing where on the map the accident probability changed between two runs. 
   Version 0.16.7 (2026-09-25) - Added distribution on the map, auto-pop-up of junction matrix after fetching AIS data
   Version 0.16.6 (2026-09-23) - South LineEdit box is now visible for the drift rose.
   Version 0.16.5 (2026-09-23) - Adding the feature to supress and move traffic from one leg to others.

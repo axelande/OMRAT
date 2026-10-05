@@ -39,9 +39,9 @@ multiply by per-cell frequency.
 
 .. container:: source-code-ref pipeline
 
-   **Grounding entry:** ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__
+   **Grounding entry:** ``compute/powered_model.py:417`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L417>`__
 
-   **Allision entry:** ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__
+   **Allision entry:** ``compute/powered_model.py:458`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L458>`__
 
 
 Top-level call tree
@@ -133,7 +133,7 @@ kilometres.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:63`` -- `SimpleProjector <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L63>`__
+   **Source:** ``geometries/get_powered_overlap.py:71`` -- `SimpleProjector <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L71>`__
 
 .. code-block:: python
 
@@ -155,7 +155,7 @@ obstacle once.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/powered_model.py:413`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L413>`__
+   **Source:** ``compute/powered_model.py:417`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L417>`__
 
 Flow:
 
@@ -209,7 +209,7 @@ Flow:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/powered_model.py:451`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L451>`__
+   **Source:** ``compute/powered_model.py:458`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L458>`__
 
 Structurally identical to grounding but:
 
@@ -229,7 +229,7 @@ cell iteration) is the same pattern as grounding.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:622`` -- `_build_legs_and_obstacles() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L622>`__
+   **Source:** ``geometries/get_powered_overlap.py:615`` -- `_build_legs_and_obstacles() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L615>`__
 
 Purpose: given ``data`` + projector + mode (+ ``max_draft``), produce
 all the geometry the ray cast needs in one local-frame dict.
@@ -263,7 +263,7 @@ by the total frequency.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:648`` -- `_run_all_computations() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L648>`__
+   **Source:** ``geometries/get_powered_overlap.py:641`` -- `_run_all_computations() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L641>`__
 
 Loops every ``(seg_id, dir_idx)`` with non-zero speed and returns a
 list of ``computation`` dicts:
@@ -341,10 +341,11 @@ multiplies by ``Q`` and by the category's causation factor
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:404`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L404>`__
+   **Source:** ``geometries/get_powered_overlap.py:415`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L415>`__
 
 This is the **core** of the powered model.  It casts
-``N_RAYS = 500`` parallel rays across the lateral distribution and for
+``N_RAYS = 1000`` parallel rays across the lateral distribution (``mean +/- 6 sigma``,
+``compute/ray_sampling.py``) and for
 each ray keeps the **first obstacle** it hits (that's what produces
 the shadowing: closer obstacles block farther ones automatically).
 
@@ -402,7 +403,7 @@ end-to-end runtime; the vectorised form is ~74 x faster on the same
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``geometries/get_powered_overlap.py:217`` -- `_extract_edges_local() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L217>`__
+   **Source:** ``geometries/get_powered_overlap.py:225`` -- `_extract_edges_local() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L225>`__
 
 Helper used by :func:`_compute_cat2_with_shadows`.  Walks the
 geometry (Polygon, MultiPolygon, LineString, MultiLineString,
@@ -443,16 +444,36 @@ The result is written directly to
 Interactive visualiser
 ======================
 
-For "Show analysis" (previously called "Run analysis") the plugin
-re-uses the same ``computations`` list to build an interactive
-matplotlib view.  The same
-:func:`_run_all_computations` call produces the ray summaries; the
-visualiser walks them to draw the overview map, detail panel, and
-waterfall breakdown.
+The **View** button of the powered rows re-uses the same
+``computations`` list to build an interactive matplotlib view.  The
+same :func:`_run_all_computations` call -- with the project's Cat I
+start zone -- produces the ray summaries; the visualiser walks them to
+draw the overview (selected leg, heading arrow and the outlines of the
+two local windows; legend and how-to beside it) on top, and Cat I (the
+leg in its own frame) | Cat II geometry over the Cat II probability
+``mass x exp(-d / (ai V))`` below.  The local panels are true to scale:
+``local_view`` sizes each window around the largest hits (the next ones
+and the ray start / turning point join while the window stays compact)
+and to the panel's shape after a layout pass, and the lateral
+distribution is an inset at their left edge.  The (leg, direction) is
+picked in the table only.
+
+The table next to the figure comes from
+``compute/powered_breakdown.py:build_sidebar_rows``: one row per
+(leg, direction) with the route-table leg name, the annual frequency
+(sum of ``by_obstacle_leg[obs]["<seg>:<dir>"]``) and its **% of
+total**.  The frequencies come from ``<stem>.powered.json``, written
+next to the run's GeoPackage by
+``RunHistoryMixin._write_powered_report_sidecar`` and handed to the
+dialog as ``calc.powered_view_reports``.  For a run saved before that
+sidecar existed, allision is rebuilt exactly from the View's own ray
+casts (``allision_report_from_computations``, the same accumulation as
+``run_powered_allision_model``); grounding is ray cast once per draught
+bin in the model, so it is not rebuilt and its columns show ``--``.
 
 .. container:: source-code-ref pipeline
 
-   **Visualiser:** ``geometries/get_powered_overlap.py:716`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L716>`__
+   **Visualiser:** ``geometries/get_powered_overlap.py:869`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L869>`__
 
 
 Function reference
@@ -481,9 +502,20 @@ Function reference
 * ``_get_all_coords`` / ``_ray_hit_distance`` -- kept for the
   interactive visualiser and tests (not on the hot path anymore).
 * ``_powered_na`` -- :math:`\exp(-d/(a_i V))` scalar helper.
-* ``find_closest_computation_index`` -- maps a click to a
-  computation (used by the visualiser).
+* ``local_view`` -- true-scale window of a Cat I / Cat II panel,
+  zoomed to the hits.
 * ``PoweredOverlapVisualizer`` -- interactive matplotlib panel.
+
+``compute/powered_breakdown.py`` (QGIS-free)
+
+* ``build_sidebar_rows`` -- (leg, direction) rows: name, frequency,
+  % of total, per-ship hit probability.
+* ``leg_direction_frequencies`` / ``report_total`` -- per leg-direction
+  frequencies and the total from a model report or a sidecar block.
+* ``summarize_report`` / ``sidecar_payload`` -- the ``.powered.json``
+  content.
+* ``allision_report_from_computations`` -- rebuilds the allision report
+  from the View's ray casts for runs without a sidecar.
 
 ``compute/basic_equations.py``
 

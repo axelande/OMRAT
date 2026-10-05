@@ -334,9 +334,10 @@ IMO join needs ``imo_num`` in ``statics_<year>``; databases built by
 the ingestion wizard have it, on others OMRAT probes
 ``information_schema`` once and joins on MMSI only.  Duplicate keys in
 the mapping table never multiply pings (``DISTINCT ON`` in both
-lookups).  Junction passage counting uses MMSI and timestamps only and
-is unaffected.  Legs already fetched keep their categories until you
-run **Update AIS** / **Update all distributions** again.
+lookups).  Junction passage counting reads only MMSI, ``route_id``,
+time and COG, so the mapping does not affect it.  Legs already fetched
+keep their categories until you run **Update AIS** / **Update all
+distributions** again.
 
 Database schema reference
 =========================
@@ -401,6 +402,12 @@ Differences from the legacy schema:
 * **Foreign key ``states_YYYY.static_id`` → ``statics_YYYY.rowid``** is
   declared; ``segments_YYYY.state_id`` is **not** a hard FK (FKs from a
   partitioned table get nuanced in older PG).
+
+``route_id`` identifies one port-to-port trip.  OMRAT's ingestion leaves
+it NULL; it is filled by a separate route-tagging step.  The junction
+pass of **Update all distributions** reads it to pair a vessel's
+passage-line crossings into junction transits (:ref:`junction-ais-counts`);
+segments without a ``route_id`` are paired per MMSI within 2 h instead.
 
 
 Static + state row deduplication

@@ -6,7 +6,7 @@ for backward compatibility. All calculation logic lives in the individual
 mixin modules.
 """
 import sys
-from typing import Any, TYPE_CHECKING, Callable
+from typing import Any, TYPE_CHECKING, Callable, Iterable
 
 import numpy as np
 from qgis.PyQt.QtWidgets import QWidget
@@ -36,6 +36,7 @@ from compute.ship_collision_model import ShipCollisionModelMixin  # noqa: E402
 from compute.powered_model import PoweredModelMixin  # noqa: E402
 from compute.drifting_report import DriftingReportMixin  # noqa: E402
 from compute.visualization import VisualizationMixin  # noqa: E402
+from compute.run_phases import PHASES, normalize_phases, reset_results  # noqa: E402
 
 if TYPE_CHECKING:
     from omrat import OMRAT
@@ -76,6 +77,23 @@ class Calculation(
         # Oil-spill consequence result populated at the end of
         # ``CalculationTask.run`` -- see ``compute/consequence.py``.
         self.consequence_result: dict[str, Any] | None = None
+        # Phases the last run calculated (Calculation matrix); a skipped
+        # phase keeps its not-calculated values, see ``begin_run``.
+        self.run_phases: tuple[str, ...] = PHASES
+
+    def begin_run(self, data: dict[str, Any], phases: Iterable[str] | None = None) -> None:
+        """Forget the previous run's results before a new run starts.
+
+        One ``Calculation`` serves every **Run model**, so a phase the new
+        run skips would otherwise hand the old run's report to the
+        history, Markdown report and GeoPackage.  The per-original-id
+        depth list is re-derived from ``data`` because the powered
+        grounding layer needs it and only the drifting model sets it.
+        """
+        reset_results(self)
+        self.consequence_result = None
+        self.run_phases = normalize_phases(phases)
+        self._store_depth_meta(data, [])
 
     def set_progress_callback(self, callback: Callable[[int, int, str], bool]) -> None:
         """

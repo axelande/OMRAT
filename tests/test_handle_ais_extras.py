@@ -7,7 +7,7 @@ Focus on areas the audit reported as under-tested in
   ``air_draught`` columns inside ``update_ais_data`` — those fall
   through ``if x is not None`` guards and must not raise.
 * The new ``compute_junction_transitions`` plumbing on top of
-  :func:`compute.junction_transitions.transition_counts_from_passages`.
+  :func:`compute.junction_transitions.transition_counts_from_crossings`.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from compute.junction_transitions import transition_counts_from_passages
+from compute.junction_transitions import Crossing, transition_counts_from_crossings
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +111,16 @@ def test_compute_junction_transitions_returns_empty_with_no_db(stub_ais):
     assert stub_ais.compute_junction_transitions() == {}
 
 
+def _east_legs(stub_ais):
+    """Leg 1 (14 -> 15 E) ends where leg 2 (15 -> 16 E) starts; no real DB."""
+    stub_ais.db = MagicMock()  # truthy; queries are mocked by the callers
+    stub_ais.get_segment_data_from_table = MagicMock(return_value={
+        '1': {'Start_Point': '14 55', 'End_Point': '15 55', 'Width': 5000, 'Leg_name': 'LEG_1_1'},
+        '2': {'Start_Point': '15 55', 'End_Point': '16 55', 'Width': 5000, 'Leg_name': 'LEG_1_2'},
+        '3': {'Start_Point': '15 55', 'End_Point': '15 56', 'Width': 5000, 'Leg_name': 'LEG_2_1'},
+    })
+
+
 def test_compute_junction_transitions_runs_pure_counter_per_junction(stub_ais):
     """Mock fetch_passages_for_leg so no real DB is consulted."""
     from omrat_utils.handle_junctions import Junctions
@@ -118,26 +128,69 @@ def test_compute_junction_transitions_runs_pure_counter_per_junction(stub_ais):
     junction = SimpleNamespace(legs={'1': 'end', '2': 'start'})
     handler.registry = {'j_x': junction}
     stub_ais.omrat.junctions = handler
-    stub_ais.db = MagicMock()  # truthy; fetch is mocked below
-    stub_ais.get_segment_data_from_table = MagicMock(return_value={
-        '1': {'Start_Point': '14 55', 'End_Point': '15 55', 'Width': 5000},
-        '2': {'Start_Point': '15 55', 'End_Point': '16 55', 'Width': 5000},
-    })
+    _east_legs(stub_ais)
 
     def fake_fetch(leg_d, near_radius_m=None):
+        # Both trips sail east: inbound on leg 1, then outbound on leg 2.
         if leg_d['Start_Point'] == '14 55':
-            return {'mmsi1': [100.0], 'mmsi2': [200.0]}
-        return {'mmsi1': [150.0], 'mmsi2': [250.0]}
+            return [Crossing('mmsi1', 7, 100.0, True), Crossing('mmsi2', 8, 200.0, True)]
+        return [Crossing('mmsi1', 7, 150.0, True), Crossing('mmsi2', 8, 250.0, True)]
 
     stub_ais.fetch_passages_for_leg = fake_fetch
     out = stub_ais.compute_junction_transitions()
     assert 'j_x' in out
-    # Both ships passed leg 1 first, then leg 2.
     assert out['j_x']['1']['2'] == 2
 
 
+def test_compute_junction_transitions_logs_match_rate(stub_ais):
+    """Junctions with three or more legs report matched vs inbound crossings."""
+    from omrat_utils.handle_junctions import Junctions
+    handler = Junctions(stub_ais.omrat)
+    handler.registry = {'j_y': SimpleNamespace(legs={'1': 'end', '2': 'start', '3': 'start'})}
+    stub_ais.omrat.junctions = handler
+    _east_legs(stub_ais)
+    by_leg = {
+        '14 55': [Crossing('a', 1, 100.0, True), Crossing('b', None, 100.0, True)],
+        '15 55': [Crossing('a', 1, 700.0, True)],
+    }
+    stub_ais.fetch_passages_for_leg = lambda leg_d, near_radius_m=None: (
+        by_leg.get(leg_d['Start_Point'], []) if leg_d['End_Point'] != '15 56' else []
+    )
+    with patch('omrat_utils.handle_ais.QgsMessageLog') as log:
+        out = stub_ais.compute_junction_transitions()
+    assert out['j_y']['1'] == {'2': 1}
+    msg = log.logMessage.call_args.args[0]
+    assert 'LEG_1_1, LEG_1_2, LEG_2_1' in msg
+    assert '1 of 2 inbound' in msg
+    assert '67 % of the crossings had a route_id' in msg
+
+
+def test_fetch_passages_for_leg_sorts_crossings_by_cog(stub_ais):
+    """route_id is read from the segments; COG picks the direction like the traffic binning."""
+    _east_legs(stub_ais)
+    rows = [
+        (111, 5, 100.0, 92),     # east = drawn direction
+        (222, None, 200.0, 268),  # west = reciprocal, no route_id
+        (333, 6, 300.0, 180),    # across the leg: outside both cones
+        (444, 7, 400.0, None),   # no COG: cannot be sorted
+    ]
+
+    def _exec(sql, return_error=False, params=None):
+        if 'st_makeline' in sql:
+            return (True, [['LINESTRING(15 54.9, 15 55.1)']])
+        if 'ST_Azimuth' in sql:
+            return (True, [[90.0]])
+        assert 'ss.route_id' in sql
+        return (True, rows)
+
+    stub_ais.db.execute_and_return.side_effect = _exec
+    leg_d = stub_ais.get_segment_data_from_table()['1']
+    out = stub_ais.fetch_passages_for_leg(leg_d)
+    assert out == [Crossing('111', 5, 100.0, True), Crossing('222', None, 200.0, False)]
+
+
 # ---------------------------------------------------------------------------
-# Round-trip sanity: ``transition_counts_from_passages`` agrees with the wiring
+# Round-trip sanity: ``transition_counts_from_crossings`` agrees with the wiring
 # ---------------------------------------------------------------------------
 
 
@@ -145,12 +198,15 @@ def test_pure_counter_drives_handler_apply():
     """End-to-end: counts -> normalised matrix -> stored on Junction."""
     from geometries.junctions import Junction
     from omrat_utils.handle_junctions import Junctions
-    counts = transition_counts_from_passages({
-        # All ten ships start on leg 1; 7 continue to leg 2, 3 to leg 3.
-        '1': {f'm{i}': [100.0] for i in range(10)},
-        '2': {f'm{i}': [200.0] for i in range(7)},
-        '3': {f'm{i}': [200.0] for i in range(7, 10)},
-    })
+    # Ten trips arrive on leg 1; 7 continue to leg 2, 3 to leg 3.
+    counts = transition_counts_from_crossings(
+        {
+            '1': [Crossing(f'm{i}', i, 100.0, True) for i in range(10)],
+            '2': [Crossing(f'm{i}', i, 200.0, True) for i in range(7)],
+            '3': [Crossing(f'm{i}', i, 200.0, True) for i in range(7, 10)],
+        },
+        {'1': 'end', '2': 'start', '3': 'start'},
+    )
     handler = Junctions()
     handler.registry = {
         'j_x': Junction(

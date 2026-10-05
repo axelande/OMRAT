@@ -50,7 +50,18 @@ class VisualizationMixin:
 
     Expects the host class to expose ``self.p.main_widget`` (the parent
     QWidget used for dialogs) and ``self.canvas`` (the QGIS map canvas).
+
+    ``self.powered_view_reports`` (set by the Run Analysis View for the
+    selected run, from ``<stem>.powered.json``) feeds the Frequency and
+    % of total columns of the powered dialogs.
     """
+
+    def _powered_view_report(self, mode: str) -> dict[str, Any] | None:
+        reports = getattr(self, 'powered_view_reports', None)
+        if not isinstance(reports, dict):
+            return None
+        block = reports.get(mode)
+        return block if isinstance(block, dict) else None
 
     def run_drift_visualization(self, data: dict[str, Any]) -> None:
         if not data.get('traffic_data'):
@@ -113,6 +124,7 @@ class VisualizationMixin:
         _prepare_viz_dialog(dialog)
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="allision", max_draft=max_draft,
+            report=self._powered_view_report('allision'),
         )
         dialog.exec()
 
@@ -135,6 +147,7 @@ class VisualizationMixin:
         _prepare_viz_dialog(dialog)
         PoweredOverlapVisualizer.show_in_dialog(
             dialog, data, mode="grounding", max_draft=max_draft,
+            report=self._powered_view_report('grounding'),
         )
         dialog.exec()
 
@@ -224,7 +237,8 @@ class VisualizationMixin:
         report = getattr(self, 'collision_report', None) or {}
 
         wanted = encounter_type
-        headers, rows = build_breakdown_rows(report, wanted)
+        headers, rows = build_breakdown_rows(
+            report, wanted, segment_data=getattr(self.p, 'segment_data', None))
         if not rows:
             return
 

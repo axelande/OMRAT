@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from compute.leg_labels import leg_display  # noqa: E402
+
 __all__ = ["build_full_report_markdown"]
 
 
@@ -29,6 +31,7 @@ def _powered_section(
     report: dict[str, Any] | None,
     obstacle_records: Iterable[dict[str, Any]] | None,
     value_label: str,
+    segment_data: dict[str, Any] | None = None,
 ) -> list[str]:
     lines: list[str] = []
     lines.append(f"## {title}")
@@ -55,6 +58,18 @@ def _powered_section(
     cf1 = report.get("causation_factor_cat1")
     if cf1 is not None:
         lines.append(f"- Causation factor (Cat I): {_fmt(cf1, '.4f')}")
+    zone = report.get("cat1_start_zone")
+    if isinstance(zone, dict):
+        if zone.get("enabled"):
+            lines.append(
+                f"- Category I start zone: on, hits within the first {float(zone.get('pct', 0.0)):g} % "
+                "of each leg ignored")
+        else:
+            lines.append("- Category I start zone: off")
+    sampling = report.get("ray_sampling")
+    if isinstance(sampling, dict):
+        from compute.ray_sampling import describe_ray_sampling
+        lines.append(f"- Ray sampling: {describe_ray_sampling(sampling)}")
     lines.append("")
 
     # Per-obstacle breakdown.
@@ -96,12 +111,14 @@ def _powered_section(
                     top_text = f"obs {top_obs} ({_fmt(top_val)})"
                 else:
                     top_text = "—"
-                lines.append(f"| {leg_id} | {_fmt(total)} | {top_text} |")
+                lines.append(f"| {leg_display(segment_data, leg_id)} | {_fmt(total)} | {top_text} |")
             lines.append("")
     return lines
 
 
-def _ship_collision_section(report: dict[str, Any] | None) -> list[str]:
+def _ship_collision_section(
+    report: dict[str, Any] | None, segment_data: dict[str, Any] | None = None,
+) -> list[str]:
     lines: list[str] = []
     lines.append("## Ship-ship collisions")
     if not report:
@@ -137,7 +154,7 @@ def _ship_collision_section(report: dict[str, Any] | None) -> list[str]:
                 by_leg.items(),
                 key=lambda kv: int(str(kv[0])) if str(kv[0]).isdigit() else str(kv[0]),
             ):
-                row = [str(leg_id)] + [
+                row = [leg_display(segment_data, leg_id)] + [
                     _fmt(vals.get(c, 0.0)) for c in cols
                 ]
                 lines.append("| " + " | ".join(row) + " |")
@@ -157,6 +174,7 @@ def build_full_report_markdown(
     structures_meta: Iterable[dict[str, Any]] | None = None,
     depths_meta: Iterable[dict[str, Any]] | None = None,
     totals_summary: dict[str, float] | None = None,
+    skipped_parts: Iterable[str] | None = None,
 ) -> str:
     """Compose the combined Markdown report for one OMRAT run.
 
@@ -164,13 +182,21 @@ def build_full_report_markdown(
     output of :meth:`generate_drifting_report_markdown`).  The other
     ``*_report`` arguments are the raw dicts captured on the calc
     object.  Everything else is metadata used for the header and the
-    overall summary table.
+    overall summary table.  ``skipped_parts`` names the model parts the
+    Calculation matrix left out of this run.
     """
+    # Leg names from the route table for every per-leg table below.
+    _seg_data = (data or {}).get('segment_data') if isinstance(data, dict) else None
     md: list[str] = []
     md.append(f"# OMRAT results - {run_name}")
     md.append("")
     md.append(f"_Generated: {timestamp}_")
     md.append("")
+    skipped = list(skipped_parts or [])
+    if skipped:
+        md.append(
+            f"_Partial run (Calculation matrix): {', '.join(skipped)} not calculated._")
+        md.append("")
 
     # ------------------------------------------------------------------
     # 1. Top-level summary across every accident type.
@@ -256,12 +282,14 @@ def build_full_report_markdown(
         powered_grounding_report,
         depths_meta,
         "Depth (m)",
+        segment_data=_seg_data,
     ))
     md.extend(_powered_section(
         "Powered allision",
         powered_allision_report,
         structures_meta,
         "Height (m)",
+        segment_data=_seg_data,
     ))
 
     # ------------------------------------------------------------------
@@ -269,7 +297,7 @@ def build_full_report_markdown(
     # ------------------------------------------------------------------
     md.append("---")
     md.append("")
-    md.extend(_ship_collision_section(collision_report))
+    md.extend(_ship_collision_section(collision_report, segment_data=_seg_data))
 
     md.append("")
     md.append(

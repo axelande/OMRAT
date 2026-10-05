@@ -28,10 +28,14 @@ from __future__ import annotations
 from math import exp, isfinite, pi, sqrt
 from typing import Any
 
+from compute.ray_sampling import RAY_SPAN_SIGMA, span_bounds
+
 #: The taller peak of a leg's two curves is this fraction of the leg width.
 HEIGHT_FRACTION = 0.25
 #: Evenly spaced samples across the width (more are added around each peak).
 N_GRID = 121
+#: Height of the ray-span ticks, as a fraction of the leg width.
+TICK_FRACTION = 1.0 / 16.0
 
 Component = tuple[str, float, float, float]   # ('n', mean, std, w) | ('u', low, high, w)
 
@@ -143,3 +147,53 @@ def signature(seg_d: dict[str, Any], width: Any, tangent_pos: Any, ends: Any) ->
     keys += [f'{k}{d}' for d in (1, 2) for k in ('u_min', 'u_max', 'u_p')]
     seg_d = seg_d if isinstance(seg_d, dict) else {}
     return tuple(_f(seg_d.get(k)) for k in keys) + (_f(width), _f(tangent_pos), ends)
+
+
+def span_marks(seg_d: dict[str, Any], direction: int, span_sigma: float = RAY_SPAN_SIGMA) -> tuple[float, float] | None:
+    """Lateral ``(low, high)`` in metres covered by the powered model's rays
+    for ``direction`` (0 or 1).
+
+    The ray caster samples the *first* normal component only
+    (``mean{d}_1`` / ``std{d}_1``), so that is what is marked; ``None``
+    when that component is missing or has no spread.
+    """
+    if not isinstance(seg_d, dict):
+        return None
+    d = direction + 1
+    m, s = _f(seg_d.get(f'mean{d}_1')), _f(seg_d.get(f'std{d}_1'))
+    if m is None or s is None or s <= 0:
+        return None
+    return span_bounds(m, s, span_sigma)
+
+
+def tick_profile(x: float, half_width: float, tick_height: float) -> list[tuple[float, float]]:
+    """Profile of one ray-span tick at lateral ``x``: a short bar rising from
+    the tangent line on the side the ships sail to.  When ``x`` lies beyond
+    the leg width the profile starts at the end of the tangent line, so a
+    thin extension shows how far past the drawn lane the rays reach."""
+    pts: list[tuple[float, float]] = []
+    if x > half_width:
+        pts.append((half_width, 0.0))
+    elif x < -half_width:
+        pts.append((-half_width, 0.0))
+    pts.append((x, 0.0))
+    pts.append((x, tick_height))
+    return pts
+
+
+def span_tick_profiles(
+    seg_d: dict[str, Any], width: float, span_sigma: float = RAY_SPAN_SIGMA,
+) -> dict[int, list[list[tuple[float, float]]]]:
+    """``{direction: [low_tick, high_tick]}`` profiles for :func:`curve_points`."""
+    half = _f(width)
+    if half is None or half <= 0:
+        return {}
+    half /= 2.0
+    tick_h = TICK_FRACTION * 2.0 * half
+    out: dict[int, list[list[tuple[float, float]]]] = {}
+    for d in (0, 1):
+        marks = span_marks(seg_d, d, span_sigma)
+        if marks is None:
+            continue
+        out[d] = [tick_profile(marks[0], half, tick_h), tick_profile(marks[1], half, tick_h)]
+    return out

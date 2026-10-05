@@ -208,6 +208,71 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="groupBoxCat1StartZone">
+     <property name="title">
+      <string>Category I start zone</string>
+     </property>
+     <property name="toolTip">
+      <string>Category I casts rays parallel to the leg from the waypoint the ships come from.  Right after that waypoint the ships are still arriving from the previous leg, so an obstacle lying there would collect the tail of a distribution the ships never sail.  With this on, rays whose first edge crossing lies within the given share of the leg are ignored; the opposite direction's rays (which start at the far waypoint) and Category II are not affected.</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayoutCat1">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayoutCat1">
+        <item>
+         <widget class="QCheckBox" name="cbCat1SkipStart">
+          <property name="text">
+           <string>Ignore Category I hits within the first</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="sbCat1SkipStartPct">
+          <property name="suffix">
+           <string> % of the leg</string>
+          </property>
+          <property name="decimals">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <double>90.000000000000000</double>
+          </property>
+          <property name="value">
+           <double>10.000000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacerCat1">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>10</width>
+            <height>10</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="labelCat1StartZoneHelp">
+        <property name="text">
+         <string>Measured from the waypoint the ships come from, per direction.  Applies to powered grounding and allision; Category II (missed turn) is unchanged.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <spacer name="verticalSpacer">
      <property name="orientation">
       <enum>Qt::Vertical</enum>

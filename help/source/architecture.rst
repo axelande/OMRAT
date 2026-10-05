@@ -147,7 +147,8 @@ What the mixins own:
 - ``DriftAnalysisMixin`` -- *Run Drift Analysis* slot, per-leg
   categorised polygon layers
 - ``RunHistoryMixin`` -- auto-save flow (``.omrat`` snapshot,
-  ``.gpkg``, ``.collision.json`` and ``.drifting.json`` sidecars,
+  ``.gpkg``, ``.collision.json``, ``.drifting.json``,
+  ``.consequence.json`` and ``.powered.json`` sidecars,
   ``_results_<timestamp>.md``) plus the *Previous runs* table
 - ``AccidentResultsMixin`` -- the ``TWAccidentResults`` table with
   per-row **View** buttons that dispatch to the interactive

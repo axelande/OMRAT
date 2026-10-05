@@ -9,10 +9,16 @@ under ``by_leg_direction[<seg>:<legdir>:<compass>]``.  When the
 report is missing we leave ``--`` cells rather than substitute a
 geometric coverage that has different semantics from
 ``contrib_grounding`` / ``contrib_allision`` (and confused users).
+
+Legs carry their route-table names (``LEG_6_1_a East going``, via
+``compute/leg_labels.py``) and a **% of total** column gives each row's
+share of the report total, as in the collision breakdown.
 """
 from __future__ import annotations
 
 from typing import Any
+
+from compute.leg_labels import leg_label
 
 # Compass-direction labels for the 8 drift polygons.
 # ``extend_polygon_in_directions`` iterates math angles 0,45,...,315
@@ -43,6 +49,48 @@ def split_leg_name(name: str) -> tuple[str, str]:
         return seg, tail.strip()
     except Exception:
         return str(name), ''
+
+
+def display_leg_name(name: str, segment_data: dict[str, Any] | None) -> str:
+    """``"Leg 9-East going"`` -> ``"LEG_6_1_a East going"``; unchanged when the leg has no name."""
+    seg_id, legdir = split_leg_name(name)
+    key = f"{seg_id}:{legdir}" if legdir else seg_id
+    label = leg_label(segment_data, key)
+    return str(name) if label == key else label
+
+
+def contribution_total(
+    drifting_report: dict[str, Any] | None, accident_kind: str,
+) -> float:
+    """Denominator of the **% of total** column.
+
+    ``totals[allision|grounding]`` of the report; the sum of the
+    ``by_leg_direction`` contributions when the total is missing or zero.
+    """
+    report = drifting_report or {}
+    kind = 'grounding' if accident_kind == 'grounding' else 'allision'
+    try:
+        total = float((report.get('totals') or {}).get(kind, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        total = 0.0
+    if total > 0.0:
+        return total
+    contrib_key = f'contrib_{kind}'
+    total = 0.0
+    for rec in (report.get('by_leg_direction') or {}).values():
+        try:
+            total += float((rec or {}).get(contrib_key, 0.0) or 0.0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return total
+
+
+def _format_share(value: float | None, total: float) -> tuple[str, float]:
+    """``(display_text, sort_value)`` for the % of total column."""
+    if value is None or total <= 0.0:
+        return '--', -1.0
+    share = max(value, 0.0) / total * 100.0
+    return f"{share:.1f}%", share
 
 
 def lookup_contribution(
@@ -100,6 +148,7 @@ def build_overlap_sidebar(
     line_names: list[str],
     drifting_report: dict[str, Any] | None,
     accident_kind: str,
+    segment_data: dict[str, Any] | None = None,
 ):
     """Build the ``QTableWidget`` for the overlap dialog sidebar.
 
@@ -107,7 +156,7 @@ def build_overlap_sidebar(
     contribution value.  The ``Leg`` cell carries the original
     ``(leg_idx, dir_idx)`` tuple in its ``UserRole`` payload so click
     handlers can recover the original index after the user sorts the
-    column.
+    column.  ``segment_data`` names the legs as the route table does.
     """
     from qgis.PyQt.QtCore import Qt
     from qgis.PyQt.QtWidgets import (
@@ -122,12 +171,15 @@ def build_overlap_sidebar(
         else 'contrib_allision'
     )
 
+    total = contribution_total(drifting_report, accident_kind)
     n_dirs = len(DIRECTION_LABELS)
-    sidebar = QTableWidget(len(line_names) * n_dirs, 3)
+    sidebar = QTableWidget(len(line_names) * n_dirs, 4)
     prob_header = (
         'Grounding' if accident_kind == 'grounding' else 'Allision'
     )
-    sidebar.setHorizontalHeaderLabels(['Leg', 'Direction', prob_header])
+    sidebar.setHorizontalHeaderLabels(
+        ['Leg', 'Drift direction', prob_header, '% of total'],
+    )
     sidebar.verticalHeader().setVisible(False)
     sidebar.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     sidebar.setSelectionBehavior(
@@ -139,10 +191,12 @@ def build_overlap_sidebar(
 
     for li, leg_name in enumerate(line_names):
         seg_id, legdir = split_leg_name(leg_name)
+        shown_name = display_leg_name(leg_name, segment_data)
         for di, dir_label in enumerate(DIRECTION_LABELS):
             row = li * n_dirs + di
-            leg_item = QTableWidgetItem(str(leg_name))
+            leg_item = QTableWidgetItem(shown_name)
             leg_item.setData(Qt.ItemDataRole.UserRole, (li, di))
+            leg_item.setToolTip(f"{shown_name} (segment id {seg_id})")
             sidebar.setItem(row, 0, leg_item)
             sidebar.setItem(row, 1, QTableWidgetItem(dir_label))
 
@@ -159,6 +213,15 @@ def build_overlap_sidebar(
             )
             sidebar.setItem(row, 2, prob_item)
 
+            share_text, share_sort = _format_share(prob_value, total)
+            share_item = NumericItem(share_text)
+            share_item.setData(Qt.ItemDataRole.UserRole, share_sort)
+            share_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter,
+            )
+            sidebar.setItem(row, 3, share_item)
+
     # Enable sorting AFTER population so the rows don't reorder mid-fill.
     sidebar.setSortingEnabled(True)
     sidebar.horizontalHeader().setSectionResizeMode(
@@ -170,6 +233,9 @@ def build_overlap_sidebar(
     sidebar.horizontalHeader().setSectionResizeMode(
         2, QHeaderView.ResizeMode.ResizeToContents,
     )
-    sidebar.setMinimumWidth(220)
-    sidebar.setMaximumWidth(360)
+    sidebar.horizontalHeader().setSectionResizeMode(
+        3, QHeaderView.ResizeMode.ResizeToContents,
+    )
+    sidebar.setMinimumWidth(320)
+    sidebar.setMaximumWidth(520)
     return sidebar

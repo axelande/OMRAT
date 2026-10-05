@@ -52,6 +52,8 @@ class CompareMixin:
                 self._add_compare_layers,
             )
 
+        if hasattr(widget, 'pbCompareDiff'):
+            widget.pbCompareDiff.clicked.connect(self._add_compare_diff_layers)
         widget.TWCompareAccidents.setColumnCount(5)
         widget.TWCompareAccidents.setHorizontalHeaderLabels(
             ['Accident type', 'Run A', 'Run B', 'Δ abs', 'Δ %'],
@@ -209,6 +211,72 @@ class CompareMixin:
                 f"Compare layers added ({loaded_total} total):\n{msg_body}",
                 'OMRAT', Qgis.MessageLevel.Success,
             )
+
+    # ------------------------------------------------------------------
+    # Difference layers (B - A)
+    # ------------------------------------------------------------------
+    def _compare_gpkg_paths(self) -> tuple[Path | None, Path | None, list[str]]:
+        """``<stem>.gpkg`` next to each picked snapshot, plus problems found."""
+        widget = self.main_widget
+        problems: list[str] = []
+        out: list[Path | None] = []
+        for label, le in (('A', widget.LECompareA), ('B', widget.LECompareB)):
+            text = (le.text() or '').strip()
+            if not text:
+                problems.append(f"Run {label}: empty path.")
+                out.append(None)
+                continue
+            gpkg = Path(text).with_suffix('.gpkg')
+            if not gpkg.is_file():
+                problems.append(f"Run {label}: no GeoPackage next to the snapshot ({gpkg.name}).")
+                out.append(None)
+                continue
+            out.append(gpkg)
+        return out[0], out[1], problems
+
+    def _add_compare_diff_layers(self) -> None:
+        """Add one *difference* layer (B - A) per result layer to QGIS.
+
+        Features are joined on their keys (obstacle edge, leg or
+        waypoint); ``delta`` is the absolute change in events/year and the
+        layers are styled on it (blue = decrease, red = increase).  See
+        ``omrat_utils.result_diff`` for why ``pct_change`` is not used for
+        the style.
+        """
+        from omrat_utils.result_diff import add_diff_group, build_diff_layers, summary_lines
+
+        gpkg_a, gpkg_b, problems = self._compare_gpkg_paths()
+        if gpkg_a is None or gpkg_b is None:
+            QMessageBox.information(
+                self.main_widget, self.tr('Compare: difference layers'),
+                self.tr(
+                    "{body}\n\nBoth runs need their result GeoPackage next to the "
+                    ".omrat snapshot (they are written together by Run model)."
+                ).format(body="\n".join(problems)),
+            )
+            return
+        label = f'{gpkg_b.stem} - {gpkg_a.stem}'
+        try:
+            layers, summaries = build_diff_layers(gpkg_a, gpkg_b, label='B - A')
+        except Exception as exc:
+            self.show_error_popup(str(exc), '_add_compare_diff_layers')
+            return
+        if not layers:
+            QMessageBox.information(
+                self.main_widget, self.tr('Compare: difference layers'),
+                self.tr('Neither GeoPackage holds a result layer to compare.'),
+            )
+            return
+        built = add_diff_group(layers, f'Compare diff: {label}')
+        self._remember_compare_group(built)
+        body = "\n".join(summary_lines(summaries))
+        QgsMessageLog.logMessage(
+            f"Difference layers added ({len(layers)}):\n{body}", 'OMRAT', Qgis.MessageLevel.Success)
+        try:
+            self.main_widget.lblCompareSummary.setText(
+                f'Difference layers (B - A) added: {len(layers)}.  ' + '  '.join(summary_lines(summaries)))
+        except Exception:  # nosec B110 B112
+            pass
 
     def _remember_compare_group(self, built: dict) -> None:
         """Track the group + layers so ``clear_model`` removes them."""

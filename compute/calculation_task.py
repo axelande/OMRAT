@@ -4,9 +4,11 @@ QgsTask wrapper for running probability calculations in a background thread.
 This allows the QGIS UI to remain responsive during long calculations
 and provides proper progress reporting through the QGIS task manager.
 """
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 from qgis.core import QgsTask, QgsMessageLog, Qgis
 from qgis.PyQt.QtCore import pyqtSignal
+
+from compute.run_phases import PHASE_METHODS, describe_selection, is_partial, normalize_phases
 
 
 class CalculationTask(QgsTask):
@@ -28,11 +30,20 @@ class CalculationTask(QgsTask):
     calculation_finished = pyqtSignal(object)  # (calc object with results)
     calculation_failed = pyqtSignal(str)  # (error message)
 
+    # Task-manager text shown when each phase starts.
+    _PHASE_DESCRIPTIONS: dict[str, str] = {
+        'drifting': "Drifting model - preparing...",
+        'collision': "Ship-ship collisions...",
+        'powered_grounding': "Powered grounding...",
+        'powered_allision': "Powered allision...",
+    }
+
     def __init__(
         self,
         description: str,
         calc_object: Any,
         data: dict[str, Any],
+        phases: Iterable[str] | None = None,
     ):
         """
         Initialize the calculation task.
@@ -41,10 +52,13 @@ class CalculationTask(QgsTask):
             description: Readable description for the task
             calc_object: The Calculation object with run_drifting_model method
             data: Dictionary of data passed to run_drifting_model
+            phases: Model phases to calculate (``compute.run_phases.PHASES``
+                names, set in the Calculation matrix); ``None`` runs all.
         """
         super().__init__(description, QgsTask.Flag.CanCancel)
         self.calc = calc_object
         self.data = data
+        self.phases: tuple[str, ...] = normalize_phases(phases)
         self.exception: Optional[Exception] = None
         self.error_msg: Optional[str] = None
 
@@ -92,23 +106,14 @@ class CalculationTask(QgsTask):
             self.calc.consequence_result = None
 
     def _run_all_phases(self) -> None:
-        self._update_description("Drifting model - preparing...")
-        self.calc.run_drifting_model(self.data)
-        if self.isCanceled():
-            return
-        self._update_description("Ship-ship collisions...")
-        self.setProgress(0)
-        self.calc.run_ship_collision_model(self.data)
-        if self.isCanceled():
-            return
-        self._update_description("Powered grounding...")
-        self.setProgress(0)
-        self.calc.run_powered_grounding_model(self.data)
-        if self.isCanceled():
-            return
-        self._update_description("Powered allision...")
-        self.setProgress(0)
-        self.calc.run_powered_allision_model(self.data)
+        """Run the selected phases in ``PHASES`` order, then the
+        consequence step (on whichever reports this run produced)."""
+        for phase in self.phases:
+            if self.isCanceled():
+                return
+            self._update_description(self._PHASE_DESCRIPTIONS[phase])
+            self.setProgress(0)
+            getattr(self.calc, PHASE_METHODS[phase])(self.data)
         if not self.isCanceled():
             self._run_consequence()
 
@@ -136,6 +141,12 @@ class CalculationTask(QgsTask):
             from compute.data_preparation import apply_traffic_scaling
             apply_traffic_scaling(self.data)
             self._apply_traffic_redirects()
+            if hasattr(self.calc, 'begin_run'):
+                self.calc.begin_run(self.data, self.phases)
+            if is_partial(self.phases):
+                QgsMessageLog.logMessage(
+                    f'Calculation matrix: calculating {describe_selection(self.phases)} only',
+                    'OMRAT', Qgis.MessageLevel.Info)
             if hasattr(self.calc, 'set_progress_callback'):
                 self.calc.set_progress_callback(self._make_progress_wrapper())
             self._run_all_phases()

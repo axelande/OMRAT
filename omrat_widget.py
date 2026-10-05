@@ -123,8 +123,11 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.pbRemoveObject: QtWidgets.QPushButton
 
         # Run analysis
+        self.LEProjectName: QtWidgets.QLineEdit
+        self.cbRunProject: QtWidgets.QComboBox
         self.LEModelName: QtWidgets.QLineEdit
         self.pbRunModel: QtWidgets.QPushButton
+        self.pbCalculationMatrix: QtWidgets.QPushButton
         self.pbSensitivity: QtWidgets.QPushButton
         self.TWPreviousRuns: QtWidgets.QTableWidget
         self.pbViewDriftingAllision: QtWidgets.QPushButton
@@ -228,6 +231,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
             header_stretch
         )
 
+        self.LEProjectName.setPlaceholderText("Empty: named after the output folder")
         self.LEModelName.setPlaceholderText("Collision risk model")
         self.LEReportPath.setPlaceholderText("Select output folder")
         self.LEOpenTopoAPIKey.setPlaceholderText("OpenTopography API key")

@@ -1998,6 +1998,9 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         return use_merged, merged_depths_gdfs, merged_depths_meta, threshold_to_idx
 
     def _emit_zero_drifting(self) -> tuple[float, float]:
+        # Calculated, nothing to hit: a zero report, not ``None`` (which
+        # means "not calculated", see compute/run_phases.py).
+        self.drifting_report = {'totals': {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0}}
         self.p.main_widget.LEPDriftAllision.setText(f"{0.0:.3e}")
         try:
             self.p.main_widget.LEPDriftingGrounding.setText(f"{0.0:.3e}")
@@ -2060,7 +2063,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         self._report_progress('layers', 0.3, "Drifting - creating result layers...")
         try:
             self.allision_result_layer, self.grounding_result_layer = create_result_layers(
-                report, structures, effective_depths_meta, add_to_project=False
+                report, structures, effective_depths_meta, add_to_project=False,
+                segment_data=data.get('segment_data') if isinstance(data, dict) else None,
             )
         except Exception as e:
             import logging
@@ -2096,7 +2100,6 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             progress_base=0.0, progress_span=0.5,
         )
         if shadow_cache.get('__cancelled__'):
-            self.drifting_report = {'totals': {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0}}
             return self._emit_zero_drifting()
         bucket_memo = self._precompute_bucket_memo(
             data, transformed_lines, structures, effective_depths_meta,
@@ -2105,7 +2108,6 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             progress_base=0.5, progress_span=0.5,
         )
         if bucket_memo.get('__cancelled__'):
-            self.drifting_report = {'totals': {'allision': 0.0, 'grounding': 0.0, 'anchoring': 0.0}}
             return self._emit_zero_drifting()
         total_allision, total_grounding, report = self._iterate_traffic_and_sum(
             data, line_names, transformed_lines, structures, effective_depths_meta,

@@ -1805,27 +1805,41 @@ QToolTip {
             <layout class="QVBoxLayout" name="result_layout1">
              <item>
               <layout class="QGridLayout" name="gridLayout_2">
-               <item row="1" column="0">
+               <item row="2" column="0">
                 <widget class="QLabel" name="label_48">
                  <property name="text">
                   <string>File path</string>
                  </property>
                 </widget>
                </item>
-               <item row="1" column="1">
+               <item row="2" column="1">
                 <widget class="QLineEdit" name="LEReportPath"/>
                </item>
                <item row="0" column="0">
+                <widget class="QLabel" name="labelProjectName">
+                 <property name="text">
+                  <string>Project name:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="0" column="1">
+                <widget class="QLineEdit" name="LEProjectName">
+                 <property name="toolTip">
+                  <string>Groups this project's runs in Previous runs. Saved in the .omrat file. Empty: the runs are grouped under the name of the output folder.</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="0">
                 <widget class="QLabel" name="label_38">
                  <property name="text">
                   <string>Name of the model:</string>
                  </property>
                 </widget>
                </item>
-               <item row="0" column="1">
+               <item row="1" column="1">
                 <widget class="QLineEdit" name="LEModelName"/>
                </item>
-               <item row="1" column="2">
+               <item row="2" column="2">
                 <widget class="QPushButton" name="pbReportPath">
                  <property name="minimumSize">
                   <size>
@@ -1847,11 +1861,31 @@ QToolTip {
               </layout>
              </item>
              <item>
-              <widget class="QPushButton" name="pbRunModel">
-               <property name="text">
-                <string>Run model</string>
-               </property>
-              </widget>
+              <layout class="QHBoxLayout" name="hlRunModel">
+               <item>
+                <widget class="QPushButton" name="pbRunModel">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                   <horstretch>1</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="text">
+                  <string>Run model</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="pbCalculationMatrix">
+                 <property name="toolTip">
+                  <string>Choose which model parts Run model calculates</string>
+                 </property>
+                 <property name="text">
+                  <string>Calculation matrix...</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
              </item>
              <item>
               <widget class="QPushButton" name="pbSensitivity">
@@ -1864,23 +1898,54 @@ QToolTip {
               </widget>
              </item>
              <item>
-              <widget class="QLabel" name="label_19">
-               <property name="minimumSize">
-                <size>
-                 <width>0</width>
-                 <height>10</height>
-                </size>
-               </property>
-               <property name="maximumSize">
-                <size>
-                 <width>16777215</width>
-                 <height>20</height>
-                </size>
-               </property>
-               <property name="text">
-                <string>Previous runs:</string>
-               </property>
-              </widget>
+              <layout class="QHBoxLayout" name="hlPreviousRuns">
+               <item>
+                <widget class="QLabel" name="label_19">
+                 <property name="minimumSize">
+                  <size>
+                   <width>0</width>
+                   <height>10</height>
+                  </size>
+                 </property>
+                 <property name="text">
+                  <string>Previous runs:</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="spacerPreviousRuns">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QLabel" name="labelRunProject">
+                 <property name="text">
+                  <string>Project:</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QComboBox" name="cbRunProject">
+                 <property name="minimumSize">
+                  <size>
+                   <width>220</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="toolTip">
+                  <string>Show the runs of one project, or of all projects</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
              </item>
              <item>
               <widget class="QTableWidget" name="TWPreviousRuns">
@@ -2167,6 +2232,16 @@ shadows/holes created by shallow depths and low structures.</string>
             </property>
             <property name="toolTip">
              <string>Creates one layer group per model with its depth areas, structures, legs, tangent lines and, when the GeoPackage exists next to the .omrat file, the result layers.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pbCompareDiff">
+            <property name="text">
+             <string>Add difference layers to QGIS (B - A)</string>
+            </property>
+            <property name="toolTip">
+             <string>Joins the two runs' result layers feature by feature (obstacle edge, leg, waypoint) and adds one layer per result type with the change in events/year, styled blue (decrease) to red (increase).</string>
             </property>
            </widget>
           </item>

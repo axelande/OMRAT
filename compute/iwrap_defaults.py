@@ -78,6 +78,14 @@ def default_drift_values() -> dict[str, Any]:
     }
 
 
-def default_pc_values() -> dict[str, float]:
-    """Fresh copy of the IWRAP causation-factor defaults."""
-    return dict(IWRAP_PC_DEFAULTS)
+def default_pc_values() -> dict[str, Any]:
+    """Fresh copy of the ``pc`` block defaults.
+
+    IWRAP causation factors plus OMRAT's own Category-I start-zone
+    setting (``compute/cat1_start_zone.py``), which the Causation factors
+    dialog edits alongside them.
+    """
+    from compute.cat1_start_zone import CAT1_START_ZONE_DEFAULTS
+    out: dict[str, Any] = dict(IWRAP_PC_DEFAULTS)
+    out.update(CAT1_START_ZONE_DEFAULTS)
+    return out

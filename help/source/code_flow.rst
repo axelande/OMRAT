@@ -48,7 +48,7 @@ is set up when the dialog is constructed:
 
 .. container:: source-code-ref pipeline
 
-   **Button wiring:** ``omrat.py:1238`` -- `self.main_widget.pbRunModel.clicked.connect(self.run_calculation) <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1238>`__
+   **Button wiring:** ``omrat.py:1243`` -- `self.main_widget.pbRunModel.clicked.connect(self.run_calculation) <https://github.com/axelande/OMRAT/blob/main/omrat.py#L1243>`__
 
 When the button is clicked, :meth:`omrat.OMRAT.run_calculation` runs on
 the Qt main thread:
@@ -185,6 +185,16 @@ into the result line-edits on the main dialog.
      - :meth:`run_powered_allision_model`
      - ``compute/powered_model.py:204``
      - ``LEPPoweredAllision``, return: total frequency
+
+``run()`` only runs the phases in ``CalculationTask.phases`` (the
+**Calculation matrix** selection, ``compute/run_phases.py``; default all
+four, always in the order above).  Before the first phase it calls
+``Calculation.begin_run``, which resets every phase's report / layer
+attributes to their not-calculated values (``PHASE_RESULT_ATTRS``) and
+re-derives ``_last_depths_original`` from ``data``.  A skipped phase
+therefore leaves a ``None`` report, which ``totals_from_calc`` records
+as an empty history total -- never a zero, and never the previous
+run's value.
 
 Between every phase, ``run()`` checks ``self.isCanceled()`` so the user
 can stop a long calculation.  If a phase raises an exception, ``run()``

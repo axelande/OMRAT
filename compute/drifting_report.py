@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from compute.leg_labels import leg_display  # noqa: E402
+
 
 class DriftingReportMixin:
     """Mixin supplying drifting-report helpers for RunCalculations."""
@@ -38,6 +40,7 @@ class DriftingReportMixin:
         rep = self.drifting_report or {}
         totals = rep.get('totals', {})
         bld: dict[str, Any] = rep.get('by_leg_direction', {})
+        seg_names = data.get('segment_data') if isinstance(data, dict) else None
         by_obj: dict[str, Any] = rep.get('by_object', {})
         by_struct_legdir: dict[str, Any] = rep.get('by_structure_legdir', {})
 
@@ -233,7 +236,9 @@ class DriftingReportMixin:
         md_lines.append("| Leg:Dir:Angle | Allision | Grounding | Avg anchor | Avg not-repaired | Avg overlap |")
         md_lines.append("|---|---:|---:|---:|---:|---:|")
         for key, a, g, avg_anchor, avg_not_rep, avg_overlap in leg_rows_sorted:
-            md_lines.append(f"| {key} | {a:.3e} | {g:.3e} | {avg_anchor:.3f} | {avg_not_rep:.3f} | {avg_overlap:.3f} |")
+            md_lines.append(
+                f"| {leg_display(seg_names, key)} | {a:.3e} | {g:.3e} | {avg_anchor:.3f} "
+                f"| {avg_not_rep:.3f} | {avg_overlap:.3f} |")
         md_lines.append("")
 
         # Per-structure, per leg-direction contributions (allision only)
@@ -245,7 +250,7 @@ class DriftingReportMixin:
                 md_lines.append("|---|---:|")
                 s_map = by_struct_legdir[skey] or {}
                 for k in sorted(s_map.keys(), key=lambda x: _parse_key(x)):
-                    md_lines.append(f"| {k} | {float(s_map[k]):.3e} |")
+                    md_lines.append(f"| {leg_display(seg_names, k)} | {float(s_map[k]):.3e} |")
                 md_lines.append("")
 
         # Per object totals
@@ -391,7 +396,7 @@ class DriftingReportMixin:
             agg['grounding'] += float(rec.get('contrib_grounding', 0.0))
         for leg in sorted(leg_sums.keys(), key=lambda x: int(str(x)) if str(x).isdigit() else str(x)):
             ls = leg_sums[leg]
-            md_lines.append(f"| {leg} | {ls['allision']:.3e} | {ls['grounding']:.3e} |")
+            md_lines.append(f"| {leg_display(seg_names, leg)} | {ls['allision']:.3e} | {ls['grounding']:.3e} |")
         md_lines.append("")
 
         md_lines.append("")

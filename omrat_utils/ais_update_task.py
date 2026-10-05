@@ -131,7 +131,7 @@ class AisUpdateTask(QgsTask):
                             td_block[di][var][r][c] = float(np.mean(val)) if val else np.inf
 
     def _process_leg(self, leg_key: str, leg_d: dict) -> None:
-        from omrat_utils.handle_ais import get_pl
+        from omrat_utils.handle_ais import get_pl, leg_bearing
         from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
         from shapely import wkt
         ais = self.ais
@@ -161,15 +161,12 @@ class AisUpdateTask(QgsTask):
             tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
         )
         ais_data = ais.run_sql(pl)
-        sql = (f"select degrees(ST_Azimuth(ST_Point({start_p.x}, {start_p.y})::geography, "
-               f"ST_Point({end_p.x}, {end_p.y})::geography))")
-        _, bearing_rows = ais.db.execute_and_return(sql, return_error=True)
-        leg_bearing: float = bearing_rows[0][0]
+        bearing = leg_bearing(ais.db, start_p, end_p)
         td_block = self._make_empty_block(dirs)
         line1: list[float] = []
         line2: list[float] = []
         for row in ais_data:
-            self._bin_ping(td_block, dirs, row, leg_bearing, line1, line2)
+            self._bin_ping(td_block, dirs, row, bearing, line1, line2)
         self._collapse_td_block(td_block)
         self.results[leg_key] = {'traffic': td_block, 'dirs': dirs, 'line1': np.array(line1), 'line2': np.array(line2)}
         self.last_key = leg_key

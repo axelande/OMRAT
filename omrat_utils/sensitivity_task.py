@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterable
 from qgis.core import Qgis, QgsMessageLog, QgsTask
 from qgis.PyQt.QtCore import pyqtSignal
 
+from compute.run_phases import PHASE_METHODS, normalize_phases
 from compute.sensitivity import (
     PHASE_LABELS, BaselineReports, ParameterSpec, SensitivityResult,
     reports_from_calc, run_sensitivity,
@@ -71,14 +72,6 @@ class StubParent:
         self.testing = True
 
 
-_PHASE_METHODS: tuple[tuple[str, str], ...] = (
-    ('drifting', 'run_drifting_model'),
-    ('collision', 'run_ship_collision_model'),
-    ('powered_grounding', 'run_powered_grounding_model'),
-    ('powered_allision', 'run_powered_allision_model'),
-)
-
-
 def run_phases_headless(
     data: dict[str, Any], phases: Iterable[str],
     is_cancelled=None,
@@ -98,8 +91,7 @@ def run_phases_headless(
     from compute.traffic_redirect import apply_traffic_redirects
 
     cancelled = is_cancelled or (lambda: False)
-    wanted = tuple(phases)
-    ordered = [(name, method) for name, method in _PHASE_METHODS if name in wanted]
+    ordered = [(name, PHASE_METHODS[name]) for name in normalize_phases(phases)]
     n_phases = len(ordered)
     state = {'idx': 0}
 

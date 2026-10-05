@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from omrat_utils.run_history import (
+from omrat_utils.run_history import (  # noqa: E402
     RunHistory, RunMeta, default_db_path,
     totals_from_calc, slug, make_run_filename, _f,
 )
@@ -135,12 +135,36 @@ class TestTotalsFromCalc:
         assert out['powered_grounding'] == 11
         assert out['powered_allision'] == 22
 
-    def test_handles_missing_reports(self):
+    def test_missing_reports_are_not_calculated(self):
+        """A model the run skipped (Calculation matrix) has no report:
+        its totals are ``None`` (empty history cell), never ``0``."""
         class C:
             pass
         out = totals_from_calc(C())
-        assert out['drift_allision'] == 0
-        assert out['ship_collision_total'] == 0
+        assert out['drift_allision'] is None
+        assert out['ship_collision_total'] is None
+        assert out['powered_allision'] is None
+
+    def test_partial_run_keeps_calculated_parts(self):
+        class C:
+            drifting_report = None
+            collision_report = None
+            powered_grounding_report = None
+            powered_allision_report = {'totals': {'allision': 2.5e-4}}
+        out = totals_from_calc(C())
+        assert out['powered_allision'] == 2.5e-4
+        assert out['drift_grounding'] is None
+        assert out['head_on'] is None
+
+    def test_empty_report_counts_as_zero(self):
+        class C:
+            drifting_report = {'totals': {}}
+            collision_report = {}
+            powered_grounding_report = None
+            powered_allision_report = None
+        out = totals_from_calc(C())
+        assert out['drift_allision'] == 0.0
+        assert out['bend'] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +338,181 @@ class TestGpkgPath:
         assert RunMeta(
             run_id=1, name='x', timestamp='t', output_filename='a.gpkg',
         ).gpkg_path() is None
+
+
+# ---------------------------------------------------------------------------
+# Project tag + OMRAT version (side table ``omrat_run_info``)
+# ---------------------------------------------------------------------------
+
+# ``omrat_runs`` exactly as OMRAT <= 0.16.10 created it.
+_OLD_SCHEMA = """
+CREATE TABLE omrat_runs (
+    run_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+    timestamp TEXT NOT NULL, duration_seconds REAL, drift_allision REAL,
+    drift_grounding REAL, drift_anchoring REAL, powered_grounding REAL,
+    powered_allision REAL, head_on REAL, overtaking REAL, crossing REAL,
+    merging REAL, bend REAL, ship_collision_total REAL, output_dir TEXT,
+    output_filename TEXT, notes TEXT
+)
+"""
+_OLD_COLUMNS = [
+    'run_id', 'name', 'timestamp', 'duration_seconds', 'drift_allision',
+    'drift_grounding', 'drift_anchoring', 'powered_grounding', 'powered_allision',
+    'head_on', 'overtaking', 'crossing', 'merging', 'bend',
+    'ship_collision_total', 'output_dir', 'output_filename', 'notes',
+]
+
+
+def _old_history(path: Path, output_dir: str) -> Path:
+    """A history database written before the project / version columns."""
+    import sqlite3
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(_OLD_SCHEMA)
+        conn.execute(
+            "INSERT INTO omrat_runs (name, timestamp, drift_allision, output_dir, output_filename) "
+            "VALUES ('old run', '2026-08-01 10:00:00', 1e-4, ?, 'old_run_20260801_100000.gpkg')",
+            (output_dir,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+class TestExistingHistories:
+    """Other users' history files must keep working unchanged."""
+
+    def test_old_database_opens_with_runs_intact(self, tmp_path):
+        path = _old_history(tmp_path / 'old.sqlite', 'C:\\work\\Kattegat_2025')
+        runs = RunHistory(path).list_runs()
+        assert len(runs) == 1
+        run = runs[0]
+        assert run.name == 'old run'
+        assert run.drift_allision == 1e-4
+        assert run.project is None and run.omrat_version is None
+        # Untagged: grouped under the name of its results folder.
+        assert run.project_label() == 'Kattegat_2025'
+
+    def test_runs_table_keeps_its_old_columns(self, tmp_history):
+        """An older OMRAT reads ``SELECT * FROM omrat_runs`` into its
+        RunMeta -- an extra column there would break it."""
+        import sqlite3
+        tmp_history.save_run('x', project='P', omrat_version='0.16.11')
+        conn = sqlite3.connect(tmp_history.db_path)
+        try:
+            cols = [r[1] for r in conn.execute('PRAGMA table_info(omrat_runs)')]
+        finally:
+            conn.close()
+        assert cols == _OLD_COLUMNS
+
+    def test_old_database_accepts_new_runs_and_tags(self, tmp_path):
+        path = _old_history(tmp_path / 'old.sqlite', '/data/runs/Baltic')
+        history = RunHistory(path)
+        new_id = history.save_run('new', output_dir='/data/runs/Baltic',
+                                  project='Baltic study', omrat_version='0.16.11')
+        old_id = next(r.run_id for r in history.list_runs() if r.name == 'old run')
+        history.set_project([old_id], 'Baltic study')
+        labels = {r.name: r.project_label() for r in history.list_runs()}
+        assert labels == {'new': 'Baltic study', 'old run': 'Baltic study'}
+        assert history.get_run(new_id).omrat_version == '0.16.11'
+
+
+class TestProjectTag:
+    def test_save_with_project_and_version(self, tmp_history):
+        run_id = tmp_history.save_run('a', output_dir='/x/folder', project='  ESCOW  ',
+                                      omrat_version='0.16.11')
+        run = tmp_history.get_run(run_id)
+        assert run.project == 'ESCOW'
+        assert run.project_label() == 'ESCOW'
+        assert run.omrat_version == '0.16.11'
+
+    def test_empty_project_is_untagged(self, tmp_history):
+        run_id = tmp_history.save_run('a', output_dir='/x/folder', project='   ')
+        run = tmp_history.get_run(run_id)
+        assert run.project is None
+        assert run.project_label() == 'folder'
+
+    def test_set_project_retags_and_clears(self, tmp_history):
+        a = tmp_history.save_run('a', output_dir='/x/one', project='Wrong', omrat_version='0.16.9')
+        b = tmp_history.save_run('b', output_dir='/x/two')
+        tmp_history.set_project([a, b], 'Right')
+        assert {r.project_label() for r in tmp_history.list_runs()} == {'Right'}
+        # The version survives a re-tag.
+        assert tmp_history.get_run(a).omrat_version == '0.16.9'
+        tmp_history.set_project([a], '')
+        assert tmp_history.get_run(a).project_label() == 'one'
+
+    def test_compare_runs_carries_the_tag(self, tmp_history):
+        a = tmp_history.save_run('a', project='P')
+        assert tmp_history.compare_runs([a])[0].project == 'P'
+
+    def test_delete_removes_the_tag(self, tmp_history):
+        import sqlite3
+        a = tmp_history.save_run('a', project='P', omrat_version='1')
+        tmp_history.delete_run(a)
+        conn = sqlite3.connect(tmp_history.db_path)
+        try:
+            n = conn.execute('SELECT COUNT(*) FROM omrat_run_info').fetchone()[0]
+        finally:
+            conn.close()
+        assert n == 0
+
+    def test_no_folder_no_tag(self):
+        from omrat_utils.run_history import NO_PROJECT_LABEL
+        assert RunMeta(run_id=1, name='x', timestamp='t').project_label() == NO_PROJECT_LABEL
+
+    def test_project_counts_sorted_case_insensitively(self):
+        from omrat_utils.run_history import project_counts
+        runs = [
+            RunMeta(run_id=1, name='a', timestamp='t', output_dir='/r/beta'),
+            RunMeta(run_id=2, name='b', timestamp='t', project='Alpha'),
+            RunMeta(run_id=3, name='c', timestamp='t', output_dir='D:\\r\\beta'),
+        ]
+        assert project_counts(runs) == {'Alpha': 1, 'beta': 2}
+
+
+class TestFolderProject:
+    def test_windows_and_posix_paths(self):
+        from omrat_utils.run_history import folder_project
+        assert folder_project('E:\\dev_e\\project\\ESCOW_case_study') == 'ESCOW_case_study'
+        assert folder_project('/home/u/runs/Kattegat/') == 'Kattegat'
+        assert folder_project('') == ''
+        assert folder_project(None) == ''
+
+
+class TestVersionBackfill:
+    def _run_with_snapshot(self, history, out_dir: Path, text: str | None) -> int:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        run_id = history.save_run('r', output_dir=str(out_dir), output_filename='r.gpkg')
+        if text is not None:
+            (out_dir / 'r.omrat').write_text(text, encoding='utf-8')
+        return run_id
+
+    def test_snapshot_version_reads_the_head(self, tmp_path):
+        from omrat_utils.run_history import snapshot_version
+        p = tmp_path / 's.omrat'
+        p.write_text('{\n  "omrat_version": "0.16.7",\n  "pc": {}\n}', encoding='utf-8')
+        assert snapshot_version(p) == '0.16.7'
+        p.write_text('{"pc": {}}', encoding='utf-8')
+        assert snapshot_version(p) == ''
+        assert snapshot_version(tmp_path / 'missing.omrat') == ''
+
+    def test_backfill_from_snapshots(self, tmp_history, tmp_path):
+        with_v = self._run_with_snapshot(tmp_history, tmp_path / 'a', '{"omrat_version": "0.16.2"}')
+        without = self._run_with_snapshot(tmp_history, tmp_path / 'b', '{"pc": {}}')
+        missing = self._run_with_snapshot(tmp_history, tmp_path / 'c', None)
+        runs = tmp_history.list_runs()
+        assert tmp_history.backfill_versions(runs) == 2
+        assert {r.run_id: r.omrat_version for r in runs}[with_v] == '0.16.2'
+        stored = {r.run_id: r.omrat_version for r in tmp_history.list_runs()}
+        assert stored == {with_v: '0.16.2', without: '', missing: None}
+
+    def test_backfill_reads_each_snapshot_once(self, tmp_history, tmp_path, monkeypatch):
+        import omrat_utils.run_history as rh
+        self._run_with_snapshot(tmp_history, tmp_path / 'a', '{"pc": {}}')
+        tmp_history.backfill_versions(tmp_history.list_runs())
+        reads = []
+        monkeypatch.setattr(rh, 'snapshot_version', lambda p: reads.append(p) or '')
+        assert tmp_history.backfill_versions(tmp_history.list_runs()) == 0
+        assert reads == []

@@ -369,9 +369,9 @@ scientific notation (``1.148e-01`` means about one event every 9 years):
        turn and hits traffic that did.
 
 The **View** button on each row opens a drill-down dialog for the run
-selected in **Previous runs**, showing per-leg and per-obstacle
-contributions -- the fastest way to find the single obstacle that
-dominates a total.
+selected in **Previous runs**, showing each leg's (and direction's)
+contribution with its **% of total** and the obstacles it hits -- the
+fastest way to find the leg and the obstacle that dominate a total.
 
 If you filled in the **Consequence** inputs, the
 **Catastrophe-level exceedance (events/year)** table below shows the

@@ -77,7 +77,7 @@ class TestMainColumn:
         omrat.refresh_previous_runs_table()
         tw = omrat.main_widget.TWPreviousRuns
         headers = [tw.horizontalHeaderItem(c).text() for c in range(tw.columnCount())]
-        assert headers == ['Name', 'Main', 'Date', 'Duration']
+        assert headers == ['Name', 'Main', 'Date', 'Duration', 'Version', 'Project']
 
     def test_main_cells_are_checkable_and_unchecked(self, omrat, history):
         from qgis.PyQt.QtCore import Qt

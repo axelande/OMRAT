@@ -669,7 +669,8 @@ class TestDistributionCurves:
         return {f['type']: f for f in hqi.tangent_layer.getFeatures() if f['type'].endswith(' 77')}
 
     def test_one_tangent_and_two_curves(self, curves):
-        assert sorted(curves) == ['Distribution 1 77', 'Distribution 2 77', 'Tangent Line 77']
+        assert sorted(curves) == ['Distribution 1 77', 'Distribution 2 77',
+                                  'Ray span 1 77', 'Ray span 2 77', 'Tangent Line 77']
 
     def test_curves_start_and_end_on_the_tangent_line(self, curves):
         tangent = curves['Tangent Line 77'].geometry().asPolyline()
@@ -692,7 +693,32 @@ class TestDistributionCurves:
         from qgis.core import QgsPointXY
         hqi.create_offset_lines(QgsPointXY(14.0, 55.0), QgsPointXY(14.2, 55.0), 1000.0, 77)
         types = [f['type'] for f in hqi.tangent_layer.getFeatures() if f['type'].endswith(' 77')]
-        assert sorted(types) == ['Distribution 1 77', 'Distribution 2 77', 'Tangent Line 77']
+        # One tangent, one curve per direction and exactly two span ticks per direction.
+        assert sorted(types) == ['Distribution 1 77', 'Distribution 2 77',
+                                 'Ray span 1 77', 'Ray span 1 77', 'Ray span 2 77', 'Ray span 2 77',
+                                 'Tangent Line 77']
+
+    def test_ray_span_ticks_mark_mean_plus_minus_span_sigma(self, hqi, curves):
+        """Direction 1: mean -400 m, sigma 150 m -> rays cover -1300 .. +500 m.
+        The low tick lies beyond the 1 km half width, so it starts at the end
+        of the tangent line; the high tick stands inside the lane."""
+        from compute.ray_sampling import RAY_SPAN_SIGMA
+        assert RAY_SPAN_SIGMA == 6.0
+        tangent = curves['Tangent Line 77'].geometry().asPolyline()
+        tick1 = curves['Ray span 1 77'].geometry().asPolyline()
+        # One feature per direction here (the two ticks are stored as separate
+        # features with the same type); collect both.
+        ticks = [f.geometry().asPolyline() for f in hqi.tangent_layer.getFeatures()
+                 if f['type'] == 'Ray span 1 77']
+        assert len(ticks) == 2
+        starts = sorted((t[0] for t in ticks), key=lambda p: p.y())
+        # The low (starboard = south) tick starts exactly at the south end of the tangent line.
+        south_end = min(tangent, key=lambda p: p.y())
+        assert starts[0].distance(south_end) < 1e-7
+        # Every tick rises east of the tangent line (direction 1 bulges towards End_Point).
+        for t in ticks:
+            assert t[-1].x() > t[-2].x()
+        assert tick1  # feature exists
 
     def test_distribution_edit_redraws_and_unchanged_is_skipped(self, hqi, curves):
         before = curves['Distribution 1 77'].geometry().asWkt()
@@ -713,7 +739,8 @@ class TestDistributionCurves:
         renderer = hqi.tangent_layer.renderer()
         assert isinstance(renderer, QgsRuleBasedRenderer)
         labels = [r.label() for r in renderer.rootRule().children()]
-        assert labels == [hqi.TANGENT_RULE_LABEL, hqi.CURVE_RULE_LABELS[1], hqi.CURVE_RULE_LABELS[2]]
+        assert labels == [hqi.TANGENT_RULE_LABEL, hqi.CURVE_RULE_LABELS[1], hqi.CURVE_RULE_LABELS[2],
+                          hqi.SPAN_RULE_LABELS[1], hqi.SPAN_RULE_LABELS[2]]
         # Applying a (pre-curves) single-symbol project style keeps the rules.
         from qgis.core import QgsLineSymbol, QgsSingleSymbolRenderer
         hqi.tangent_layer.setRenderer(QgsSingleSymbolRenderer(QgsLineSymbol()))

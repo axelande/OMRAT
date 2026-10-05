@@ -12,6 +12,9 @@ from shapely import wkt
 from shapely.geometry import Point
 
 from compute.database import DB
+from compute.junction_transitions import (
+    DEFAULT_TIME_WINDOW_S, Crossing, match_summary, transition_counts_from_crossings,
+)
 from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
 from omrat_utils.copy_traffic import describe_targets, split_locked
 from omrat_utils.ship_type_map import (
@@ -22,7 +25,7 @@ from ui.ais_connection_widget import AISConnectionWidget
 
 __all__ = [
     "AIS", "get_type", "resolve_ship_type", "close_to_line", "get_pl",
-    "update_ais_settings_file",
+    "leg_bearing", "update_ais_settings_file",
 ]
 
 _SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -132,6 +135,18 @@ def get_pl(
     if not pl:
         raise RuntimeError("Could not build the AIS passage line: database returned no geometry")
     return str(pl)
+
+
+def leg_bearing(db: DB, start_p: Point, end_p: Point) -> float:
+    """Compass bearing (deg) of the drawn direction ``Start_Point -> End_Point``.
+
+    Geodesic azimuth from PostGIS, so the traffic binning and the junction
+    pass sort a ship's COG into the leg's two directions the same way.
+    """
+    sql = (f"select degrees(ST_Azimuth(ST_Point({start_p.x}, {start_p.y})::geography, "
+           f"ST_Point({end_p.x}, {end_p.y})::geography))")
+    _, rows = cast(tuple[bool, list[list[Any]]], db.execute_and_return(sql, return_error=True))
+    return rows[0][0]
 
 
 def close_to_line(bearing: float, cog: float, max_angle: float) -> bool:
@@ -675,25 +690,29 @@ class AIS:
 
     def fetch_passages_for_leg(
         self, leg_d: dict[str, str], near_radius_m: float | None = None,
-    ) -> dict[str, list[float]]:
-        """Return ``{mmsi: [unix_timestamp, ...]}`` for AIS pings inside the leg.
+    ) -> list[Crossing]:
+        """Return the AIS crossings of the leg's passage line, sorted by direction.
 
-        ``near_radius_m`` is currently unused — the passage line from
+        One :class:`~compute.junction_transitions.Crossing` per segment that
+        crosses the passage line, carrying the segment's ``route_id`` (one
+        port-to-port trip, NULL when the database has none) and whether the
+        ship sailed in the drawn direction.  The direction uses the same
+        ``close_to_line`` rule and ``max_deviation`` as the traffic binning,
+        so the inbound crossings of a leg are the ships its traffic counts;
+        crossings within neither cone are left out there and here.
+
+        ``near_radius_m`` is currently unused -- the passage line from
         ``get_pl`` spans the whole width of the leg, the same line the
-        per-leg traffic update queries.  When AIS-
-        derived junction transitions become production-grade we will
-        switch to a near-junction sub-polygon to better reflect "ships
-        actually transiting the junction" instead of "ships anywhere
-        on the leg".  For now the wider polygon is good enough because
-        the ``transition_counts_from_passages`` algorithm self-filters
-        by the per-MMSI temporal window.
+        per-leg traffic update queries.  Pairing crossings per trip makes a
+        near-junction sub-polygon unnecessary: a trip that ends between the
+        passage line and the junction simply stays unmatched.
         """
         if self.db is None:
-            return {}
+            return []
         start_p = wkt.loads(f"Point ({leg_d['Start_Point']})")
         end_p = wkt.loads(f"Point ({leg_d['End_Point']})")
         if not isinstance(start_p, Point) or not isinstance(end_p, Point):
-            return {}
+            return []
         try:
             pl = get_pl(
                 self.db,
@@ -702,18 +721,24 @@ class AIS:
                 l_width=float(leg_d.get('Width', 5000)),
                 tangent_pos=normalize_tangent_pos(leg_d.get(TANGENT_POS_KEY)),
             )
+            bearing = float(leg_bearing(self.db, start_p, end_p))
         except Exception:
-            return {}
-        # Only (mmsi, date1) is needed for the transition counts, so run
-        # the light MMSI query alone.  Until 2026-09-18 this also ran the
-        # full per-ping ``run_sql`` query and discarded the result, which
-        # doubled the cost of the junction pass for every leg.
-        return self._fetch_mmsi_passages(pl)
+            return []
+        crossings: list[Crossing] = []
+        for mmsi, route_id, t, cog in self._fetch_crossings(pl):
+            if close_to_line(bearing, cog, self.max_deviation):
+                along_drawn = True
+            elif close_to_line(bearing + 180, cog, self.max_deviation):
+                along_drawn = False
+            else:
+                continue
+            crossings.append(Crossing(mmsi, route_id, t, along_drawn))
+        return crossings
 
-    def _fetch_mmsi_passages(self, pl: str) -> dict[str, list[float]]:
-        """Return ``{mmsi: [unix_timestamp, ...]}`` for the given passage line."""
+    def _fetch_crossings(self, pl: str) -> list[tuple[str, int | None, float, float]]:
+        """Return ``(mmsi, route_id, unix_time, cog)`` per segment crossing ``pl``."""
         if self.db is None:
-            return {}
+            return []
         schema = _validate_sql_identifier(str(self.schema))
         year = int(self.year)
         months: list[int] = []
@@ -729,8 +754,8 @@ class AIS:
         # int, and ``pl`` is bound through the ``%(pl)s`` placeholder, so
         # f-string interpolation of the table name is safe here.
         select_template = (  # nosec B608
-            "select ss.mmsi, "
-            "extract(epoch from date1) as t "
+            "select ss.mmsi, ss.route_id, "
+            "extract(epoch from date1) as t, ss.cog "
             "FROM {tbl} ss "
             "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
             "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
@@ -747,14 +772,14 @@ class AIS:
                 ),
             )
         except Exception:
-            return {}
+            return []
         if not ok or not rows:
-            return {}
-        out: dict[str, list[float]] = {}
-        for mmsi, t in rows:
-            if mmsi is None or t is None:
+            return []
+        out: list[tuple[str, int | None, float, float]] = []
+        for mmsi, route_id, t, cog in rows:
+            if mmsi is None or t is None or cog is None:
                 continue
-            out.setdefault(str(mmsi), []).append(float(t))
+            out.append((str(mmsi), None if route_id is None else int(route_id), float(t), float(cog)))
         return out
 
     def compute_junction_transitions(
@@ -763,6 +788,15 @@ class AIS:
         seg_table: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, dict[str, dict[str, int]]]:
         """Build a ``{junction_id: {in_leg: {out_leg: count}}}`` table from AIS.
+
+        Counts are matched transits: the same trip (``mmsi`` + ``route_id``)
+        crossing one leg's passage line towards the junction and then
+        another leg's away from it (see
+        :func:`compute.junction_transitions.transition_counts_from_crossings`).
+        Crossings without a ``route_id`` are paired per MMSI within
+        ``time_window_s``.  Unmatched crossings add nothing, so the shares
+        are normalised over the matched transits; the match rate of every
+        junction with three or more legs goes to the QGIS log.
 
         Returns an empty dict if the database is offline or the project
         has no junctions.  Junctions are read from the live
@@ -773,10 +807,6 @@ class AIS:
         the UI widget from a non-main thread.  When ``None`` the method reads
         the table itself (original behaviour, requires main thread).
         """
-        from compute.junction_transitions import (
-            DEFAULT_TIME_WINDOW_S,
-            transition_counts_from_passages,
-        )
         handler = getattr(self.omrat, 'junctions', None)
         if handler is None or not handler.registry:
             return {}
@@ -784,35 +814,50 @@ class AIS:
             return {}
         if seg_table is None:
             seg_table = self.get_segment_data_from_table()
-        # First fetch passages once per leg so junctions sharing legs
+        # First fetch crossings once per leg so junctions sharing legs
         # don't query the database twice.
         leg_ids: set[str] = set()
         for j in handler.registry.values():
             for leg_id in j.legs:
                 leg_ids.add(leg_id)
-        passages_by_leg: dict[str, dict[str, list[float]]] = {}
+        crossings_by_leg: dict[str, list[Crossing]] = {}
         for leg_id in leg_ids:
             leg_d = seg_table.get(str(leg_id))
-            if leg_d is None:
-                passages_by_leg[leg_id] = {}
-                continue
-            passages_by_leg[leg_id] = self.fetch_passages_for_leg(leg_d)
+            crossings_by_leg[leg_id] = [] if leg_d is None else self.fetch_passages_for_leg(leg_d)
         # Build per-junction count tables by restricting the global
-        # passage map to the legs that touch each junction.
+        # crossing map to the legs that touch each junction.
         out: dict[str, dict[str, dict[str, int]]] = {}
         window = (
             DEFAULT_TIME_WINDOW_S if time_window_s is None
             else float(time_window_s)
         )
         for jid, j in handler.registry.items():
-            local = {
-                leg_id: passages_by_leg.get(leg_id, {})
-                for leg_id in j.legs
-            }
-            out[jid] = transition_counts_from_passages(
-                local, time_window_s=window,
-            )
+            local = {leg_id: crossings_by_leg.get(leg_id, []) for leg_id in j.legs}
+            out[jid] = transition_counts_from_crossings(local, j.legs, time_window_s=window)
+            if len(j.legs) >= 3:
+                self._log_junction_match(j.legs, local, out[jid], seg_table, window)
         return out
+
+    @staticmethod
+    def _log_junction_match(
+        leg_sides: dict[str, str],
+        crossings_by_leg: dict[str, list[Crossing]],
+        counts: dict[str, dict[str, int]],
+        seg_table: dict[str, dict[str, str]],
+        window_s: float,
+    ) -> None:
+        summary = match_summary(crossings_by_leg, leg_sides, counts)
+        n_crossings = sum(len(c) for c in crossings_by_leg.values())
+        names = ", ".join(
+            str((seg_table.get(str(leg_id)) or {}).get('Leg_name') or leg_id) for leg_id in leg_sides
+        )
+        route_pct = 100.0 * summary.with_route_id / n_crossings if n_crossings else 0.0
+        QgsMessageLog.logMessage(
+            f"Junction {names}: {summary.matched} of {summary.inbound} inbound AIS crossings "
+            f"paired into transits; {route_pct:.0f} % of the crossings had a route_id "
+            f"(the rest were paired per MMSI within {window_s / 3600:g} h).",
+            "OMRAT", Qgis.MessageLevel.Info,
+        )
 
     def get_segment_data_from_table(self) -> dict[str, dict[str, str]]:
         """Extract segment data from the QTableWidget (twRouteList)."""

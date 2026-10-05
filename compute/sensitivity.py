@@ -35,6 +35,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping
 
+# Model phases are shared with ``CalculationTask`` and the Calculation matrix.
+from compute.run_phases import ALL_PHASES, PHASE_LABELS, PHASE_TOTALS, PHASES
+
 __all__ = [
     'ACCIDENT_KEYS', 'AGGREGATE_KEYS', 'OUTPUT_KEYS', 'OUTPUT_LABELS',
     'PHASES', 'PHASE_LABELS', 'DEFAULT_DELTA',
@@ -79,25 +82,6 @@ OUTPUT_LABELS: dict[str, str] = {
     'merging': 'Merging collision',
     'bend': 'Bend collision',
 }
-
-# Model phases, in the order ``CalculationTask._run_all_phases`` runs them.
-PHASES: tuple[str, ...] = (
-    'drifting', 'collision', 'powered_grounding', 'powered_allision',
-)
-PHASE_LABELS: dict[str, str] = {
-    'drifting': 'Drifting',
-    'collision': 'Ship-ship collisions',
-    'powered_grounding': 'Powered grounding',
-    'powered_allision': 'Powered allision',
-}
-# Which accident totals each phase produces.
-PHASE_TOTALS: dict[str, tuple[str, ...]] = {
-    'drifting': ('drift_allision', 'drift_grounding'),
-    'collision': ('overtaking', 'head_on', 'crossing', 'merging', 'bend'),
-    'powered_grounding': ('powered_grounding',),
-    'powered_allision': ('powered_allision',),
-}
-ALL_PHASES: tuple[str, ...] = PHASES
 
 DEFAULT_DELTA: float = 0.2
 

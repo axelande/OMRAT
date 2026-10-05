@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -151,7 +152,28 @@ _SCHEMA = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_runs_timestamp ON omrat_runs(timestamp)",
+    # Project tag + OMRAT version per run (2026-10-02).  A side table, not
+    # columns on ``omrat_runs``: ``CREATE TABLE IF NOT EXISTS`` adds it to
+    # every existing history database, so runs recorded before it keep
+    # loading (they simply have no row here), and an older OMRAT reading
+    # this database still finds ``omrat_runs`` exactly as it expects.
+    """
+    CREATE TABLE IF NOT EXISTS omrat_run_info (
+        run_id          INTEGER PRIMARY KEY,
+        project         TEXT,
+        omrat_version   TEXT
+    )
+    """,
 ]
+
+# ``list_runs`` & co. read the side table along with every run.
+_SELECT_RUNS = (
+    "SELECT r.*, i.project AS project, i.omrat_version AS omrat_version "
+    "FROM omrat_runs r LEFT JOIN omrat_run_info i ON i.run_id = r.run_id"
+)
+
+# Shown for a run with neither a project tag nor an output folder.
+NO_PROJECT_LABEL = '(no project)'
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +202,20 @@ class RunMeta:
     output_dir: str | None = None
     output_filename: str | None = None
     notes: str | None = None
+    # From ``omrat_run_info``; ``None`` for runs recorded before it.
+    project: str | None = None
+    omrat_version: str | None = None
+
+    def project_label(self) -> str:
+        """The project this run is grouped under: its tag, else the name
+        of the folder its results were written to."""
+        tag = (self.project or '').strip()
+        return tag or folder_project(self.output_dir) or NO_PROJECT_LABEL
+
+    def snapshot_path(self) -> Path | None:
+        """The ``.omrat`` input snapshot written next to the GeoPackage."""
+        gpkg = self.gpkg_path()
+        return gpkg.with_suffix('.omrat') if gpkg is not None else None
 
     def totals_dict(self) -> dict[str, float | None]:
         """All scalar totals as a plain dict (preserves ordering)."""
@@ -222,13 +258,15 @@ class RunHistory:
         return conn
 
     def _ensure_schema(self) -> None:
-        """Create ``omrat_runs`` if absent.
+        """Create ``omrat_runs`` / ``omrat_run_info`` if absent.
 
         There is no column-migration step: ``_SCHEMA`` is the schema.  A
         history database written by an OMRAT older than the current
         ``_SCHEMA`` must be deleted (or the column added by hand) --
         adding an accident type means adding it to ``_SCHEMA`` and
-        accepting that older databases are incompatible.
+        accepting that older databases are incompatible.  Per-run
+        metadata that is not an accident total goes in a side table
+        instead (see ``omrat_run_info``), which needs no migration.
         """
         with self._connect() as conn:
             for stmt in _SCHEMA:
@@ -247,8 +285,14 @@ class RunHistory:
         output_dir: str | Path | None = None,
         output_filename: str | None = None,
         notes: str | None = None,
+        project: str | None = None,
+        omrat_version: str | None = None,
     ) -> int:
-        """Persist a finished run's metadata.  Returns its run_id."""
+        """Persist a finished run's metadata.  Returns its run_id.
+
+        ``project`` empty / ``None`` leaves the run untagged: it is then
+        grouped under its output folder name (``RunMeta.project_label``).
+        """
         ts = timestamp or time.strftime('%Y-%m-%d %H:%M:%S')
         totals = totals or {}
         row = {
@@ -290,6 +334,13 @@ class RunHistory:
                 row,
             )
             run_id = int(cursor.lastrowid)
+            tag = (project or '').strip() or None
+            if tag is not None or omrat_version:
+                conn.execute(
+                    "INSERT OR REPLACE INTO omrat_run_info (run_id, project, omrat_version) "
+                    "VALUES (?, ?, ?)",
+                    (run_id, tag, omrat_version or None),
+                )
             conn.commit()
         logger.info(f"Saved OMRAT run {run_id} ('{name}') metadata to {self.db_path}")
         return run_id
@@ -299,14 +350,14 @@ class RunHistory:
     def list_runs(self) -> list[RunMeta]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT * FROM omrat_runs ORDER BY run_id DESC"""
+                _SELECT_RUNS + " ORDER BY r.run_id DESC"
             ).fetchall()
         return [RunMeta(**dict(r)) for r in rows]
 
     def get_run(self, run_id: int) -> RunMeta | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM omrat_runs WHERE run_id = ?", (run_id,),
+                _SELECT_RUNS + " WHERE r.run_id = ?", (run_id,),
             ).fetchone()
         return RunMeta(**dict(row)) if row is not None else None
 
@@ -320,11 +371,61 @@ class RunHistory:
         placeholders = ','.join('?' for _ in ids)
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM omrat_runs WHERE run_id IN ({placeholders})",  # nosec B608
+                f"{_SELECT_RUNS} WHERE r.run_id IN ({placeholders})",  # nosec B608
                 ids,
             ).fetchall()
         by_id = {int(r['run_id']): RunMeta(**dict(r)) for r in rows}
         return [by_id[i] for i in ids if i in by_id]
+
+    # ----------------- project / version ----------------- #
+
+    def set_project(self, run_ids: Iterable[int], project: str | None) -> None:
+        """Tag ``run_ids`` with ``project``; empty / ``None`` removes the
+        tag so the runs fall back to their output folder name."""
+        tag = (project or '').strip() or None
+        with self._connect() as conn:
+            for run_id in run_ids:
+                conn.execute(
+                    "INSERT INTO omrat_run_info (run_id, project) VALUES (?, ?) "
+                    "ON CONFLICT(run_id) DO UPDATE SET project = excluded.project",
+                    (int(run_id), tag),
+                )
+            conn.commit()
+
+    def set_version(self, run_id: int, version: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO omrat_run_info (run_id, omrat_version) VALUES (?, ?) "
+                "ON CONFLICT(run_id) DO UPDATE SET omrat_version = excluded.omrat_version",
+                (int(run_id), version),
+            )
+            conn.commit()
+
+    def backfill_versions(self, runs: Iterable[RunMeta]) -> int:
+        """Fill in the OMRAT version of runs recorded before it was stored.
+
+        Read from the run's ``.omrat`` snapshot (which carries
+        ``omrat_version`` since 0.15), stored once and set on the
+        ``RunMeta`` too.  A snapshot without the key stores ``''`` so it
+        is not read again; a missing snapshot is left for a later try.
+        Returns the number of runs updated.
+        """
+        updated = 0
+        for run in runs:
+            if run.omrat_version is not None:
+                continue
+            path = run.snapshot_path()
+            if path is None or not path.is_file():
+                continue
+            version = snapshot_version(path)
+            try:
+                self.set_version(run.run_id, version)
+            except sqlite3.Error as exc:
+                logger.warning(f"Could not store the version of run {run.run_id}: {exc}")
+                continue
+            run.omrat_version = version
+            updated += 1
+        return updated
 
     # ----------------- delete ----------------- #
 
@@ -338,6 +439,7 @@ class RunHistory:
         run = self.get_run(run_id) if delete_gpkg else None
         with self._connect() as conn:
             conn.execute("DELETE FROM omrat_runs WHERE run_id = ?", (run_id,))
+            conn.execute("DELETE FROM omrat_run_info WHERE run_id = ?", (run_id,))
             conn.commit()
         if delete_gpkg and run is not None:
             path = run.gpkg_path()
@@ -354,6 +456,43 @@ class RunHistory:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def folder_project(output_dir: str | Path | None) -> str:
+    """Name of the last folder in ``output_dir`` ('' if none).
+
+    Splits on both separators so a history written on Windows reads the
+    same everywhere.
+    """
+    parts = [p for p in re.split(r'[\\/]', str(output_dir or '')) if p]
+    return parts[-1] if parts else ''
+
+
+_VERSION_RE = re.compile(r'"omrat_version"\s*:\s*"([^"]*)"')
+
+
+def snapshot_version(path: str | Path, head_bytes: int = 16384) -> str:
+    """``omrat_version`` from the start of a ``.omrat`` file, or ''.
+
+    The key is written first (``GatherData.get_all_for_save``), so the
+    first few KB are enough -- snapshots are often 10+ MB.
+    """
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(head_bytes).decode('utf-8', errors='ignore')
+    except OSError:
+        return ''
+    match = _VERSION_RE.search(head)
+    return match.group(1) if match else ''
+
+
+def project_counts(runs: Iterable[RunMeta]) -> dict[str, int]:
+    """``{project label: number of runs}``, sorted by label (case-insensitive)."""
+    counts: dict[str, int] = {}
+    for run in runs:
+        label = run.project_label()
+        counts[label] = counts.get(label, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: kv[0].lower()))
+
+
 def _f(v) -> float | None:
     """Coerce numeric-ish input to ``float`` (or ``None``)."""
     if v is None:
@@ -364,28 +503,41 @@ def _f(v) -> float | None:
         return None
 
 
-def totals_from_calc(calc) -> dict[str, float]:
+def totals_from_calc(calc) -> dict[str, float | None]:
     """Extract the standard scalar totals dict from a Calculation object.
 
     Used by :mod:`omrat.py` and :mod:`omrat_utils.run_persistence` so
-    the same key vocabulary is used everywhere.
+    the same key vocabulary is used everywhere.  A model the run did not
+    calculate (Calculation matrix) has no report: its totals are
+    ``None`` -- an empty history cell, not a zero.
     """
-    drift = (getattr(calc, 'drifting_report', None) or {}).get('totals', {}) or {}
-    coll = (getattr(calc, 'collision_report', None) or {}).get('totals', {}) or {}
-    pg = (getattr(calc, 'powered_grounding_report', None) or {}).get('totals', {}) or {}
-    pa = (getattr(calc, 'powered_allision_report', None) or {}).get('totals', {}) or {}
+    def _totals(attr: str) -> dict | None:
+        report = getattr(calc, attr, None)
+        if report is None:
+            return None
+        return report.get('totals', {}) or {}
+
+    def _get(totals: dict | None, key: str) -> float | None:
+        if totals is None:
+            return None
+        return float(totals.get(key, 0.0) or 0.0)
+
+    drift = _totals('drifting_report')
+    coll = _totals('collision_report')
+    pg = _totals('powered_grounding_report')
+    pa = _totals('powered_allision_report')
     return {
-        'drift_allision': float(drift.get('allision', 0.0) or 0.0),
-        'drift_grounding': float(drift.get('grounding', 0.0) or 0.0),
-        'drift_anchoring': float(drift.get('anchoring', 0.0) or 0.0),
-        'powered_grounding': float(pg.get('grounding', 0.0) or 0.0),
-        'powered_allision': float(pa.get('allision', 0.0) or 0.0),
-        'head_on': float(coll.get('head_on', 0.0) or 0.0),
-        'overtaking': float(coll.get('overtaking', 0.0) or 0.0),
-        'crossing': float(coll.get('crossing', 0.0) or 0.0),
-        'merging': float(coll.get('merging', 0.0) or 0.0),
-        'bend': float(coll.get('bend', 0.0) or 0.0),
-        'ship_collision_total': float(coll.get('total', 0.0) or 0.0),
+        'drift_allision': _get(drift, 'allision'),
+        'drift_grounding': _get(drift, 'grounding'),
+        'drift_anchoring': _get(drift, 'anchoring'),
+        'powered_grounding': _get(pg, 'grounding'),
+        'powered_allision': _get(pa, 'allision'),
+        'head_on': _get(coll, 'head_on'),
+        'overtaking': _get(coll, 'overtaking'),
+        'crossing': _get(coll, 'crossing'),
+        'merging': _get(coll, 'merging'),
+        'bend': _get(coll, 'bend'),
+        'ship_collision_total': _get(coll, 'total'),
     }
 
 
