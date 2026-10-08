@@ -81,7 +81,8 @@ class Distributions:
         self.omrat = parent
         self.dw = parent.main_widget
         self.canvas: FigureCanvas | None = None
-        self.last_id: str = '1'
+        # The leg whose values the widgets hold; '' = none yet.
+        self.last_id: str = ''
         self.new_id: str = '1'
         self.main_connect()
 
@@ -146,8 +147,8 @@ class Distributions:
         if new_id == '' or new_id is None:
             return
         l_id = self.last_id
-        # last_id defaults to '1', but the user may have no segment with that id
-        # (no route yet, or the segment was deleted). Skip the flush in that case.
+        # last_id is '' until a leg has been shown, and the segment may have
+        # been deleted since. Skip the flush in that case.
         if l_id not in self.omrat.segment_data:
             l_id = None
         if l_id is not None and self.dw.leNormMean1_1.text() != '':

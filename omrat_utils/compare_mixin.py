@@ -1,16 +1,28 @@
 """Compare-Models tab slots, factored out of ``omrat.OMRAT``.
 
 The Compare tab lets the user load two ``.omrat`` snapshots side-by-side
-and renders three diff tables (accidents, settings, leg distances).
-The pure-data work lives in :mod:`omrat_utils.compare`; this mixin only
-owns the **dock-widget side**:
+and renders its diff tables on five sub-tabs (``twCompareResults``):
 
-* file-picker buttons that drive the ``LECompareA`` / ``LECompareB``
-  line-edits,
-* the Compare button that fills the three QTables, and
-* the "Add both models to QGIS" button which builds one layer group per
-  model (depths, structures, legs, tangent lines, result layers) with
-  run A tinted red and run B blue.
+* **Totals** -- accidents, summary rows and oil spill
+  (:func:`omrat_utils.compare.build_accident_table`),
+* **Settings & inputs** -- parameters (``build_settings_table``) and
+  inputs (:mod:`omrat_utils.compare_inputs`),
+* **Breakdown** -- per leg / waypoint / object changes
+  (:mod:`omrat_utils.compare_breakdown`) with a category filter,
+* **Zone** -- the common area around the structures
+  (:mod:`omrat_utils.compare_zone`), re-computed when the radius changes,
+* **Leg lengths** -- ``build_leg_distance_table``.
+
+**More info (collisions)...** under the Totals table opens
+:class:`omrat_utils.compare_explain_dialog.CompareExplainDialog`, which
+explains *why* each ship-ship collision type changed
+(:mod:`omrat_utils.compare_explain`).  The explanation is cached per
+snapshot pair (path + mtime) in ``_compare_explain_cache``.
+
+The pure-data work lives in those modules; this mixin only owns the
+**dock-widget side**: the file pickers, the Compare button, the two
+"add to QGIS" buttons (one layer group per model, A red / B blue, and
+the B - A difference layers).
 
 The mixin is composed onto :class:`omrat.OMRAT`.  Public method names
 (``_setup_compare_tab``, ``_run_compare`` and friends) are unchanged so
@@ -19,13 +31,27 @@ existing wiring keeps working.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 from qgis.core import Qgis, QgsMessageLog
-from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox, QTableWidgetItem
 
-if TYPE_CHECKING:
-    pass
+_ALL_CATEGORIES = 'All categories'
+
+
+class _NumericItem(QTableWidgetItem):
+    """Table item that shows formatted text but sorts on the number."""
+
+    def __init__(self, value: float | None, text: str) -> None:
+        super().__init__(text)
+        self._value = value
+
+    def __lt__(self, other: Any) -> bool:
+        if isinstance(other, _NumericItem):
+            a = self._value if self._value is not None else float('-inf')
+            b = other._value if other._value is not None else float('-inf')
+            return a < b
+        return super().__lt__(other)
 
 
 class CompareMixin:
@@ -54,6 +80,8 @@ class CompareMixin:
 
         if hasattr(widget, 'pbCompareDiff'):
             widget.pbCompareDiff.clicked.connect(self._add_compare_diff_layers)
+        if hasattr(widget, 'pbCompareMoreInfo'):
+            widget.pbCompareMoreInfo.clicked.connect(self._open_compare_explain)
         widget.TWCompareAccidents.setColumnCount(5)
         widget.TWCompareAccidents.setHorizontalHeaderLabels(
             ['Accident type', 'Run A', 'Run B', 'Δ abs', 'Δ %'],
@@ -66,6 +94,28 @@ class CompareMixin:
         widget.TWCompareLegs.setHorizontalHeaderLabels(
             ['Leg', 'Run A length (m)', 'Run B length (m)', 'Δ m', 'Δ %'],
         )
+        if hasattr(widget, 'TWCompareInputs'):
+            widget.TWCompareInputs.setColumnCount(4)
+            widget.TWCompareInputs.setHorizontalHeaderLabels(['Group', 'Input', 'Run A', 'Run B'])
+        if hasattr(widget, 'TWCompareBreakdown'):
+            from omrat_utils.compare_breakdown import CATEGORIES
+            widget.TWCompareBreakdown.setColumnCount(6)
+            widget.TWCompareBreakdown.setHorizontalHeaderLabels(
+                ['Category', 'Item', 'Run A', 'Run B', 'Δ (B - A)', 'Share of |Δ| (%)'],
+            )
+            cb = widget.cbCompareBreakdownFilter
+            cb.clear()
+            cb.addItems([_ALL_CATEGORIES, *CATEGORIES])
+            cb.currentIndexChanged.connect(self._filter_compare_breakdown)
+        if hasattr(widget, 'TWCompareZone'):
+            widget.TWCompareZone.setColumnCount(5)
+            widget.TWCompareZone.setHorizontalHeaderLabels(
+                ['Zone figure', 'Run A', 'Run B', 'Δ abs', 'Δ %'],
+            )
+            widget.sbCompareZoneKm.valueChanged.connect(self._refresh_compare_zone)
+        self._compare_cache: dict[str, Any] | None = None
+        self._compare_explain_cache: dict[tuple, Any] = {}
+        self._compare_explain_dlg = None
 
     # ------------------------------------------------------------------
     # File picker
@@ -88,8 +138,11 @@ class CompareMixin:
             build_accident_table,
             build_leg_distance_table,
             build_settings_table,
+            load_run_outputs,
             load_snapshot,
         )
+        from omrat_utils.compare_breakdown import build_breakdown_rows, top_movers
+        from omrat_utils.compare_inputs import build_input_table, describe
         widget = self.main_widget
         path_a = (widget.LECompareA.text() or '').strip()
         path_b = (widget.LECompareB.text() or '').strip()
@@ -106,32 +159,183 @@ class CompareMixin:
         except Exception as exc:
             self.show_error_popup(str(exc), '_run_compare')
             return
+        out_a = load_run_outputs(path_a)
+        out_b = load_run_outputs(path_b)
 
-        accident_rows = build_accident_table(Path(path_a), Path(path_b))
+        accident_rows = build_accident_table(Path(path_a), Path(path_b), out_a, out_b)
         settings_rows = build_settings_table(snap_a, snap_b)
         leg_rows = build_leg_distance_table(snap_a, snap_b)
-
         self._fill_compare_table(widget.TWCompareAccidents, accident_rows)
         self._fill_compare_table(widget.TWCompareSettings, settings_rows)
         self._fill_compare_table(widget.TWCompareLegs, leg_rows)
 
-        widget.lblCompareSummary.setText(
-            self.tr(
-                "Run A: {a}\nRun B: {b}\n"
-                "Accident rows: {na} | Settings differences: {ns} | Legs: {nl}"
-            ).format(
-                a=Path(path_a).name, b=Path(path_b).name,
-                na=len(accident_rows), ns=len(settings_rows), nl=len(leg_rows),
-            )
-        )
+        input_rows: list[list[str]] = []
+        breakdown_rows: list[list[Any]] = []
+        if hasattr(widget, 'TWCompareInputs'):
+            input_rows = build_input_table(snap_a, snap_b)
+            self._fill_compare_table(widget.TWCompareInputs, input_rows)
+        if hasattr(widget, 'TWCompareBreakdown'):
+            breakdown_rows = build_breakdown_rows(snap_a, snap_b, out_a, out_b)
+            self._fill_breakdown_table(widget.TWCompareBreakdown, breakdown_rows)
+            self._filter_compare_breakdown()
+        self._compare_cache = {
+            'snap_a': snap_a, 'snap_b': snap_b, 'out_a': out_a, 'out_b': out_b,
+        }
+        self._refresh_compare_zone()
+
+        def _files(out: dict) -> str:
+            return ', '.join(sorted(out)) or self.tr('none')
+
+        widget.lblCompareSummary.setText(self.tr('Run A: {a}   |   Run B: {b}').format(
+            a=Path(path_a).name, b=Path(path_b).name))
+        lines = [
+            self.tr('Result files: A {fa}; B {fb}.').format(fa=_files(out_a), fb=_files(out_b)),
+            self.tr('Accident rows: {na} | Settings differences: {ns} | Input differences: {ni} '
+                    '({gi}) | Breakdown items: {nb} | Legs: {nl}').format(
+                na=len(accident_rows), ns=len(settings_rows), ni=len(input_rows),
+                gi=describe(input_rows), nb=len(breakdown_rows), nl=len(leg_rows)),
+        ]
+        top = top_movers(breakdown_rows, 1)
+        if top:
+            lines.append(self.tr('Largest single change: {item} ({delta:+.3e} per year)').format(
+                item=top[0][1], delta=top[0][4]))
+        if hasattr(widget, 'lblCompareDetails'):
+            widget.lblCompareDetails.setText('\n'.join(lines))
 
     @staticmethod
     def _fill_compare_table(tw, rows: list[list[str]]) -> None:
-        from qgis.PyQt.QtWidgets import QTableWidgetItem
         tw.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, val in enumerate(row):
                 tw.setItem(r, c, QTableWidgetItem(val))
+        tw.resizeColumnsToContents()
+        tw.horizontalHeader().setStretchLastSection(True)
+
+    @staticmethod
+    def _fill_breakdown_table(tw, rows: list[list[Any]]) -> None:
+        """``[category, item, a, b, delta, share]`` rows; numbers sort numerically."""
+        tw.setSortingEnabled(False)
+        tw.setRowCount(len(rows))
+        for r, (category, item, a, b, delta, share) in enumerate(rows):
+            tw.setItem(r, 0, QTableWidgetItem(category))
+            tw.setItem(r, 1, QTableWidgetItem(item))
+            tw.setItem(r, 2, _NumericItem(a, '—' if a is None else f'{a:.3e}'))
+            tw.setItem(r, 3, _NumericItem(b, '—' if b is None else f'{b:.3e}'))
+            tw.setItem(r, 4, _NumericItem(delta, f'{delta:+.3e}'))
+            tw.setItem(r, 5, _NumericItem(share, f'{share:.1f}'))
+        tw.setSortingEnabled(True)
+        tw.resizeColumnsToContents()
+        tw.horizontalHeader().setStretchLastSection(True)
+
+    def _filter_compare_breakdown(self, *_args) -> None:
+        """Show only the rows of the category picked in ``cbCompareBreakdownFilter``."""
+        widget = self.main_widget
+        if not hasattr(widget, 'TWCompareBreakdown'):
+            return
+        tw = widget.TWCompareBreakdown
+        wanted = widget.cbCompareBreakdownFilter.currentText()
+        for r in range(tw.rowCount()):
+            item = tw.item(r, 0)
+            category = item.text() if item is not None else ''
+            tw.setRowHidden(r, wanted not in ('', _ALL_CATEGORIES) and category != wanted)
+
+    def _refresh_compare_zone(self, *_args) -> None:
+        """(Re)build the Zone table from the last Compare, with the current radius."""
+        from omrat_utils.compare_zone import build_zone_table
+        widget = self.main_widget
+        cache = getattr(self, '_compare_cache', None)
+        if not cache or not hasattr(widget, 'TWCompareZone'):
+            return
+        try:
+            rows, info = build_zone_table(
+                cache['snap_a'], cache['snap_b'], cache['out_a'], cache['out_b'],
+                radius_km=float(widget.sbCompareZoneKm.value()),
+            )
+        except Exception as exc:
+            rows, info = [], self.tr('Zone comparison failed: {e}').format(e=exc)
+            QgsMessageLog.logMessage(f'Compare zone failed: {exc}', 'OMRAT', Qgis.MessageLevel.Warning)
+        self._fill_compare_table(widget.TWCompareZone, rows)
+        widget.lblCompareZoneInfo.setText(info)
+
+    # ------------------------------------------------------------------
+    # More info: why did the collisions change?
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _compare_explain_key(path_a: str, path_b: str) -> tuple:
+        """Cache key: both snapshots' resolved path and modification time."""
+        key = []
+        for path in (path_a, path_b):
+            p = Path(path)
+            try:
+                key.append((str(p.resolve()), p.stat().st_mtime))
+            except OSError:
+                key.append((str(p), None))
+        return tuple(key)
+
+    def _remember_compare_explanation(self, key: tuple, explanation: Any) -> None:
+        cache = getattr(self, '_compare_explain_cache', None)
+        if cache is None:
+            cache = self._compare_explain_cache = {}
+        cache[key] = explanation
+        while len(cache) > 4:
+            cache.pop(next(iter(cache)))
+
+    def _open_compare_explain(self) -> None:
+        """Open (or raise) *More info*: why did each collision type change?
+
+        The accident row selected in the Totals table picks the type shown
+        first; any non-collision row shows all collisions.
+        """
+        from omrat_utils.compare import load_run_outputs, load_snapshot
+        from omrat_utils.compare_explain import TOTAL, type_for_label
+        from omrat_utils.compare_explain_dialog import CompareExplainDialog
+        widget = self.main_widget
+        path_a = (widget.LECompareA.text() or '').strip()
+        path_b = (widget.LECompareB.text() or '').strip()
+        if not path_a or not path_b:
+            QMessageBox.information(
+                widget, self.tr('More info'),
+                self.tr('Pick two .omrat snapshots before clicking More info.'))
+            return
+        acc_type = TOTAL
+        tw = widget.TWCompareAccidents
+        item = tw.item(tw.currentRow(), 0) if tw.currentRow() >= 0 else None
+        if item is not None:
+            acc_type = type_for_label(item.text())
+        key = self._compare_explain_key(path_a, path_b)
+        dlg = getattr(self, '_compare_explain_dlg', None)
+        if dlg is not None:
+            try:
+                if dlg.isVisible() and getattr(dlg, 'cache_key', None) == key:
+                    idx = dlg.cbType.findData(acc_type)
+                    if idx >= 0:
+                        dlg.cbType.setCurrentIndex(idx)
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    return
+                dlg.close()
+            except RuntimeError:
+                pass  # underlying C++ object already deleted
+            self._compare_explain_dlg = None
+        try:
+            snap_a = load_snapshot(path_a)
+            snap_b = load_snapshot(path_b)
+        except Exception as exc:
+            self.show_error_popup(str(exc), '_open_compare_explain')
+            return
+        iface = getattr(self, 'iface', None)
+        canvas = iface.mapCanvas() if iface is not None else None
+        dlg = CompareExplainDialog(
+            widget, snap_a, snap_b, Path(path_a).name, Path(path_b).name,
+            load_run_outputs(path_a), load_run_outputs(path_b),
+            acc_type=acc_type,
+            explanation=(getattr(self, '_compare_explain_cache', None) or {}).get(key),
+            canvas=canvas,
+            on_ready=lambda expl, key=key: self._remember_compare_explanation(key, expl),
+        )
+        dlg.cache_key = key
+        self._compare_explain_dlg = dlg
+        dlg.show()
 
     # ------------------------------------------------------------------
     # Add both runs as map layers

@@ -474,7 +474,9 @@ class OMRAT(
         from omrat_utils.causation_factors import CausationFactors
         self.causation_f.data = CausationFactors(self).data
         self.causation_values = self.causation_f.data
-        self.distributions.last_id = '1'
+        # No leg shown: '1' made the next leg switch flush the cleared
+        # widgets (weights '0') into the first leg drawn afterwards.
+        self.distributions.last_id = ''
         self.distributions.new_id = '1'
         self.traffic.run_update = False
         self.traffic.traffic_data = self.traffic_data

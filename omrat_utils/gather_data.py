@@ -429,7 +429,9 @@ class GatherData:
         self.populate_segment_tbl(data['segment_data'], self.p.main_widget.twRouteList)
         self.populate_cbTrafficSelectSeg()
         self.p.main_widget.leNormMean1_1.setText('')
-        self.p.distributions.change_dist_segment(self.p.distributions.last_id)
+        dists = self.p.distributions
+        shown = dists.last_id if dists.last_id in self.p.segment_data else next(iter(self.p.segment_data), '')
+        dists.change_dist_segment(shown)
 
     def _populate_objects_and_canvas(self, data: dict, depth_rows: list, object_rows: list) -> None:
         self.p.object.area_type = 'depth'

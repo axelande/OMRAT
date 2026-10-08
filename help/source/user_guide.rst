@@ -1696,17 +1696,139 @@ either.  Pick **Run A (.omrat)** and **Run B (.omrat)** with the two
 ``...`` browse buttons -- these are the input snapshots each run
 writes next to its GeoPackage -- then click **Compare**.
 
-Three tables fill in:
+The line under the buttons names the two runs; the results fill five
+sub-tabs:
 
-* **Accident probabilities** -- A, B and the relative difference per
-  accident type.
-* **Settings differences** -- every scalar under the ``drift``, ``pc``
-  (causation factors), ``traffic_scaling``, ``consequence`` and
-  ``ship_categories`` blocks that differs between the two snapshots,
-  plus per-leg **Width** changes.  A value present on only one side
-  shows an em-dash on the other.
-* **Route distance per leg** -- leg-by-leg lengths, so a geometry
-  change shows up immediately.
+* **Totals** -- A, B and the absolute and relative difference for the
+  nine accident types, the summary rows (all grounding, all allision,
+  all collisions, all accidents) and, when the runs have a consequence
+  result, the expected oil-spill volume and how often each spill level
+  is exceeded.  The values come from the files each run wrote next to
+  its snapshot (``<name>.collision.json``, ``.drifting.json``,
+  ``.powered.json``, ``.consequence.json``); the run history only fills
+  in what those files lack.  A model part that was not calculated in a
+  run shows ``n/a``, never zero.  Above the table: which result files
+  were found, how many differences each tab holds, and the largest
+  single change.
+* **Settings & inputs** -- the *settings* table lists every scalar under
+  the ``drift``, ``pc`` (causation factors), ``traffic_scaling``,
+  ``consequence`` and ``ship_categories`` blocks that differs, plus
+  per-leg **Width**.  The *inputs* table lists what decides where
+  accidents happen:
+
+  - legs present in one run only, moved start or end points (with the
+    distance moved) and the Cat II check interval ``ai``;
+  - ships per year per leg and direction, or which other traffic fields
+    differ;
+  - the lateral distribution (mean, std, weight per component, uniform part);
+  - suppressed legs and where their traffic was moved;
+  - junctions present in one run only, the matrix source and the largest
+    change in a transition share;
+  - depth polygons per depth class (count and area of their union, so a
+    layer loaded twice stands out) and structures (height, area).
+
+  Legs are matched on id **and** name.  Two different layouts reuse leg
+  ids for unrelated legs, so their legs are listed as present in one run
+  only instead of being diffed against each other.
+* **Breakdown** -- *where* the runs differ, item by item: collisions
+  per leg, per waypoint and per leg pair; drifting per leg and per
+  object; powered per leg and direction and per obstacle; oil spill
+  per accident type.  Each row has A, B, the change B - A and the item's
+  share of the summed absolute change in its category.  Rows are sorted
+  by the size of the change; **Show** filters one category and the
+  column headers sort.
+* **Zone** -- compares only what both runs share: the water within the
+  chosen radius (default 20 km) of the structures of run A and run B,
+  so a run without the park gets the same zone as the run with it.  It
+  lists the leg length and traffic work (million ship-km per year)
+  inside the zone, the collisions inside it (head-on and overtaking by
+  the share of each leg inside the zone, crossing, merging and bend by
+  waypoint), collisions per million ship-km, and the allision totals.
+  Use it when two layouts cover different areas: their totals then
+  differ for reasons unrelated to the park.  Changing the radius
+  recomputes the table.
+* **Leg lengths** -- leg-by-leg lengths, so a geometry change shows up
+  immediately.
+
+Why did the collisions change? (More info)
+------------------------------------------
+
+**More info (collisions)...** under the Totals table explains *why*
+each ship-ship collision type changed between A and B.  Select an
+accident row first to open the dialog on that type (any other row
+opens **All collisions**).
+
+The inputs that differ between the two snapshots are sorted into
+groups:
+
+==========================================  ==========================================
+Group                                       What belongs to it
+==========================================  ==========================================
+Routing (suppressed legs / moved traffic)   ``suppressed``, ``traffic_redirect``, ``suppressed_with``
+Leg geometry                                start / end points, leg length
+Lateral distributions                       means, standard deviations, weights, uniform part
+Traffic volume                              ships per year, scaling
+Ship properties                             speed, beam, draught, height, length classes
+Junction transition matrices                the ``junctions`` block
+Causation factors                           the five collision factors in ``pc``
+Legs added / removed                        legs present in one run only
+Other leg inputs                            any other leg field the model might read
+==========================================  ==========================================
+
+The collision model is then re-run with run A's inputs and each
+combination of groups taken from run B.  This is quick, because the
+ship-ship model is analytic (a few seconds per run).  Each group gets
+its *Shapley value*: its effect averaged over every order in which the
+groups could be switched from A to B.  The values do not depend on an
+arbitrary order and add up exactly to B - A.  When two groups only
+matter together, their joint effect is split between them.  With
+``k`` differing groups the dialog needs ``2^k`` runs, plus one for run B
+itself (B156 with and without the park: four groups, 17 runs, about
+half a minute).  With more than six groups it averages over ``2k``
+fixed orders, which still adds up exactly.  The calculation runs in the
+background, and reopening the dialog for the same two files is instant.
+
+The dialog has three parts:
+
+1. **Why** -- each group's contribution, its share of the change and a
+   bar (red = increase, blue = decrease).  Groups that are identical in
+   A and B are listed underneath.  Hover over a group to see what
+   differs.
+2. **Largest items** -- legs (head-on, overtaking, bend) or leg pairs
+   (crossing, merging), each with A, B, the change and its split over
+   the groups.  **Merge split legs** adds up the sub-legs of a split
+   route (``LEG_1_2_a`` + ``LEG_1_2_b``): moving a split point moves
+   length from one sub-leg to the other, which otherwise looks like two
+   large changes that cancel.  **Show on map** (or a double-click)
+   highlights the selected legs and zooms to them.
+3. **Findings** -- plain-language explanations, warnings first:
+
+   - suppressed legs and where their ships went;
+   - crossing and merging changing in opposite directions because moved
+     traffic meets another flow at a new angle (pairs at 30 degrees or
+     less are merging);
+   - legs whose lateral distribution narrowed or widened, with the
+     effect per leg;
+   - junctions that lost their AIS counts, i.e. fell back to the
+     geometric default after a leg at them was edited.  This is
+     usually not part of the scenario;
+   - leg pairs that moved onto, or across, the 30-degree merging /
+     crossing limit;
+   - inputs that differ but do not enter the collision model (``ai``,
+     leg width, structures, depth areas).  Structures affect collisions
+     only through the route and traffic changes made around them;
+   - a warning when the recomputed values differ from the stored
+     results (for example, a run made with an older OMRAT version).
+
+**Export to Markdown...** writes the summary table, all findings and the
+largest items for every type to one report.
+
+.. note::
+
+   Only the ship-ship collisions are explained this way.  Drifting and
+   powered runs take far too long to repeat for every combination of
+   groups; for those, use the **Breakdown** sub-tab and the difference
+   layers.
 
 **Add both models to QGIS (grouped: A = red, B = blue)**, right under
 the file pickers, creates one layer group per model in the Layers

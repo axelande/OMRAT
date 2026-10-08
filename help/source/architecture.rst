@@ -66,6 +66,12 @@ Directory Structure
    │   ├── units.py                # Unit conversion utilities
    │   ├── iwrap_io_mixin.py       # OMRAT IWRAP import/export slots
    │   ├── compare_mixin.py        # Compare-Models tab logic
+   │   ├── compare.py              # Compare: totals, settings, leg lengths, run sidecars
+   │   ├── compare_inputs.py       # Compare: leg / traffic / junction / depth input diff
+   │   ├── compare_breakdown.py    # Compare: per leg / waypoint / object result diff
+   │   ├── compare_zone.py         # Compare: common zone around the structures
+   │   ├── compare_explain.py      # Compare > More info: why collisions changed (Shapley)
+   │   ├── compare_explain_dialog.py  # More info dialog + background task
    │   ├── drift_analysis_mixin.py # Drift-corridor analysis runner + layers
    │   ├── run_history_mixin.py    # Auto-save flow + Previous-runs table
    │   └── accident_results_mixin.py  # TWAccidentResults + per-row View dispatcher

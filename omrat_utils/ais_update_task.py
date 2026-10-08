@@ -248,18 +248,38 @@ class AisUpdateTask(QgsTask):
         # defaults stop forcing continuation with the old source.
         sd.pop('traffic_source', None)
 
+    def _apply_results(self, omrat: Any) -> None:
+        """Write every fetched leg into the model and show the last one.
+
+        Same order as ``copy_traffic_dialog.apply_copy``: flush the
+        Distributions tab first, write, then reload the tab *without* a
+        flush.  The tab writes its widgets into ``distributions.last_id``
+        on the next leg switch, so widgets still holding the pre-update
+        values put the old weights back over the AIS result (B156
+        LEG_1_1, 2026-10-07: AIS mean / std with weight 0, so no curve on
+        the tangent line).
+        """
+        dists = getattr(omrat, 'distributions', None)
+        if dists is not None:
+            try:
+                dists.change_dist_segment(dists.last_id)
+            except Exception:  # nosec B110 B112
+                pass
+        for leg_key, res in self.results.items():
+            self._apply_leg_result(omrat, leg_key, res)
+        self._update_last_leg_display(omrat)
+
     def _update_last_leg_display(self, omrat: Any) -> None:
         if not self.last_key or self.last_key not in self.results:
             return
-        line1 = self.results[self.last_key]['line1']
-        line2 = self.results[self.last_key]['line2']
+        if self.last_key not in (getattr(omrat, 'segment_data', None) or {}):
+            return  # leg removed while the task ran
         mw = omrat.main_widget
+        # Load the leg from segment_data: clearing leNormMean1_1 is the
+        # documented way to skip the flush in ``change_dist_segment``.
+        # Writing the new mean / std into the widgets here (as before)
+        # flushed them, with the old weights, into the leg the tab showed.
         mw.leNormMean1_1.setText('')
-        if len(line1) > 0:
-            mw.leNormMean1_1.setText(str(line1.mean()))
-            mw.leNormMean2_1.setText(str(line2.mean()))
-            mw.leNormStd1_1.setText(str(line1.std()))
-            mw.leNormStd2_1.setText(str(line2.std()))
         omrat.distributions.run_update_plot(self.last_key)
         mw.cbTrafficSelectSeg.setCurrentIndex(mw.cbTrafficSelectSeg.count() - 1)
 
@@ -361,9 +381,7 @@ class AisUpdateTask(QgsTask):
                 omrat.tr(f"Coverage: {coverage_s / 3600:.1f} h (skipped {gap_s / 3600:.1f} h of gaps > 12 h).\n"
                          f"Multiplier: {mult:.2f}x ({ais._YEAR_SECONDS / 3600:.0f} h / {coverage_s / 3600:.1f} h)."),
             )
-        for leg_key, res in self.results.items():
-            self._apply_leg_result(omrat, leg_key, res)
-        self._update_last_leg_display(omrat)
+        self._apply_results(omrat)
         self._refresh_junction_registry(omrat)
         qg = getattr(omrat, 'qgis_geoms', None)
         if qg is not None and hasattr(qg, 'refresh_traffic_link_views'):

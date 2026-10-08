@@ -1832,7 +1832,7 @@ QToolTip {
                <item row="1" column="0">
                 <widget class="QLabel" name="label_38">
                  <property name="text">
-                  <string>Name of the model:</string>
+                  <string>Name of the Run:</string>
                  </property>
                 </widget>
                </item>
@@ -2263,34 +2263,228 @@ shadows/holes created by shallow depths and low structures.</string>
            </widget>
           </item>
           <item>
-           <widget class="QLabel" name="lblCompareAccidents">
-            <property name="text">
-             <string>Accident probabilities</string>
+           <widget class="QTabWidget" name="twCompareResults">
+            <property name="currentIndex">
+             <number>0</number>
             </property>
+            <widget class="QWidget" name="compareTabTotals">
+             <attribute name="title">
+              <string>Totals</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="compareTotalsLayout">
+              <item>
+               <widget class="QLabel" name="lblCompareDetails">
+                <property name="text">
+                 <string/>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+                <property name="textInteractionFlags">
+                 <set>Qt::TextSelectableByMouse</set>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="lblCompareAccidents">
+                <property name="text">
+                 <string>Accident frequencies (per year), summary rows and the oil-spill result. Values come from the files each run wrote next to its snapshot.</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="TWCompareAccidents"/>
+              </item>
+              <item>
+               <widget class="QPushButton" name="pbCompareMoreInfo">
+                <property name="text">
+                 <string>More info (collisions)...</string>
+                </property>
+                <property name="toolTip">
+                 <string>Why did each ship-ship collision type change? Re-runs the collision model with run A's inputs and one group of inputs at a time from run B (routing, geometry, lateral distributions, traffic, junction matrices, ...) and splits the change over those groups, per leg and leg pair, with plain-language findings. The selected row picks the type shown first.</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="compareTabSettings">
+             <attribute name="title">
+              <string>Settings &amp;&amp; inputs</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="compareSettingsLayout">
+              <item>
+               <widget class="QLabel" name="lblCompareSettings">
+                <property name="text">
+                 <string>Settings that differ (drift, causation factors, traffic scaling, consequence, ship categories, leg width)</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="TWCompareSettings"/>
+              </item>
+              <item>
+               <widget class="QLabel" name="lblCompareInputs">
+                <property name="text">
+                 <string>Inputs that differ: legs, traffic, lateral distributions, routing, junctions, depths and structures.  Legs are matched on id and name.</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="TWCompareInputs"/>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="compareTabBreakdown">
+             <attribute name="title">
+              <string>Breakdown</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="compareBreakdownLayout">
+              <item>
+               <widget class="QLabel" name="lblCompareBreakdown">
+                <property name="text">
+                 <string>Where the runs differ, item by item, sorted by the size of the change. Share = the item's part of the summed absolute change in its category.</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="compareBreakdownFilterLayout">
+                <item>
+                 <widget class="QLabel" name="lblCompareBreakdownFilter">
+                  <property name="text">
+                   <string>Show:</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QComboBox" name="cbCompareBreakdownFilter">
+                  <property name="sizeAdjustPolicy">
+                   <enum>QComboBox::AdjustToContents</enum>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <spacer name="compareBreakdownSpacer">
+                  <property name="orientation">
+                   <enum>Qt::Horizontal</enum>
+                  </property>
+                  <property name="sizeHint" stdset="0">
+                   <size>
+                    <width>40</width>
+                    <height>20</height>
+                   </size>
+                  </property>
+                 </spacer>
+                </item>
+               </layout>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="TWCompareBreakdown"/>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="compareTabZone">
+             <attribute name="title">
+              <string>Zone</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="compareZoneTabLayout">
+              <item>
+               <widget class="QLabel" name="lblCompareZoneHelp">
+                <property name="text">
+                 <string>Compares only what both runs share: the water within the radius of the structures of run A and run B.</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="compareZoneLayout">
+                <item>
+                 <widget class="QLabel" name="lblCompareZoneKm">
+                  <property name="text">
+                   <string>Zone radius around the structures (km):</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QDoubleSpinBox" name="sbCompareZoneKm">
+                  <property name="decimals">
+                   <number>1</number>
+                  </property>
+                  <property name="minimum">
+                   <double>0.5</double>
+                  </property>
+                  <property name="maximum">
+                   <double>500.0</double>
+                  </property>
+                  <property name="value">
+                   <double>20.0</double>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <spacer name="compareZoneSpacer">
+                  <property name="orientation">
+                   <enum>Qt::Horizontal</enum>
+                  </property>
+                  <property name="sizeHint" stdset="0">
+                   <size>
+                    <width>40</width>
+                    <height>20</height>
+                   </size>
+                  </property>
+                 </spacer>
+                </item>
+               </layout>
+              </item>
+              <item>
+               <widget class="QLabel" name="lblCompareZoneInfo">
+                <property name="text">
+                 <string></string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="TWCompareZone"/>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="compareTabLegs">
+             <attribute name="title">
+              <string>Leg lengths</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="compareLegsLayout">
+              <item>
+               <widget class="QLabel" name="lblCompareLegs">
+                <property name="text">
+                 <string>Route distance per leg</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="TWCompareLegs"/>
+              </item>
+             </layout>
+            </widget>
            </widget>
-          </item>
-          <item>
-           <widget class="QTableWidget" name="TWCompareAccidents"/>
-          </item>
-          <item>
-           <widget class="QLabel" name="lblCompareSettings">
-            <property name="text">
-             <string>Settings differences</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QTableWidget" name="TWCompareSettings"/>
-          </item>
-          <item>
-           <widget class="QLabel" name="lblCompareLegs">
-            <property name="text">
-             <string>Route distance per leg</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QTableWidget" name="TWCompareLegs"/>
           </item>
          </layout>
         </widget>
