@@ -594,6 +594,13 @@ class OMRAT(
             QgsProject.instance().cleared.disconnect(self._on_project_cleared)
         except Exception:  # nosec B110 B112
             pass
+        # The waypoint editor owns a temporary map layer and may hold the map tool.
+        wp_dlg = getattr(self, '_waypoint_editor_dlg', None)
+        if wp_dlg is not None:
+            try:
+                wp_dlg.close()
+            except RuntimeError:
+                pass
         self.traffic.unload()
         self.ais.unload()
         self.object.unload()
@@ -1193,6 +1200,11 @@ class OMRAT(
             self.junctions.rebuild_from_segments(prefer_user=True)
         open_junction_dialog(self)
 
+    def open_waypoint_editor(self) -> None:
+        """Open the waypoint editor (connect / disconnect leg ends)."""
+        from omrat_utils.waypoint_editor_dialog import open_waypoint_editor
+        open_waypoint_editor(self)
+
     _DOCS_BASE_URL = "https://axelande.github.io/OMRAT/"
 
     def _open_docs_url(self, page: str) -> None:
@@ -1294,6 +1306,7 @@ class OMRAT(
         sm.addAction("AIS connection settings", self.ais_settings)
         sm.addAction("Ship type mapping...", self.open_ship_type_mapping)
         sm.addAction("Database setup wizard...", self.open_db_setup_wizard)
+        sm.addAction("Waypoint editor...", self.open_waypoint_editor)
         sm.addAction("Junction transition matrix...", self.open_junction_dialog)
         cm = menubar.addMenu('Consequence')
         cm.addAction("Maximum oil onboard...", self.consequence.run_oil_onboard_dialog)

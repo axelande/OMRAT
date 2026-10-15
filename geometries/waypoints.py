@@ -258,6 +258,160 @@ def prune_unused_waypoints(waypoints: Waypoints, segment_data: dict[str, Any] | 
 
 
 # ---------------------------------------------------------------------------
+# Waypoint editor: detach / attach one leg end
+# ---------------------------------------------------------------------------
+
+#: The suggested gap is this many times the close-waypoint threshold.
+DETACH_GAP_MARGIN = 2.0
+#: A detached end never moves back more than this fraction of its leg.
+DETACH_MAX_FRACTION = 0.5
+
+
+class WaypointEditError(ValueError):
+    """An editor operation that cannot be applied; the message says why."""
+
+
+def _leg_end_ref(segment_data: dict[str, Any], leg_id: str, side: str) -> tuple[dict[str, Any], str]:
+    seg = (segment_data or {}).get(str(leg_id))
+    if not isinstance(seg, dict):
+        raise WaypointEditError(f"Leg {leg_id} does not exist.")
+    if side not in ('start', 'end'):
+        raise WaypointEditError(f"Unknown leg end {side!r}.")
+    return seg, (WP_START if side == 'start' else WP_END)
+
+
+def _far_end(seg: dict[str, Any], side: str) -> XY | None:
+    return parse_wkt_point(seg.get('End_Point' if side == 'start' else 'Start_Point'))
+
+
+def detach_limits(
+    waypoints: Waypoints, segment_data: dict[str, Any], wp_id: str, leg_id: str, side: str,
+) -> tuple[float, float, float]:
+    """``(min_m, suggested_m, max_m)`` for moving ``leg_id``'s ``side`` end
+    off node ``wp_id``.
+
+    ``min_m`` is the close-waypoint threshold (``CLOSE_WAYPOINT_TOL_FRAC``
+    of the shortest leg involved): any closer and the next validation pass
+    would offer to merge the two nodes again.  ``max_m`` keeps at least
+    half of the leg.
+    """
+    from geometries.route_validation import CLOSE_WAYPOINT_TOL_FRAC, leg_length_m
+    seg, _ref = _leg_end_ref(segment_data, leg_id, side)
+    own = leg_length_m(seg)
+    others = [
+        leg_length_m(segment_data[lid]) for lid, _s in incident_legs(segment_data, wp_id)
+        if lid != str(leg_id)
+    ]
+    others = [v for v in others if v > 0]
+    shortest = min([own] + others) if own > 0 else min(others, default=0.0)
+    min_m = CLOSE_WAYPOINT_TOL_FRAC * shortest
+    max_m = DETACH_MAX_FRACTION * own
+    suggested = min(DETACH_GAP_MARGIN * min_m, max_m)
+    return min_m, suggested, max_m
+
+
+def detach_point(segment_data: dict[str, Any], leg_id: str, side: str, gap_m: float) -> XY:
+    """The point ``gap_m`` back along leg ``leg_id`` from its ``side`` end.
+
+    It lies on the leg itself, so the shortened leg is part of the old
+    one and cannot cross any leg the old one did not cross -- in
+    particular none of the legs that stay on the node."""
+    seg, _ref = _leg_end_ref(segment_data, leg_id, side)
+    here = parse_wkt_point(seg.get(leg_endpoint_field(side)))
+    far = _far_end(seg, side)
+    if here is None or far is None:
+        raise WaypointEditError(f"Leg {leg_id} has no usable end points.")
+    length = haversine_m(here, far)
+    if length <= 0:
+        raise WaypointEditError(f"Leg {leg_id} has zero length.")
+    f = float(gap_m) / length
+    return _store_xy((here[0] + f * (far[0] - here[0]), here[1] + f * (far[1] - here[1])))
+
+
+def detach_leg_end(
+    waypoints: Waypoints, segment_data: dict[str, Any], wp_id: str, leg_id: str, side: str, gap_m: float,
+) -> str:
+    """Take ``leg_id``'s ``side`` end off node ``wp_id``: the end moves
+    ``gap_m`` back along the leg onto a new node of its own.  The other
+    legs on ``wp_id`` do not move.  Returns the new node's id.
+
+    Raises :class:`WaypointEditError` when the end is not on ``wp_id``,
+    nothing else is on it (nothing to detach from) or ``gap_m`` is
+    outside :func:`detach_limits`.
+    """
+    wp_id = str(wp_id)
+    seg, ref = _leg_end_ref(segment_data, leg_id, side)
+    if str(seg.get(ref)) != wp_id:
+        raise WaypointEditError(f"The {side} of leg {leg_id} is not on waypoint {wp_id}.")
+    if len(incident_legs(segment_data, wp_id)) < 2:
+        raise WaypointEditError(f"Leg {leg_id} is the only leg on waypoint {wp_id}; there is nothing to detach from.")
+    min_m, _suggested, max_m = detach_limits(waypoints, segment_data, wp_id, leg_id, side)
+    if not (min_m <= float(gap_m) <= max_m):
+        raise WaypointEditError(
+            f"The end must move between {min_m:.0f} m and {max_m:.0f} m (asked for {float(gap_m):.0f} m)."
+        )
+    xy = detach_point(segment_data, leg_id, side, gap_m)
+    if find_waypoint_at(waypoints, xy) is not None:
+        raise WaypointEditError("Another waypoint already sits where the leg end would go.")
+    new_id = new_waypoint_id(waypoints)
+    waypoints[new_id] = xy
+    seg[ref] = new_id
+    seg[leg_endpoint_field(side)] = format_wkt_point(*xy)
+    _refresh_length(seg)
+    return new_id
+
+
+def attach_candidates(
+    waypoints: Waypoints, segment_data: dict[str, Any], wp_id: str,
+) -> list[tuple[str, str, float]]:
+    """Leg ends that could be connected to node ``wp_id``, nearest first:
+    ``[(leg_id, 'start'|'end', distance_m), ...]``.  Legs already on the
+    node (with either end) are left out -- connecting the other end
+    would give a leg of zero length."""
+    wp_id = str(wp_id)
+    target = (waypoints or {}).get(wp_id)
+    if target is None:
+        return []
+    on_node = {lid for lid, _s in incident_legs(segment_data, wp_id)}
+    out: list[tuple[str, str, float]] = []
+    for leg_id, seg in (segment_data or {}).items():
+        if not isinstance(seg, dict) or str(leg_id) in on_node:
+            continue
+        for side in ('start', 'end'):
+            xy = parse_wkt_point(seg.get(leg_endpoint_field(side)))
+            if xy is not None:
+                out.append((str(leg_id), side, haversine_m(xy, target)))
+    out.sort(key=lambda c: (c[2], c[0], c[1]))
+    return out
+
+
+def attach_leg_end(
+    waypoints: Waypoints, segment_data: dict[str, Any], leg_id: str, side: str, wp_id: str,
+) -> str | None:
+    """Connect ``leg_id``'s ``side`` end to node ``wp_id``: the end moves to
+    the node's coordinate.  Only this leg moves -- legs sharing its old
+    node stay where they are; the old node is dropped when nothing else
+    uses it.  Returns the old node id (``None`` when the leg had none).
+    """
+    wp_id = str(wp_id)
+    if wp_id not in (waypoints or {}):
+        raise WaypointEditError(f"Waypoint {wp_id} does not exist.")
+    seg, ref = _leg_end_ref(segment_data, leg_id, side)
+    other_ref = WP_END if ref == WP_START else WP_START
+    if str(seg.get(ref)) == wp_id:
+        raise WaypointEditError(f"The {side} of leg {leg_id} is already on waypoint {wp_id}.")
+    if str(seg.get(other_ref)) == wp_id:
+        raise WaypointEditError(f"The other end of leg {leg_id} is on waypoint {wp_id}; the leg would vanish.")
+    old = seg.get(ref)
+    seg[ref] = wp_id
+    seg[leg_endpoint_field(side)] = format_wkt_point(*waypoints[wp_id])
+    _refresh_length(seg)
+    if old is not None and str(old) != wp_id and not incident_legs(segment_data, str(old)):
+        waypoints.pop(str(old), None)
+    return None if old is None else str(old)
+
+
+# ---------------------------------------------------------------------------
 # Consistency
 # ---------------------------------------------------------------------------
 

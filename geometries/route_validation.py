@@ -26,6 +26,12 @@ from typing import Any, Callable, Iterable
 # Earth radius (meters), WGS84 mean.
 _EARTH_R_M = 6_371_008.8
 
+#: Two distinct endpoint locations closer than this fraction of the
+#: shorter incident leg are offered for merging.  The waypoint editor
+#: keeps a detached leg end further away than this, or the next
+#: validation pass would offer to join it again.
+CLOSE_WAYPOINT_TOL_FRAC = 0.05
+
 
 # ---------------------------------------------------------------------------
 # Coordinate helpers
@@ -108,6 +114,23 @@ class _Leg:
         return haversine_m(self.start, self.end)
 
 
+def leg_length_m(seg: dict[str, Any]) -> float:
+    """A leg's length as the validation pass sees it: the stored
+    ``line_length`` when positive, else the haversine length (0.0 when
+    the endpoints cannot be parsed)."""
+    try:
+        stored = float(seg.get('line_length', 0.0) or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        stored = 0.0
+    if stored > 0:
+        return stored
+    sp = parse_wkt_point(seg.get('Start_Point')) if isinstance(seg, dict) else None
+    ep = parse_wkt_point(seg.get('End_Point')) if isinstance(seg, dict) else None
+    if sp is None or ep is None:
+        return 0.0
+    return haversine_m(sp, ep)
+
+
 def _legs_from_segment_data(segment_data: dict[str, Any]) -> list[_Leg]:
     """Build the lightweight leg list, skipping any unparseable rows."""
     out: list[_Leg] = []
@@ -174,7 +197,7 @@ def _collect_endpoint_index(
 
 def find_close_waypoint_pairs(
     segment_data: dict[str, Any],
-    tol_frac: float = 0.05,
+    tol_frac: float = CLOSE_WAYPOINT_TOL_FRAC,
 ) -> list[CloseWaypointPair]:
     """Find unordered pairs of distinct waypoint locations to consider merging.
 
@@ -374,6 +397,23 @@ def find_leg_intersections(
             ))
     out.sort(key=lambda x: (x.leg1_id, x.leg2_id))
     return out
+
+
+def crossings_of_leg(segment_data: dict[str, Any], leg_id: str) -> list[str]:
+    """Ids of the legs that ``leg_id`` crosses at an interior point (same
+    rule as :func:`find_leg_intersections`), sorted."""
+    leg_id = str(leg_id)
+    legs = _legs_from_segment_data(segment_data)
+    me = next((leg for leg in legs if leg.leg_id == leg_id), None)
+    if me is None:
+        return []
+    out: list[str] = []
+    for other in legs:
+        if other.leg_id == leg_id or {me.start, me.end} & {other.start, other.end}:
+            continue
+        if _segments_intersect(me.start, me.end, other.start, other.end) is not None:
+            out.append(other.leg_id)
+    return sorted(out)
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +684,7 @@ class ValidationReport:
 
 def validate_routes(
     segment_data: dict[str, Any],
-    tol_frac: float = 0.05,
+    tol_frac: float = CLOSE_WAYPOINT_TOL_FRAC,
 ) -> ValidationReport:
     """Run both detectors and bundle the results.
 

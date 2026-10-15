@@ -131,6 +131,16 @@ junction matrices are refreshed -- AIS-derived where data are
 available, geometry-derived where not, and user-edited rows are left
 alone.
 
+The **Waypoint editor** (:ref:`waypoint-editor`) changes which legs
+meet at a junction.  A detached leg end is kept further away than the
+close-waypoint threshold, so this pass does not offer to join it again.
+A hand-edited (``user``) matrix survives both edits: a leg that leaves
+has its row and column dropped and the rows renormalised; a leg that
+joins gets its geometric row and 0 % in the existing rows
+(``geometries.junctions.carry_user_matrices``).  An ``ais`` matrix
+falls back to geometry because its leg set changed and must be counted
+again.
+
 
 Editing a matrix manually
 ==========================
@@ -221,6 +231,10 @@ Behind the scenes
   ``omrat_utils/route_validation_ui.py``.
 * Matrix editor dialog:
   ``omrat_utils/junction_matrix_dialog.py``.
+* Waypoint editor: ``geometries/waypoints.py`` (``detach_leg_end``,
+  ``attach_leg_end``, ``detach_limits``, ``attach_candidates``),
+  ``geometries/junctions.py:carry_user_matrices`` and the dialog
+  ``omrat_utils/waypoint_editor_dialog.py``.
 * AIS-derived counts:
   ``compute/junction_transitions.py``
   (pure-Python trip pairing and normaliser) plus

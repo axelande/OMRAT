@@ -621,6 +621,55 @@ def refresh_junction_registry(
     return fresh
 
 
+def carry_user_matrices(
+    before: dict[str, Junction],
+    after: dict[str, Junction],
+    segment_data: dict[str, Any],
+) -> dict[str, list[str]]:
+    """Keep user-edited matrices when a leg joins or leaves their junction.
+
+    :func:`refresh_junction_registry` keeps a ``"user"`` matrix only while
+    every leg it names is still on the junction, and keeps it unchanged
+    (no row or column for a newcomer) when a leg joins.  The waypoint
+    editor calls this right after that refresh instead: for every junction
+    that was ``"user"`` in ``before`` and whose leg set changed in
+    ``after``, a leaving leg's row and column are dropped and the rows
+    renormalised, a joining leg gets its geometric row and 0 % in the
+    existing rows, and a row with nothing left falls back to geometry.
+    The source stays ``"user"``.  Mutates ``after``; returns
+    ``{'trimmed': [...], 'extended': [...]}`` junction ids.
+    """
+    out: dict[str, list[str]] = {'trimmed': [], 'extended': []}
+    for jid, new_j in after.items():
+        old = before.get(jid)
+        if old is None or old.source != 'user' or set(old.legs) == set(new_j.legs):
+            continue
+        added = set(new_j.legs) - set(old.legs)
+        geo = compute_geometric_transition_matrix(new_j, segment_data)
+        trans: dict[str, dict[str, float]] = {}
+        for in_leg in new_j.legs:
+            old_row = old.transitions.get(in_leg)
+            if in_leg in added or not old_row:
+                if in_leg in geo:
+                    trans[in_leg] = dict(geo[in_leg])
+                continue
+            row = {o: max(float(s), 0.0) for o, s in old_row.items() if o in new_j.legs and o != in_leg}
+            total = sum(row.values())
+            if total > 1e-12:
+                row = {o: s / total for o, s in row.items()}
+                row.update({o: 0.0 for o in added if o != in_leg})
+                trans[in_leg] = row
+            elif in_leg in geo:
+                trans[in_leg] = dict(geo[in_leg])
+        new_j.transitions = trans
+        new_j.source = 'user'
+        if set(old.legs) - set(new_j.legs):
+            out['trimmed'].append(jid)
+        if added:
+            out['extended'].append(jid)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Skip / invalidate the AIS junction pass
 # ---------------------------------------------------------------------------

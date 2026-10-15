@@ -750,6 +750,67 @@ in the UI:
 See :ref:`junctions` for the math and the AIS-vs-geometry-vs-user
 hierarchy.
 
+.. _waypoint-editor:
+
+Connecting and disconnecting legs (Waypoint editor)
+---------------------------------------------------
+
+Legs that end on the same waypoint form a junction, and the collision
+model counts crossing, merging and bend encounters there.  Open
+**Settings -> Waypoint editor...** to change which legs meet at a
+waypoint without dragging vertices.
+
+.. figure:: _static/screenshots/ui_waypoint_editor.png
+   :width: 90%
+   :alt: The Waypoint editor with a three-leg junction selected
+
+   The Waypoint editor.  Left: every waypoint with its number of legs.
+   Right: the legs on the selected waypoint, the detach distance and the
+   leg ends that can be connected to it.
+
+Pick a waypoint in the list, or click **Pick on map** and click it on
+the map.  While the editor is open a temporary *Waypoints (editor)*
+layer labels every waypoint (``WP 12``).  The selected waypoint is
+marked red, its legs yellow, and the leg end chosen under **Connect**
+orange.  The layer is removed when the editor closes.
+
+**Detach selected leg** takes one leg off the waypoint.  Its end moves
+back along *its own leg* onto a new waypoint, and the other legs stay
+where they are.  The shortened leg is part of the old one, so it cannot
+cross the legs that remain on the waypoint, or any leg the old leg did
+not already cross.  A blue cross on the map shows where the end will
+go.  The distance has limits:
+
+* **At least** the close-waypoint threshold, 5 % of the shortest leg
+  involved.  Any closer and **Update all distributions** would offer to
+  join the two waypoints again (:ref:`junctions`).  The suggested value
+  is twice the threshold.
+* **At most** half the leg.
+
+A leg that is alone on its waypoint has nothing to detach from.
+
+**Connect** moves the chosen leg end onto the selected waypoint.  The
+list holds every leg end that is not on the waypoint already, nearest
+first.  Only that one leg moves: other legs on its old waypoint stay
+put.  If the moved leg would cross other legs, the confirmation says
+which ones, and **Update all distributions** will offer to split them.
+To join a leg to the *middle* of another leg, move a vertex of that
+leg there first so that it gets a waypoint.
+
+Both actions ask *Are you sure?* and cannot be undone (save the project
+first if you want a way back).  Afterwards:
+
+* the leg, its tangent line and its route-table row follow at once;
+* AIS transition counts at the junctions the leg touches are reset to
+  geometry, so the next **Update AIS** counts them again.  The leg's
+  passage line moves with the leg, so run **Update AIS** on it if its
+  traffic should follow the new geometry;
+* a junction matrix you edited by hand is kept.  A leg that leaves
+  loses its row and column and the other rows are renormalised.  A leg
+  that joins gets its geometric row and 0 % in the existing rows; the
+  message bar asks you to check it.  **Open junction matrix...**
+  jumps to the waypoint's matrix.
+
 Saving the route
 ----------------
 
