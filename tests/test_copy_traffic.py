@@ -2,6 +2,7 @@
 AIS lock)."""
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -14,11 +15,17 @@ if str(ROOT) not in sys.path:
 
 from omrat_utils.copy_traffic import (  # noqa: E402
     LOCK_KEY,
+    MAX_ALIGNED_DEG,
     SOURCE_KEY,
+    aligned_swaps,
+    angle_between,
+    copy_angle,
     copy_leg_traffic,
+    describe_misaligned,
     describe_targets,
     is_locked,
     locked_legs,
+    misaligned_targets,
     release_copy,
     set_locked,
     split_locked,
@@ -197,3 +204,97 @@ class TestReleaseCopy:
         assert traffic_link_root(segs, 'd') == 'a'
         release_copy(segs, 'd')
         assert traffic_link_root(segs, 'd') == 'd'
+
+
+def _leg(bearing: float, name: str, lon: float = 12.0, lat: float = 56.0, length: float = 0.05) -> dict:
+    """A leg drawn on compass ``bearing`` (same flat-earth formula as
+    ``direction_bearing``, so the angles come out exact)."""
+    dy = length * math.cos(math.radians(bearing))
+    dx = length * math.sin(math.radians(bearing)) / math.cos(math.radians(lat + dy / 2.0))
+    return {
+        'Leg_name': name,
+        'Start_Point': f'{lon:.6f} {lat:.6f}',
+        'End_Point': f'{lon + dx:.6f} {lat + dy:.6f}',
+    }
+
+
+class TestDirectionCheck:
+    """Bearing check behind the Copy traffic direction warning."""
+
+    @pytest.mark.parametrize('a, b, expected', [
+        (10, 350, 20), (350, 10, 20), (0, 180, 180), (90, 270, 180), (45, 46, 1), (0, 360, 0),
+    ])
+    def test_angle_between(self, a, b, expected):
+        assert angle_between(a, b) == pytest.approx(expected)
+
+    @pytest.mark.parametrize('offset', [0, 30, 60, 85, 89, -89, -60])
+    def test_aligned_target_not_flagged(self, offset):
+        segs = {'s': _leg(70, 'S'), 't': _leg(70 + offset, 'T')}
+        assert copy_angle(segs, 's', 't') == pytest.approx(abs(offset), abs=0.05)
+        assert misaligned_targets(segs, 's', ['t']) == []
+
+    @pytest.mark.parametrize('offset', [91, 95, 120, 180, -91, -135])
+    def test_reversed_target_flagged(self, offset):
+        segs = {'s': _leg(70, 'S'), 't': _leg(70 + offset, 'T')}
+        flagged = misaligned_targets(segs, 's', ['t'])
+        assert [t for t, _ in flagged] == ['t']
+        assert flagged[0][1] > MAX_ALIGNED_DEG
+
+    @pytest.mark.parametrize('offset, flagged', [(0, True), (89, True), (91, False), (180, False)])
+    def test_swap_box_reverses_the_check(self, offset, flagged):
+        segs = {'s': _leg(70, 'S'), 't': _leg(70 + offset, 'T')}
+        assert bool(misaligned_targets(segs, 's', ['t'], swap_dirs=True)) is flagged
+
+    def test_direction_names_are_not_compared(self):
+        # 44 deg -> "North going", 46 deg -> "East going": same way, no warning.
+        segs = {'s': {**_leg(44, 'S'), 'Dirs': ['North going', 'South going']},
+                't': {**_leg(46, 'T'), 'Dirs': ['East going', 'West going']}}
+        assert misaligned_targets(segs, 's', ['t']) == []
+        # 44 deg vs 226 deg -> "North going" vs "West going": reversed, warns.
+        segs['t'] = {**_leg(226, 'T'), 'Dirs': ['West going', 'East going']}
+        assert [t for t, _ in misaligned_targets(segs, 's', ['t'])] == ['t']
+
+    def test_across_north(self):
+        segs = {'s': _leg(350, 'S'), 'same': _leg(10, 'A'), 'rev': _leg(190, 'B')}
+        assert misaligned_targets(segs, 's', ['same', 'rev']) == [('rev', pytest.approx(160, abs=0.05))]
+
+    def test_mixed_selection_swaps_only_the_reversed_legs(self):
+        segs = {'s': _leg(70, 'S'), 'same': _leg(100, 'A'), 'rev': _leg(260, 'B')}
+        expected = {'same': False, 'rev': True}
+        # Whatever the Swap box says, the per-leg answer is the same.
+        assert aligned_swaps(segs, 's', ['same', 'rev'], swap_dirs=False) == expected
+        assert aligned_swaps(segs, 's', ['same', 'rev'], swap_dirs=True) == expected
+        for t, swap in expected.items():
+            assert copy_angle(segs, 's', t, swap) <= MAX_ALIGNED_DEG
+
+    def test_legs_without_geometry_keep_the_box(self):
+        segs = {'s': _leg(70, 'S'), 'x': {'Leg_name': 'X'}}
+        assert copy_angle(segs, 's', 'x') is None
+        assert misaligned_targets(segs, 's', ['x']) == []
+        assert aligned_swaps(segs, 's', ['x'], swap_dirs=True) == {'x': True}
+
+    def test_source_in_targets_is_ignored(self):
+        segs = {'s': _leg(70, 'S')}
+        assert misaligned_targets(segs, 's', ['s'], swap_dirs=True) == []
+
+    def test_message(self):
+        segs = {'s': _leg(70, 'S'), 'same': _leg(100, 'A'), 'rev': _leg(250, 'B')}
+        flagged = misaligned_targets(segs, 's', ['same', 'rev'])
+        text = describe_misaligned(segs, 's', flagged, n_targets=2)
+        assert 'B (rev): 180 deg apart' in text
+        assert 'A (same)' not in text
+        assert 'fine as chosen' in text
+        assert 'fine as chosen' not in describe_misaligned(segs, 's', flagged, n_targets=1)
+
+    def test_swapped_copy_lands_on_the_right_direction(self):
+        # Source drawn east, target drawn west: per-leg swap puts the
+        # east-going traffic on the target's direction 2 (east going).
+        traffic = {'s': {'East going': _block(100), 'West going': _block(200)}}
+        segs = {'s': {**_leg(90, 'S'), 'Dirs': ['East going', 'West going'], 'mean1_1': 50.0, 'mean2_1': -60.0},
+                't': {**_leg(270, 'T'), 'Dirs': ['West going', 'East going']}}
+        swap = aligned_swaps(segs, 's', ['t'])['t']
+        assert swap is True
+        copy_leg_traffic(traffic, segs, 's', 't', swap_dirs=swap)
+        assert traffic['t']['East going']['Frequency (ships/year)'][0][0] == 100
+        assert traffic['t']['West going']['Frequency (ships/year)'][0][0] == 200
+        assert segs['t']['mean2_1'] == -50.0 and segs['t']['mean1_1'] == 60.0

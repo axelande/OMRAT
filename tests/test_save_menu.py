@@ -236,21 +236,21 @@ class TestTrafficEditsCountAsUnsaved:
         GatherData(omrat).get_all_for_save()
         assert calls == [1]
 
-    def test_spinbox_edit_makes_model_dirty(self, omrat):
+    def test_cell_edit_makes_model_dirty(self, omrat):
         self._leg_with_traffic(omrat)
         omrat.main_widget.cbSelectType.setCurrentText('Frequency (ships/year)')
         omrat.traffic.update_traffic_tbl('type')
         omrat.mark_project_saved()
         assert omrat.has_unsaved_changes() is False
-        cell = omrat.main_widget.twTrafficData.cellWidget(0, 0)
+        cell = omrat.main_widget.twTrafficData.item(0, 0)
         assert cell is not None
-        cell.setValue(cell.value() + 7)
+        cell.setText(str(int(cell.text() or 0) + 7))
         assert omrat.has_unsaved_changes() is True
         # and the value is what gets saved
         from omrat_utils.gather_data import GatherData
         data = GatherData(omrat).get_all_for_save()
         di = omrat.traffic.c_di
-        assert data['traffic_data']['77'][di]['Frequency (ships/year)'][0][0] == cell.value()
+        assert data['traffic_data']['77'][di]['Frequency (ships/year)'][0][0] == 7
 
 
 class TestCloseRemovesLayers:

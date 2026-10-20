@@ -416,9 +416,69 @@ def crossings_of_leg(segment_data: dict[str, Any], leg_id: str) -> list[str]:
     return sorted(out)
 
 
+def crossing_pairs(segment_data: dict[str, Any]) -> set[frozenset[str]]:
+    """Every X-crossing as an unordered ``{leg_id, leg_id}`` pair."""
+    return {frozenset((x.leg1_id, x.leg2_id)) for x in find_leg_intersections(segment_data)}
+
+
+def new_crossings(
+    segment_data: dict[str, Any], before: set[frozenset[str]],
+) -> list[LegIntersection]:
+    """X-crossings that are not in ``before`` (from :func:`crossing_pairs`
+    taken before an edit) -- what a vertex drag or a waypoint-editor
+    Connect has just created."""
+    return [
+        x for x in find_leg_intersections(segment_data)
+        if frozenset((x.leg1_id, x.leg2_id)) not in before
+    ]
+
+
+def model_crossings(segment_data: dict[str, Any]) -> list[LegIntersection]:
+    """X-crossings the collision model would miss: crossing collisions are
+    only computed where legs share a waypoint.  Pairs with a suppressed
+    leg are left out -- that leg is removed before compute."""
+    def live(leg_id: str) -> bool:
+        seg = segment_data.get(leg_id)
+        return not (isinstance(seg, dict) and seg.get('suppressed') is True)
+    return [x for x in find_leg_intersections(segment_data) if live(x.leg1_id) and live(x.leg2_id)]
+
+
+def describe_crossings(hits: list[LegIntersection], segment_data: dict[str, Any]) -> list[str]:
+    """``"LEG_8_1_d x LEG_3_1_a"`` per crossing, for prompts."""
+    def name(leg_id: str) -> str:
+        seg = segment_data.get(leg_id)
+        return str(seg.get('Leg_name') or leg_id) if isinstance(seg, dict) else str(leg_id)
+    return [f"{name(x.leg1_id)} x {name(x.leg2_id)}" for x in hits]
+
+
 # ---------------------------------------------------------------------------
 # Apply intersection split
 # ---------------------------------------------------------------------------
+
+
+def split_at_crossings(
+    segment_data: dict[str, Any],
+    hits: list[LegIntersection],
+    traffic_data: dict[str, Any] | None = None,
+) -> int:
+    """Split both legs of every crossing in ``hits`` in one go and return
+    the number of crossings split.
+
+    The split points are grouped per leg first: splitting crossing by
+    crossing on the already-mutated ``segment_data`` gives the cascading
+    ``_a_b_a`` names when one leg crosses several others.  Sub-legs
+    inherit the parent's traffic (see :func:`split_leg_at_points`).
+    """
+    from collections import defaultdict
+    leg_splits: dict[str, list[tuple[float, tuple[float, float]]]] = defaultdict(list)
+    for hit in hits:
+        leg_splits[hit.leg1_id].append((hit.t1, hit.point))
+        leg_splits[hit.leg2_id].append((hit.t2, hit.point))
+    id_prov = _make_id_provider(segment_data)
+    for leg_id, splits in leg_splits.items():
+        splits.sort(key=lambda x: x[0])
+        split_leg_at_points(segment_data, leg_id, [s[1] for s in splits], id_prov, traffic_data)
+    return len(hits)
 
 
 def _next_leg_id(segment_data: dict[str, Any]) -> str:

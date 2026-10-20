@@ -57,7 +57,7 @@ from qgis.core import (
 from qgis.gui import QgsRubberBand
 
 from geometries.junctions import Junction, carry_user_matrices, junction_id_for_point
-from geometries.route_validation import crossings_of_leg
+from geometries.route_validation import crossing_pairs, crossings_of_leg
 from geometries.waypoints import (
     WaypointEditError,
     attach_candidates,
@@ -68,6 +68,7 @@ from geometries.waypoints import (
     incident_legs,
     rebuild_waypoints,
 )
+from omrat_utils.route_validation_ui import offer_split_new_crossings
 from omrat_utils.traffic_links import leg_name
 
 if TYPE_CHECKING:
@@ -120,6 +121,9 @@ def _after_edit(omrat: "OMRAT", before: dict[str, Junction], leg_id: str) -> dic
             sd[leg_id]['Dirs'] = dirs
             if isinstance(getattr(geoms, 'leg_dirs', None), dict):
                 geoms.leg_dirs[leg_id] = dirs
+            # The rewrite renamed the traffic keys with the Dirs it derived.
+            if hasattr(geoms, '_rename_traffic_dirs'):
+                geoms._rename_traffic_dirs(leg_id, dirs)
     result: dict[str, list[str]] = {'trimmed': [], 'extended': []}
     handler = getattr(omrat, 'junctions', None)
     if handler is not None:
@@ -510,16 +514,18 @@ class WaypointEditorDialog(QDialog):
             return
         if crossed:
             text += self._tr(
-                "\n\nAfter the move it crosses {legs}; Update all distributions will offer to split them."
+                "\n\nAfter the move it crosses {legs}; you will be asked to split them."
             ).format(legs=", ".join(leg_name(c, sd) for c in crossed))
         text += self._tr("\n\nThis cannot be undone.")
         if not self._confirm(self._tr("Connect leg"), text):
             return
+        before = crossing_pairs(sd)
         try:
             result = apply_attach(self.omrat, leg_id, side, wid)
         except WaypointEditError as exc:
             QMessageBox.warning(self, self._tr("Connect leg"), str(exc))
             return
+        offer_split_new_crossings(self.omrat, before)
         self.reload(select=wid)
         self._notify(
             f"Connected the {side} of {_leg_text(leg_id, sd)} to WP {wid}{_matrix_note(result)}."

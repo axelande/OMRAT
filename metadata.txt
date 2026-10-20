@@ -7,7 +7,7 @@ name=OMRAT - Open Maritime Risk Analysis Tool
 qgisMinimumVersion=3.30
 qgisMaximumVersion=4.9
 description=OMRAT Open Maritime Risk Analysis Tool. This is an open source implementation of Pedersens and Friis-Hansen equations to calculate the probability of maritime accidents. The full documentation of the plugin could be found here: https://axelande.github.io/OMRAT/
-version=0.17.2
+version=0.17.6
 author=Axel Hörteborn
 email=axel.horteborn@ri.se
 license=GPL-3
@@ -24,6 +24,10 @@ homepage=https://axelande.github.io/OMRAT/index.html
 hasProcessingProvider=no
 # Uncomment the following line and add your changelog:
 changelog=
+  Version 0.17.6 (2026-10-16) - Legs that cross without a shared waypoint are now caught when they are made: dragging a leg end on the map or Connect in the Waypoint editor asks at once whether to split them, and Run model warns before a collision run (Split and run / Run anyway / Cancel). Crossing collisions are only computed where legs share a waypoint, so an unsplit crossing counted as zero.
+  Version 0.17.5 (2026-10-16) - Traffic Data table cells are now plain text: select cells, copy them to Excel (Ctrl+C, or right-click > Copy table with headers), edit and paste back (Ctrl+V); Delete clears cells. Viewing the table no longer changes the data: fractional frequencies above 99.99 were saved as 99.99, and cells without AIS observations as 0.
+  Version 0.17.4 (2026-10-16) - A leg dragged so that its direction name changes (e.g. North going -> East going) no longer loses its traffic in the IWRAP export. Legs of IWRAP-imported projects were affected by any drag. Model results are unchanged.
+  Version 0.17.3 (2026-10-16) - Copy traffic compares the leg bearings and warns when the traffic would land on a direction more than 90 degrees off, with the option to swap directions only on those legs (for target legs drawn different ways).
   Version 0.17.2 (2026-10-14) - Added Waypoint editor
   Version 0.17.1 (2026-10-08) - Updated comparison module
   Version 0.17.0 (2026-10-05) - Updated junction matrix calculation, highlighting selected legs.

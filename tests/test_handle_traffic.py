@@ -48,6 +48,51 @@ def traffic(qgis_iface):
     return t
 
 
+FREQ = 'Frequency (ships/year)'
+
+
+@pytest.fixture
+def locale_sv():
+    """Swedish number format (decimal comma), as Excel uses on the user's machine."""
+    from qgis.PyQt.QtCore import QLocale
+    prev = QLocale()
+    QLocale.setDefault(QLocale('sv_SE'))
+    yield
+    QLocale.setDefault(prev)
+
+
+@pytest.fixture
+def locale_en():
+    from qgis.PyQt.QtCore import QLocale
+    prev = QLocale()
+    QLocale.setDefault(QLocale('en_US'))
+    yield
+    QLocale.setDefault(prev)
+
+
+def _show(traffic, var=FREQ):
+    """Render leg L1 / East / ``var`` in the table (2 types x 2 lengths)."""
+    traffic.run_update = False
+    if 'L1' not in traffic.traffic_data:
+        traffic.set_table_headings()
+        traffic.create_empty_dict('L1', ['East'])
+        traffic.dw.cbTrafficSelectSeg.addItem('LEG_1_L1', 'L1')
+        traffic.dw.cbTrafficDirectionSelect.addItem('East')
+    traffic.c_seg, traffic.c_di = 'L1', 'East'
+    traffic.dw.cbSelectType.setCurrentText(var)
+    traffic.update_traffic_tbl('type')
+    traffic.run_update = True
+    return traffic.traffic_data['L1']['East']
+
+
+def _select(traffic, cells):
+    from qgis.PyQt.QtCore import QItemSelectionModel
+    tw = traffic.dw.twTrafficData
+    tw.clearSelection()
+    for r, c in cells:
+        tw.selectionModel().select(tw.model().index(r, c), QItemSelectionModel.SelectionFlag.Select)
+
+
 # ---------------------------------------------------------------------------
 # fill_cbTrafficSelectSeg
 # ---------------------------------------------------------------------------
@@ -139,42 +184,56 @@ class TestUpdateTrafficTbl:
         # cbSelectType has pre-populated items from the .ui; pick Speed (knots).
         traffic.dw.cbSelectType.setCurrentText('Speed (knots)')
 
-    def test_empty_string_value_becomes_zero_spinbox(self, traffic):
-        from qgis.PyQt.QtWidgets import QSpinBox
-        self._prime(traffic, '')
-        traffic.update_traffic_tbl('type')
-        w = traffic.dw.twTrafficData.cellWidget(0, 0)
-        assert isinstance(w, QSpinBox)
-        assert w.value() == 0
+    def _cell(self, traffic, r=0, c=0):
+        return traffic.dw.twTrafficData.item(r, c)
 
-    def test_inf_value_uses_spinbox(self, traffic):
-        """An infinite value trips the np.inf branch which creates a
-        QSpinBox (with setEnabled(False) called before mounting)."""
-        import numpy as np
-        from qgis.PyQt.QtWidgets import QSpinBox
-        self._prime(traffic, np.inf)
-        traffic.update_traffic_tbl('type')
-        w = traffic.dw.twTrafficData.cellWidget(0, 0)
-        # Branch was taken -> widget is a QSpinBox.  The enabled state is
-        # whatever Qt lands on after mounting; we don't assert on that.
-        assert isinstance(w, QSpinBox)
-        assert w.value() == 0
-
-    def test_float_value_uses_double_spinbox(self, traffic):
-        from qgis.PyQt.QtWidgets import QDoubleSpinBox
-        self._prime(traffic, 12.5)
-        traffic.update_traffic_tbl('type')
-        w = traffic.dw.twTrafficData.cellWidget(0, 0)
-        assert isinstance(w, QDoubleSpinBox)
-        assert w.value() == pytest.approx(12.5)
-
-    def test_int_value_uses_int_spinbox(self, traffic):
-        from qgis.PyQt.QtWidgets import QSpinBox
+    def test_cells_are_plain_items_not_spinboxes(self, traffic):
         self._prime(traffic, 3)
         traffic.update_traffic_tbl('type')
-        w = traffic.dw.twTrafficData.cellWidget(0, 0)
-        assert isinstance(w, QSpinBox)
-        assert w.value() == 3
+        assert traffic.dw.twTrafficData.cellWidget(0, 0) is None
+        assert self._cell(traffic).text() == '3'
+
+    def test_empty_string_value_is_blank_and_kept(self, traffic):
+        self._prime(traffic, '')
+        traffic.update_traffic_tbl('type')
+        assert self._cell(traffic).text() == ''
+        traffic.save()
+        assert traffic.traffic_data['L1']['East']['Speed (knots)'][0][0] == ''
+
+    def test_inf_value_is_blank_editable_and_survives_save(self, traffic):
+        """Before 2026-10-16 an inf cell was a disabled spinbox showing 0,
+        and save() wrote that 0 back."""
+        import numpy as np
+        from qgis.PyQt.QtCore import Qt
+        self._prime(traffic, np.inf)
+        traffic.update_traffic_tbl('type')
+        item = self._cell(traffic)
+        assert item.text() == ''
+        assert item.toolTip()
+        assert bool(item.flags() & Qt.ItemFlag.ItemIsEditable)
+        traffic.save()
+        assert traffic.traffic_data['L1']['East']['Speed (knots)'][0][0] == np.inf
+
+    def test_float_value_uses_locale_decimal_point(self, traffic, locale_sv):
+        self._prime(traffic, 12.5)
+        traffic.update_traffic_tbl('type')
+        assert self._cell(traffic).text() == '12,5'
+
+    def test_viewing_never_rounds_the_stored_value(self, traffic):
+        self._prime(traffic, 12.3456)
+        traffic.update_traffic_tbl('type')
+        traffic.save()
+        assert traffic.traffic_data['L1']['East']['Speed (knots)'][0][0] == 12.3456
+
+    def test_large_fractional_frequency_not_clamped(self, traffic):
+        """QDoubleSpinBox's default maximum (99.99) clamped 1234.5 ships/year."""
+        self._prime(traffic, 0)
+        traffic.traffic_data['L1']['East']['Frequency (ships/year)'][0][0] = 1234.5
+        traffic.last_var = 'Frequency (ships/year)'
+        traffic.dw.cbSelectType.setCurrentText('Frequency (ships/year)')
+        traffic.update_traffic_tbl('type')
+        traffic.save()
+        assert traffic.traffic_data['L1']['East']['Frequency (ships/year)'][0][0] == 1234.5
 
     def test_segment_caller_updates_direction_select(self, traffic):
         traffic.set_table_headings()
@@ -227,23 +286,22 @@ class TestUpdateDirectionSelect:
 # ---------------------------------------------------------------------------
 
 class TestSaveAndCommit:
-    def test_save_writes_cell_values_back(self, traffic):
-        from qgis.PyQt.QtWidgets import QSpinBox
-        traffic.set_table_headings()
-        traffic.create_empty_dict('L1', ['East'])
-        # Install SpinBoxes with known values in the table.
+    def test_typed_values_are_written_through(self, traffic, locale_en):
+        data = _show(traffic)
+        tw = traffic.dw.twTrafficData
         for row in range(2):
             for col in range(2):
-                sb = QSpinBox()
-                sb.setMaximum(1000)
-                sb.setValue(10 * row + col)
-                traffic.dw.twTrafficData.setCellWidget(row, col, sb)
-        traffic.c_seg = 'L1'
-        traffic.c_di = 'East'
-        traffic.last_var = 'Frequency (ships/year)'
+                tw.item(row, col).setText(str(10 * row + col))   # fires itemChanged
+        assert data[FREQ] == [[0, 1], [10, 11]]
+
+    def test_save_picks_up_text_changed_without_signal(self, traffic, locale_en):
+        data = _show(traffic)
+        tw = traffic.dw.twTrafficData
+        tw.blockSignals(True)
+        tw.item(1, 0).setText('42')
+        tw.blockSignals(False)
         traffic.save()
-        freq = traffic.traffic_data['L1']['East']['Frequency (ships/year)']
-        assert freq == [[0, 1], [10, 11]]
+        assert data[FREQ][1][0] == 42
 
     def test_save_with_blank_context_noops(self, traffic):
         traffic.c_seg = ''
@@ -498,24 +556,189 @@ class TestSaveRoundTripsScalingValues:
     typed values back into ``traffic_data`` -- the same path Frequency
     uses, so a 130 % entry survives a save / re-open."""
 
-    def test_save_stores_scaling_doublespinbox_values(self, traffic):
-        from qgis.PyQt.QtWidgets import QDoubleSpinBox
+    def test_typed_scaling_values_stored(self, traffic, locale_sv):
         from omrat_utils.handle_traffic import SCALING_VAR
-        traffic.set_table_headings()
-        traffic.create_empty_dict('L1', ['East'])
-        # Install QDoubleSpinBoxes in every cell with known scaling values.
-        values = [[130.5, 100.0], [50.0, 200.0]]
-        for r in range(2):
-            for c in range(2):
-                sb = QDoubleSpinBox()
-                sb.setRange(0.0, 100000.0)
-                sb.setDecimals(1)
-                sb.setValue(values[r][c])
-                traffic.dw.twTrafficData.setCellWidget(r, c, sb)
-        traffic.c_seg = 'L1'
-        traffic.c_di = 'East'
-        traffic.last_var = SCALING_VAR
+        data = _show(traffic, SCALING_VAR)
+        tw = traffic.dw.twTrafficData
+        tw.item(0, 0).setText('130,5')
+        tw.item(1, 1).setText('200')
         traffic.save()
-        stored = traffic.traffic_data['L1']['East'][SCALING_VAR]
-        assert stored[0][0] == pytest.approx(130.5)
-        assert stored[1][1] == pytest.approx(200.0)
+        assert data[SCALING_VAR][0][0] == pytest.approx(130.5)
+        assert data[SCALING_VAR][1][1] == pytest.approx(200.0)
+        assert data[SCALING_VAR][0][1] == pytest.approx(100.0)
+
+    def test_typed_scaling_value_unticks_its_row(self, traffic, locale_en):
+        from omrat_utils.handle_traffic import SCALING_VAR
+        _show(traffic, SCALING_VAR)
+        traffic._project_scaling()['follow_global'] = [True, True]
+        traffic.dw.twTrafficData.item(1, 0).setText('150')
+        assert traffic._project_scaling()['follow_global'] == [True, False]
+
+
+class TestExcelCopyPaste:
+    """Plain-text cells (2026-10-16): select, copy to Excel, paste back."""
+
+    def test_invalid_text_reverts_and_keeps_value(self, traffic, locale_en):
+        data = _show(traffic)
+        tw = traffic.dw.twTrafficData
+        tw.item(0, 0).setText('12')
+        tw.item(0, 0).setText('abc')
+        assert tw.item(0, 0).text() == '12' and data[FREQ][0][0] == 12
+        tw.item(0, 0).setText('-5')
+        assert data[FREQ][0][0] == 12
+
+    def test_typed_text_is_normalised(self, traffic, locale_sv):
+        data = _show(traffic, 'Speed (knots)')
+        tw = traffic.dw.twTrafficData
+        tw.item(0, 1).setText('12.50')          # dot typed in a Swedish locale
+        assert data['Speed (knots)'][0][1] == 12.5
+        assert tw.item(0, 1).text() == '12,5'
+
+    def test_totals_follow_edits(self, traffic, locale_en):
+        _show(traffic)
+        tw = traffic.dw.twTrafficData
+        tw.item(0, 0).setText('10')
+        tw.item(1, 0).setText('5')
+        tw.item(1, 1).setText('3')
+        assert tw.item(0, 2).text() == '10'
+        assert tw.item(2, 0).text() == '15'
+        assert tw.item(2, 2).text() == '18'
+
+    def test_totals_are_read_only_and_not_selectable(self, traffic):
+        from qgis.PyQt.QtCore import Qt
+        _show(traffic)
+        flags = traffic.dw.twTrafficData.item(2, 2).flags()
+        assert not flags & Qt.ItemFlag.ItemIsEditable
+        assert not flags & Qt.ItemFlag.ItemIsSelectable
+
+    def test_copy_selection_as_tsv(self, traffic, locale_sv):
+        data = _show(traffic, 'Speed (knots)')
+        data['Speed (knots)'][0] = [12.5, 8]
+        data['Speed (knots)'][1] = [float('inf'), 14.25]
+        _show(traffic, 'Speed (knots)')
+        traffic.dw.twTrafficData.selectAll()
+        text = traffic.copy_selection()
+        assert text == '12,5\t8\n\t14,25'          # totals left out, inf blank
+
+    def test_copy_puts_text_on_the_clipboard(self, traffic, monkeypatch):
+        from omrat_utils import handle_traffic
+        clip = MagicMock()
+        monkeypatch.setattr(handle_traffic.QApplication, 'clipboard', staticmethod(lambda: clip))
+        _show(traffic)
+        traffic.dw.twTrafficData.selectAll()
+        text = traffic.copy_selection()
+        clip.setText.assert_called_once_with(text)
+
+    def test_paste_reads_the_clipboard(self, traffic, locale_en, monkeypatch):
+        from omrat_utils import handle_traffic
+        clip = MagicMock()
+        clip.text.return_value = '5\t6'
+        monkeypatch.setattr(handle_traffic.QApplication, 'clipboard', staticmethod(lambda: clip))
+        data = _show(traffic)
+        _select(traffic, [(1, 0)])
+        traffic.paste_clipboard()
+        assert data[FREQ][1] == [5, 6]
+
+    def test_copy_with_headers(self, traffic, locale_en):
+        data = _show(traffic)
+        data[FREQ][0] = [3, 4]
+        _show(traffic)
+        lines = traffic.copy_selection(with_headers=True).split('\n')
+        assert lines[0].split('\t')[1:] == ['0 - 25', '25 - 50']
+        assert lines[0].startswith('LEG_1_L1 - East - Frequency')
+        assert lines[1].split('\t') == ['Cargo', '3', '4']
+        assert len(lines) == 3
+
+    def test_paste_block_at_selected_cell(self, traffic, locale_sv):
+        data = _show(traffic)
+        _select(traffic, [(0, 1)])
+        plan = traffic.paste_clipboard('7\n9\n11\r\n')    # 3 rows, table has 2
+        assert data[FREQ] == [[0, 7], [0, 9]]
+        assert plan.clipped == 1
+
+    def test_paste_swedish_excel_numbers(self, traffic, locale_sv):
+        data = _show(traffic, 'Speed (knots)')
+        _select(traffic, [(0, 0)])
+        traffic.paste_clipboard('12,5\t1 234,5\r\n8\t\r\n')
+        assert data['Speed (knots)'][0] == [12.5, 1234.5]
+        assert data['Speed (knots)'][1][0] == 8.0
+        assert data['Speed (knots)'][1][1] == float('inf')   # blank = no observation
+
+    def test_paste_back_what_was_copied_with_headers(self, traffic, locale_en):
+        data = _show(traffic)
+        data[FREQ][0] = [3, 4]
+        data[FREQ][1] = [5, 6]
+        _show(traffic)
+        text = traffic.copy_selection(with_headers=True)
+        edited = text.replace('\t3\t', '\t30\t')            # "edited in Excel"
+        _select(traffic, [(1, 1)])                         # anchor ignored for a labelled block
+        traffic.paste_clipboard(edited)
+        assert data[FREQ] == [[30, 4], [5, 6]]
+
+    def test_one_value_fills_the_selection(self, traffic, locale_en):
+        data = _show(traffic)
+        _select(traffic, [(0, 0), (0, 1), (1, 1)])
+        traffic.paste_clipboard('9')
+        assert data[FREQ] == [[9, 9], [0, 9]]
+
+    def test_paste_skips_invalid_cells(self, traffic, locale_en):
+        data = _show(traffic)
+        _select(traffic, [(0, 0)])
+        plan = traffic.paste_clipboard('1\tx\n-3\t4')
+        assert data[FREQ] == [[1, 0], [0, 4]]
+        assert len(plan.cells) == 4
+
+    def test_paste_updates_totals(self, traffic, locale_en):
+        _show(traffic)
+        _select(traffic, [(0, 0)])
+        traffic.paste_clipboard('1\t2\n3\t4')
+        assert traffic.dw.twTrafficData.item(2, 2).text() == '10'
+
+    def test_paste_scaling_unticks_rows(self, traffic, locale_en):
+        from omrat_utils.handle_traffic import SCALING_VAR
+        _show(traffic, SCALING_VAR)
+        traffic._project_scaling()['follow_global'] = [True, True]
+        _select(traffic, [(0, 0)])
+        traffic.paste_clipboard('120\t130')
+        assert traffic._project_scaling()['follow_global'] == [False, True]
+
+    def test_delete_clears_per_variable(self, traffic, locale_en):
+        import numpy as np
+        data = _show(traffic)
+        data[FREQ][0] = [3, 4]
+        data['Speed (knots)'][0] = [12.0, 13.0]
+        _show(traffic)
+        _select(traffic, [(0, 0)])
+        traffic.clear_selection()
+        assert data[FREQ][0] == [0, 4]
+        _show(traffic, 'Speed (knots)')
+        _select(traffic, [(0, 1)])
+        traffic.clear_selection()
+        assert data['Speed (knots)'][0] == [12.0, np.inf]
+
+    def test_ctrl_c_ctrl_v_and_delete_keys(self, traffic, locale_en, monkeypatch):
+        # Routing only: the system clipboard on Windows can be held by
+        # another process, so the copy / paste bodies are tested directly.
+        from qgis.PyQt.QtCore import QEvent, Qt
+        from qgis.PyQt.QtGui import QKeyEvent
+        from qgis.PyQt.QtWidgets import QApplication
+        data = _show(traffic)
+        data[FREQ][1] = [3, 4]
+        _show(traffic)
+        calls = []
+        monkeypatch.setattr(traffic, 'copy_selection', lambda *a, **k: calls.append('copy'))
+        monkeypatch.setattr(traffic, 'paste_clipboard', lambda *a, **k: calls.append('paste'))
+        tw = traffic.dw.twTrafficData
+        ctrl = Qt.KeyboardModifier.ControlModifier
+        assert QApplication.sendEvent(tw, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, ctrl))
+        assert QApplication.sendEvent(tw, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V, ctrl))
+        assert calls == ['copy', 'paste']
+        _select(traffic, [(1, 1)])
+        no_mod = Qt.KeyboardModifier.NoModifier
+        QApplication.sendEvent(tw, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, no_mod))
+        assert data[FREQ][1] == [3, 0]
+
+    def test_context_menu(self, traffic):
+        _show(traffic)
+        labels = [a.text() for a in traffic._build_table_menu().actions()]
+        assert labels == ['Copy', 'Copy table with headers', 'Paste', 'Clear', 'Select all']

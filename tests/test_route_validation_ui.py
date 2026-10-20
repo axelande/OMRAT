@@ -36,7 +36,6 @@ def _make_omrat_stub(segment_data: dict, traffic_data: dict | None = None):
 def test_run_validation_pass_applies_user_choice_for_merge():
     from geometries.route_validation import parse_wkt_point
     from omrat_utils.route_validation_ui import (
-        ValidationOutcome,
         run_validation_pass,
         _MergeChoice,
     )
@@ -136,3 +135,64 @@ def test_validation_refreshes_junction_handler_after_edits():
         ),
     )
     assert len(omrat.junctions) == 1  # after merge: real junction
+
+
+# ---------------------------------------------------------------------------
+# Crossings created by an edit / before Run model (2026-10-16)
+# ---------------------------------------------------------------------------
+
+def _crossed():
+    """Leg 1 west-east, leg 2 south-north across it."""
+    sd = {
+        '1': dict(_seg("14.0 55.0", "15.0 55.0"), Leg_name='LEG_1_1'),
+        '2': dict(_seg("14.5 54.5", "14.5 55.5"), Leg_name='LEG_2_1'),
+    }
+    return sd, _make_omrat_stub(sd)
+
+
+@pytest.mark.parametrize('answer, n_legs', [(True, 4), (False, 2), (None, 2)])
+def test_offer_split_new_crossings(monkeypatch, answer, n_legs):
+    from omrat_utils import route_validation_ui as rvu
+    sd, omrat = _crossed()
+    asked = []
+    monkeypatch.setattr(rvu, '_ask_split_now', lambda _om, text: asked.append(text) or answer)
+    split = rvu.offer_split_new_crossings(omrat, before=set())
+    assert len(asked) == 1 and 'LEG_1_1 x LEG_2_1' in asked[0]
+    assert split == (1 if answer else 0)
+    assert len(sd) == n_legs
+
+
+def test_offer_split_ignores_crossings_that_were_there_before(monkeypatch):
+    from geometries.route_validation import crossing_pairs
+    from omrat_utils import route_validation_ui as rvu
+    sd, omrat = _crossed()
+    monkeypatch.setattr(rvu, '_ask_split_now', lambda *_a: pytest.fail("must not ask"))
+    assert rvu.offer_split_new_crossings(omrat, before=crossing_pairs(sd)) == 0
+
+
+def test_headless_prompts_never_block():
+    from omrat_utils import route_validation_ui as rvu
+    _sd, omrat = _crossed()
+    omrat.testing = True
+    assert rvu._ask_split_now(omrat, 'x') is None
+    assert rvu._ask_run_choice(omrat, 'x') == 'run'
+
+
+@pytest.mark.parametrize('choice, n_legs', [('split', 4), ('run', 2), ('cancel', 2)])
+def test_check_crossings_before_run(monkeypatch, choice, n_legs):
+    from omrat_utils import route_validation_ui as rvu
+    sd, omrat = _crossed()
+    asked = []
+    monkeypatch.setattr(rvu, '_ask_run_choice', lambda _om, text: asked.append(text) or choice)
+    assert rvu.check_crossings_before_run(omrat, ('collision',)) == choice
+    assert len(asked) == 1 and 'counts as zero' in asked[0]
+    assert len(sd) == n_legs
+
+
+def test_check_crossings_only_for_collision_runs_and_live_legs(monkeypatch):
+    from omrat_utils import route_validation_ui as rvu
+    sd, omrat = _crossed()
+    monkeypatch.setattr(rvu, '_ask_run_choice', lambda *_a: pytest.fail("must not ask"))
+    assert rvu.check_crossings_before_run(omrat, ('drifting', 'powered_grounding')) == 'run'
+    sd['2']['suppressed'] = True
+    assert rvu.check_crossings_before_run(omrat, ('collision',)) == 'run'

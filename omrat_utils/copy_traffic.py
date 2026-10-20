@@ -35,6 +35,14 @@ target leg was drawn the *opposite* way pass ``swap_dirs=True``: the two
 directions are exchanged and the lateral axis is mirrored (means, the
 raw offset samples and the uniform bounds change sign) because "left of
 the leg" flips with the drawing direction.
+
+The direction *names* are not compared: they come from 90-degree sectors,
+so legs at 44 and 46 degrees are "North going" and "East going" although
+they run the same way.  :func:`copy_angle` compares the bearings instead,
+and :func:`misaligned_targets` flags a target whose receiving direction
+heads more than :data:`MAX_ALIGNED_DEG` away from the source's -- the
+dialog warns and can swap those legs only (:func:`aligned_swaps`), which
+is what a selection of legs drawn both ways needs.
 """
 from __future__ import annotations
 
@@ -43,8 +51,14 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from compute.traffic_redirect import direction_bearing
+
 LOCK_KEY = 'traffic_locked'
 SOURCE_KEY = 'traffic_source'
+
+# A copy whose direction 1 lands on a target direction heading more than
+# this away from the source's direction 1 sends the ships the wrong way.
+MAX_ALIGNED_DEG = 90.0
 
 # Per-direction distribution keys; ``{d}`` is the direction index 1 / 2.
 _MIRROR_KEYS = ('mean{d}_1', 'mean{d}_2', 'mean{d}_3')
@@ -113,6 +127,72 @@ def _dirs_of(seg_key: str, traffic_data: dict[str, Any], segment_data: dict[str,
         if isinstance(dirs, (list, tuple)) and dirs:
             return [str(d) for d in dirs]
     return []
+
+
+def angle_between(a: float, b: float) -> float:
+    """Smallest angle (0..180 deg) between two compass bearings."""
+    d = abs(a - b) % 360.0
+    return 360.0 - d if d > 180.0 else d
+
+
+def copy_angle(
+    segment_data: dict[str, Any], src: str, dst: str, swap_dirs: bool = False,
+) -> float | None:
+    """Angle (deg, 0..180) between the source's direction 1 and the target
+    direction that receives its traffic: direction 1 of ``dst``, or
+    direction 2 with ``swap_dirs``.  ``None`` when either leg lacks a
+    usable Start_Point / End_Point."""
+    b_src = direction_bearing(segment_data.get(str(src)), 0)
+    b_dst = direction_bearing(segment_data.get(str(dst)), 1 if swap_dirs else 0)
+    if b_src is None or b_dst is None:
+        return None
+    return angle_between(b_src, b_dst)
+
+
+def misaligned_targets(
+    segment_data: dict[str, Any], src: str, targets: Iterable[str], swap_dirs: bool = False,
+) -> list[tuple[str, float]]:
+    """``[(target, angle)]`` for the targets where the copy would put the
+    source's traffic on a direction heading more than
+    :data:`MAX_ALIGNED_DEG` away.  Legs without geometry are not flagged."""
+    out: list[tuple[str, float]] = []
+    for dst in targets:
+        if str(dst) == str(src):
+            continue
+        ang = copy_angle(segment_data, src, dst, swap_dirs)
+        if ang is not None and ang > MAX_ALIGNED_DEG:
+            out.append((str(dst), ang))
+    return out
+
+
+def aligned_swaps(
+    segment_data: dict[str, Any], src: str, targets: Iterable[str], swap_dirs: bool = False,
+) -> dict[str, bool]:
+    """Per-target ``swap_dirs``: ``swap_dirs`` itself, flipped for every
+    target :func:`misaligned_targets` flags."""
+    flagged = {t for t, _ in misaligned_targets(segment_data, src, targets, swap_dirs)}
+    return {str(t): (not swap_dirs) if str(t) in flagged else bool(swap_dirs) for t in targets}
+
+
+def describe_misaligned(
+    segment_data: dict[str, Any], src: str, flagged: list[tuple[str, float]], n_targets: int,
+) -> str:
+    """Body of the dialog's direction warning."""
+    lines = [
+        f"Direction 1 of {describe_targets([src], segment_data)} would be copied onto a "
+        f"direction heading more than {MAX_ALIGNED_DEG:.0f} deg away on:",
+        "",
+    ]
+    lines += [f"    {describe_targets([t], segment_data)}: {ang:.0f} deg apart" for t, ang in flagged]
+    lines += [
+        "",
+        "The ships would sail the wrong way along those legs and their lateral "
+        "distribution would be mirrored (Cat I / Cat II, drifting and collisions "
+        "all depend on it).",
+    ]
+    if len(flagged) < n_targets:
+        lines += ["", "The other selected legs are fine as chosen."]
+    return "\n".join(lines)
 
 
 def _copy_samples(value: Any, mirror: bool) -> Any:

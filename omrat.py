@@ -762,13 +762,13 @@ class OMRAT(
         self.main_widget.twRouteList.setHorizontalHeaderLabels(['Segment_Id', 'Route_Id', 'Leg_name',
                                                                 'Start_Point', 'End_Point', 'Width',
                                                                 'Tangent (%)', 'Update AIS', 'AIS lock'])
-        self.main_widget.twRouteList.setColumnWidth(0, 75)
+        self.main_widget.twRouteList.setColumnWidth(0, 95)
         self.main_widget.twRouteList.setColumnWidth(1, 75)
         self.main_widget.twRouteList.setColumnWidth(2, 75)
         self.main_widget.twRouteList.setColumnWidth(3, 125)
         self.main_widget.twRouteList.setColumnWidth(4, 125)
         self.main_widget.twRouteList.setColumnWidth(5, 75)
-        self.main_widget.twRouteList.setColumnWidth(6, 75)
+        self.main_widget.twRouteList.setColumnWidth(6, 95)
         self.main_widget.twRouteList.setColumnWidth(7, 75)
         self.main_widget.twRouteList.setColumnWidth(8, 60)
         self.main_widget.twRouteList.setRowCount(0)
@@ -976,6 +976,15 @@ class OMRAT(
                 self.tr('Tick at least one model part in Calculation matrix... before running the model.'),
             )
             return
+
+        # Legs crossing without a shared waypoint add no crossing
+        # collisions: offer to split them first (re-gather after a split).
+        from omrat_utils.route_validation_ui import check_crossings_before_run
+        crossing_choice = check_crossings_before_run(self, phases)
+        if crossing_choice == 'cancel':
+            return
+        if crossing_choice == 'split':
+            data = GatherData(self).get_all_for_save()
 
         # Create and configure the background task
         task = CalculationTask(
@@ -1248,6 +1257,12 @@ class OMRAT(
     def run(self):
         """Run method that loads and starts the plugin"""
         if self.pluginIsActive:
+            # Already open: the toolbar icon brings the window to the
+            # front, with its frame back if it had lost it.
+            self.main_widget.ensure_window_frame()
+            self.main_widget.show()
+            self.main_widget.raise_()
+            self.main_widget.activateWindow()
             return
         self.pluginIsActive = True
         self.main_widget.is_active = True

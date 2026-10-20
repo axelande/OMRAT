@@ -531,6 +531,68 @@ class TestAisLockColumn:
         assert hqi.omrat.segment_data['78'].get('traffic_locked') is not True
         assert hqi.omrat.segment_data['78'].get('mean1_1') != 12.5
 
+    def test_apply_copy_swap_per_target_overrides_box(self, hqi, two_legs):
+        from omrat_utils.copy_traffic_dialog import apply_copy
+        td = hqi.omrat.traffic_data
+        td['77']['West going']['Frequency (ships/year)'][0][0] = 7
+        apply_copy(hqi.omrat, '77', ['78'], swap_dirs=False, swap_per_target={'78': True})
+        assert td['78']['East going']['Frequency (ships/year)'][0][0] == 7
+        assert td['78']['West going']['Frequency (ships/year)'][0][0] == 42
+        assert hqi.omrat.segment_data['78']['mean1_1'] == 7.0   # -(-7.0), mirrored
+
+    def test_resolve_swaps_silent_when_aligned(self, hqi, two_legs, monkeypatch):
+        from omrat_utils import copy_traffic_dialog as ctd
+
+        def _never(*_a, **_k):
+            raise AssertionError("no warning expected for legs drawn the same way")
+        monkeypatch.setattr(ctd, '_ask_direction_choice', _never)
+        assert ctd.resolve_swaps(hqi.omrat, None, '77', ['78'], False) == {'78': False}
+
+    @pytest.mark.parametrize('choice, expected', [
+        ('per_leg', {'78': True, '79': False}),
+        ('as_chosen', {'78': False, '79': False}),
+        (None, None),
+    ])
+    def test_resolve_swaps_mixed_selection(self, hqi, two_legs, monkeypatch, choice, expected):
+        import copy
+        from omrat_utils import copy_traffic_dialog as ctd
+        sd = hqi.omrat.segment_data
+        # 78 redrawn west (reversed vs 77), 79 drawn east like 77.
+        sd['78'].update({'Start_Point': '14.400000 55.000000', 'End_Point': '14.200000 55.000000'})
+        sd['79'] = copy.deepcopy(sd['77'])
+        sd['79'].update({'Segment_Id': '79', 'Leg_name': 'LEG_1_79',
+                         'Start_Point': '14.400000 55.000000', 'End_Point': '14.600000 55.010000'})
+        asked: list[str] = []
+
+        def _answer(_omrat, _parent, text):
+            asked.append(text)
+            return choice
+        monkeypatch.setattr(ctd, '_ask_direction_choice', _answer)
+        try:
+            assert ctd.resolve_swaps(hqi.omrat, None, '77', ['78', '79'], False) == expected
+        finally:
+            sd.pop('79', None)
+        assert len(asked) == 1
+        assert 'LEG_1_78' in asked[0] and 'LEG_1_79' not in asked[0]
+        assert 'fine as chosen' in asked[0]
+
+    def test_drag_across_naming_sector_renames_traffic_keys(self, hqi, two_legs):
+        # 77 is drawn east; dragging its end north re-derives Dirs, and the
+        # traffic keys must follow (by position) or the IWRAP export drops it.
+        from qgis.core import QgsGeometry, QgsPointXY
+        traffic = hqi.omrat.traffic
+        traffic.c_seg = '77'
+        traffic.update_direction_select()
+        hqi.on_geometry_changed(77, QgsGeometry.fromPolylineXY(
+            [QgsPointXY(14.0, 55.0), QgsPointXY(14.05, 55.2)]))
+        sd, td = hqi.omrat.segment_data, hqi.omrat.traffic_data
+        assert sd['77']['Dirs'] == ['North going', 'South going']
+        assert list(td['77']) == ['North going', 'South going']
+        assert td['77']['North going']['Frequency (ships/year)'][0][0] == 42
+        cb = hqi.omrat.main_widget.cbTrafficDirectionSelect
+        assert [cb.itemText(i) for i in range(cb.count())] == ['North going', 'South going']
+        assert traffic.c_di == 'North going'
+
     def test_copy_button_wired(self, hqi):
         btn = getattr(hqi.omrat.main_widget, 'pbCopyTraffic', None)
         assert btn is not None

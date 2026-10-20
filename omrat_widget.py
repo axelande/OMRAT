@@ -26,7 +26,7 @@ import os
 
 
 from qgis.PyQt import QtWidgets, uic
-from qgis.PyQt.QtCore import Qt, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'omrat_base.ui'))
@@ -48,6 +48,9 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.plugin = plugin
         self.is_active = True
         self._apply_visual_refresh()
+        # The dock is never added to the QGIS main window, so it is a
+        # top-level window of its own; see ``_keep_window_frame``.
+        self.topLevelChanged.connect(self._keep_window_frame)
 
         # Route tab
         self.twRouteList: QtWidgets.QTableWidget
@@ -213,14 +216,19 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # it must keep its vertical header visible.  Other tables use their
         # first column as the "name" column and don't need the header.
         _needs_vheader = {'twTrafficData'}
+        # twTrafficData is a spreadsheet-like matrix (cell ranges, copy /
+        # paste with Excel): ``Traffic._wire_table`` gives it cell-wise
+        # extended selection and the select-all corner button instead.
+        _spreadsheet = {'twTrafficData'}
         for table in self.findChildren(QtWidgets.QTableWidget):
             table.setAlternatingRowColors(True)
             table.setShowGrid(False)
-            table.setSelectionBehavior(select_rows)
-            table.setSelectionMode(single_selection)
+            if table.objectName() not in _spreadsheet:
+                table.setSelectionBehavior(select_rows)
+                table.setSelectionMode(single_selection)
+                table.setCornerButtonEnabled(False)
             table.setFrameShape(no_frame)
             table.setWordWrap(False)
-            table.setCornerButtonEnabled(False)
             if table.objectName() not in _needs_vheader:
                 table.verticalHeader().setVisible(False)
             table.verticalHeader().setDefaultSectionSize(28)
@@ -238,6 +246,25 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         self.label_drift_status.setAlignment(align_left | align_vcenter)
         self.label_drift_status.setMinimumHeight(28)
+
+    def _keep_window_frame(self, floating: bool) -> None:
+        """Float the dock again when something docks it without a parent.
+
+        ``setFloating(False)`` gives a QDockWidget ``Qt.Widget |
+        FramelessWindowHint``; without a parent it stays a top-level
+        window, now with no title bar or border, so it can be neither
+        moved nor closed (2026-10-20).  Deferred because Qt emits
+        ``topLevelChanged`` from inside its own window-state change.
+        """
+        if not floating and self.parentWidget() is None:
+            QTimer.singleShot(0, self.ensure_window_frame)
+
+    def ensure_window_frame(self) -> None:
+        """Give a frameless, parentless dock its native frame back."""
+        if self.parentWidget() is not None:
+            return
+        if self.windowFlags() & Qt.WindowType.FramelessWindowHint:
+            self.setFloating(True)
 
     def closeEvent(self, event):
         # Give the plugin a chance to ask "save changes?" and veto the

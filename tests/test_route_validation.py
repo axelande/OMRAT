@@ -13,8 +13,7 @@ import math
 import pytest
 
 from geometries.route_validation import (
-    CloseWaypointPair,
-    LegIntersection,
+    _make_id_provider,
     apply_intersection_split,
     apply_waypoint_merge,
     find_close_waypoint_pairs,
@@ -22,6 +21,7 @@ from geometries.route_validation import (
     format_wkt_point,
     haversine_m,
     parse_wkt_point,
+    split_leg_at_points,
     validate_routes,
 )
 
@@ -364,9 +364,6 @@ def test_validate_routes_empty_for_clean_project():
 # split_leg_at_points — multi-crossing fix
 # ---------------------------------------------------------------------------
 
-from geometries.route_validation import split_leg_at_points, _make_id_provider
-
-
 def _simple_sd(start: str, end: str, name: str = 'LEG_1_1') -> dict:
     return {
         '1': {
@@ -516,3 +513,61 @@ def test_split_resets_tangent_pos_on_sub_legs():
     assert len(ids) == 2
     for sub_id in ids:
         assert sd[sub_id]['Tangent_Pos'] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Crossings created by an edit / missed by the collision model (2026-10-16)
+# ---------------------------------------------------------------------------
+
+def _x_project() -> dict:
+    """Leg 1 runs west-east; leg 2 south-north beside it (no crossing yet);
+    leg 3 crosses leg 1 already."""
+    return {
+        '1': _seg("14.0 55.0", "15.0 55.0", 64_000, name='LEG_1_1'),
+        '2': _seg("15.5 54.5", "15.5 55.5", 111_000, name='LEG_2_1'),
+        '3': _seg("14.2 54.5", "14.2 55.5", 111_000, name='LEG_3_1'),
+    }
+
+
+def test_crossing_pairs_and_new_crossings():
+    from geometries.route_validation import crossing_pairs, new_crossings
+    sd = _x_project()
+    before = crossing_pairs(sd)
+    assert before == {frozenset({'1', '3'})}
+    sd['2']['Start_Point'] = "14.6 54.5"          # "dragged" across leg 1
+    sd['2']['End_Point'] = "14.6 55.5"
+    hits = new_crossings(sd, before)
+    assert [(h.leg1_id, h.leg2_id) for h in hits] == [('1', '2')]
+
+
+def test_model_crossings_ignore_suppressed_legs():
+    from geometries.route_validation import model_crossings
+    sd = _x_project()
+    assert [(h.leg1_id, h.leg2_id) for h in model_crossings(sd)] == [('1', '3')]
+    sd['3']['suppressed'] = True
+    assert model_crossings(sd) == []
+
+
+def test_describe_crossings_uses_leg_names():
+    from geometries.route_validation import describe_crossings
+    sd = _x_project()
+    assert describe_crossings(find_leg_intersections(sd), sd) == ['LEG_1_1 x LEG_3_1']
+
+
+def test_split_at_crossings_one_leg_across_two():
+    """A leg crossing two others is cut at both points in one go (clean
+    _a / _b / _c names, no cascading _a_b), and every piece keeps the
+    parent's traffic."""
+    from geometries.route_validation import split_at_crossings
+    sd = _x_project()
+    sd['2']['Start_Point'], sd['2']['End_Point'] = "14.6 54.5", "14.6 55.5"
+    td = {k: {'East going': {'Frequency (ships/year)': [[int(k) * 100]]}} for k in sd}
+    hits = find_leg_intersections(sd)
+    assert split_at_crossings(sd, hits, td) == 2
+    assert find_leg_intersections(sd) == []
+    names = sorted(s['Leg_name'] for s in sd.values())
+    assert names == ['LEG_1_1_a', 'LEG_1_1_b', 'LEG_1_1_c', 'LEG_2_1_a', 'LEG_2_1_b',
+                     'LEG_3_1_a', 'LEG_3_1_b']
+    for k, seg in sd.items():
+        parent = seg['Leg_name'].split('_')[1]
+        assert td[k]['East going']['Frequency (ships/year)'][0][0] == int(parent) * 100

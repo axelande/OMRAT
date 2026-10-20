@@ -70,7 +70,7 @@
      </rect>
     </property>
     <property name="text">
-     <string>Manuel</string>
+     <string>Manual</string>
     </property>
    </widget>
    <widget class="QTableWidget" name="cvTypes">

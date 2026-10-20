@@ -12,7 +12,7 @@ forwards the choices.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
@@ -29,7 +29,8 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from omrat_utils.copy_traffic import (
-    copy_leg_traffic, describe_targets, is_locked,
+    aligned_swaps, copy_leg_traffic, describe_misaligned, describe_targets,
+    is_locked, misaligned_targets,
 )
 
 if TYPE_CHECKING:
@@ -52,11 +53,14 @@ def apply_copy(
     targets: list[str],
     *,
     swap_dirs: bool = False,
+    swap_per_target: Mapping[str, bool] | None = None,
     copy_distributions: bool = True,
     lock: bool = True,
 ) -> list[str]:
     """Copy ``src`` onto every leg in ``targets`` and refresh the UI.
 
+    ``swap_per_target`` overrides ``swap_dirs`` for the legs it names (a
+    selection of legs drawn both ways, see ``aligned_swaps``).
     Returns the list of targets actually written.  Skips a target that
     equals the source.  The Traffic tab, the lateral-distribution panel
     and the route-table lock boxes are refreshed so the copied values
@@ -85,9 +89,10 @@ def apply_copy(
         dst = str(dst)
         if dst == src:
             continue
+        swap = bool((swap_per_target or {}).get(dst, swap_dirs))
         copy_leg_traffic(
             omrat.traffic_data, omrat.segment_data, src, dst,
-            swap_dirs=swap_dirs, copy_distributions=copy_distributions, lock=lock,
+            swap_dirs=swap, copy_distributions=copy_distributions, lock=lock,
         )
         # Keep the AIS plot cache in step so the distribution plot shows
         # the copied samples rather than the target's old AIS pull.
@@ -147,6 +152,50 @@ def apply_copy(
         except Exception:  # nosec B110 B112
             pass
     return done
+
+
+def resolve_swaps(
+    omrat: "OMRAT", parent: Any, src: str, targets: list[str], swap_dirs: bool,
+) -> dict[str, bool] | None:
+    """Per-target swap for the copy, or ``None`` when the user cancels.
+
+    Targets whose receiving direction would head more than 90 deg away
+    from the source's (``misaligned_targets``) trigger a warning offering
+    to swap only those legs -- the answer to a selection with legs drawn
+    both ways, which one Swap box cannot serve.
+    """
+    seg_now = getattr(omrat, 'segment_data', None) or {}
+    chosen = {str(t): bool(swap_dirs) for t in targets}
+    flagged = misaligned_targets(seg_now, src, targets, swap_dirs)
+    if not flagged:
+        return chosen
+    choice = _ask_direction_choice(
+        omrat, parent, describe_misaligned(seg_now, src, flagged, len(targets)),
+    )
+    if choice == 'per_leg':
+        return aligned_swaps(seg_now, src, targets, swap_dirs)
+    if choice == 'as_chosen':
+        return chosen
+    return None
+
+
+def _ask_direction_choice(omrat: "OMRAT", parent: Any, text: str) -> str | None:
+    """``'per_leg'`` / ``'as_chosen'`` / ``None`` (cancel)."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(omrat.tr("Copy traffic: direction check"))
+    box.setText(text)
+    per_leg = box.addButton(omrat.tr("Swap these legs"), QMessageBox.ButtonRole.AcceptRole)
+    as_chosen = box.addButton(omrat.tr("Copy as chosen"), QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(per_leg)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is per_leg:
+        return 'per_leg'
+    if clicked is as_chosen:
+        return 'as_chosen'
+    return None
 
 
 def run(omrat: "OMRAT") -> None:
@@ -218,7 +267,9 @@ def run(omrat: "OMRAT") -> None:
     cb_swap = QCheckBox(omrat.tr("Swap directions (target leg is drawn the opposite way)"))
     cb_swap.setToolTip(omrat.tr(
         "Exchanges direction 1 and 2 and mirrors the lateral axis "
-        "(means, samples and uniform bounds change sign)."
+        "(means, samples and uniform bounds change sign).  OK compares the "
+        "leg bearings and warns when a target would get its traffic the wrong "
+        "way round (more than 90 deg off)."
     ))
     cb_lock = QCheckBox(omrat.tr("Lock target legs so 'Update AIS' leaves them untouched"))
     cb_lock.setChecked(True)
@@ -255,10 +306,15 @@ def run(omrat: "OMRAT") -> None:
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
+        swaps = resolve_swaps(omrat, dlg, src, targets, cb_swap.isChecked())
+        if swaps is None:
+            return
+
         lock = cb_lock.isChecked()
         done = apply_copy(
             omrat, src, targets,
             swap_dirs=cb_swap.isChecked(),
+            swap_per_target=swaps,
             copy_distributions=cb_dists.isChecked(),
             lock=lock,
         )
@@ -267,11 +323,14 @@ def run(omrat: "OMRAT") -> None:
         if notifier is not None and done:
             try:
                 lock_txt = omrat.tr(" and locked") if lock else ""
+                swapped = [t for t in done if swaps.get(t)]
+                swap_txt = omrat.tr("; directions swapped on {names}").format(
+                    names=describe_targets(swapped, seg_now)) if swapped else ""
                 notifier.display_message(
                     omrat.tr("Copied traffic from {src} to {n} leg(s){lock}: {names}").format(
                         src=describe_targets([src], seg_now), n=len(done), lock=lock_txt,
                         names=describe_targets(done, seg_now),
-                    ),
+                    ) + swap_txt,
                     duration=10,
                 )
             except Exception:  # nosec B110 B112

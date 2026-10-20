@@ -166,6 +166,85 @@ def test_lone_leg_end_cannot_be_detached_and_pick_selects(hqi, legs):
     assert dlg.pick_at((10.0, 50.0)) is None
 
 
+def _ask(monkeypatch, answer):
+    """Answer the "Legs now cross -- split now?" prompt; returns the texts asked."""
+    from omrat_utils import route_validation_ui
+    asked = []
+    monkeypatch.setattr(route_validation_ui, '_ask_split_now',
+                        lambda _om, text: asked.append(text) or answer)
+    return asked
+
+
+def _drag_end(hqi, leg_id, old_end, new_end):
+    """What on_geometry_changed does for an end-vertex drag of ``leg_id``."""
+    seg = hqi.omrat.segment_data[leg_id]
+    old_start = tuple(float(v) for v in seg['Start_Point'].split())
+    seg['End_Point'] = _txt(new_end)
+    hqi._apply_vertex_move(int(leg_id), old_start, old_end, old_start, new_end)
+
+
+def test_drag_that_creates_a_crossing_offers_the_split(hqi, legs, monkeypatch):
+    """Nelly's case (ESCOW, 2026-10-16): a leg end dragged across another
+    leg used to stay an unsplit X-crossing -- zero crossing collisions."""
+    om = hqi.omrat
+    asked = _ask(monkeypatch, True)
+    _drag_end(hqi, '84', E, (13.8, 55.0))           # C -> (13.8, 55.0) crosses 81 (A -> B)
+    assert len(asked) == 1 and 'LEG_1_81 x LEG_1_84' in asked[0]
+    from geometries.route_validation import find_leg_intersections
+    assert find_leg_intersections(om.segment_data) == []
+    assert len(om.segment_data) == 6                # 81 and 84 split in two
+    names = sorted(s['Leg_name'] for s in om.segment_data.values())
+    assert names == ['LEG_1_81_a', 'LEG_1_81_b', 'LEG_1_82', 'LEG_1_83', 'LEG_1_84_a', 'LEG_1_84_b']
+
+
+def test_drag_crossing_not_now_leaves_the_legs(hqi, legs, monkeypatch):
+    om = hqi.omrat
+    asked = _ask(monkeypatch, False)
+    _drag_end(hqi, '84', E, (13.8, 55.0))
+    assert len(asked) == 1
+    assert sorted(om.segment_data) == ['81', '82', '83', '84']
+
+
+def test_drag_without_new_crossing_does_not_ask(hqi, legs, monkeypatch):
+    asked = _ask(monkeypatch, True)
+    _drag_end(hqi, '84', E, (14.5, 55.25))
+    assert asked == []
+
+
+def test_connect_that_creates_a_crossing_offers_the_split(hqi, legs, monkeypatch):
+    from qgis.PyQt.QtCore import Qt
+    from omrat_utils.waypoint_editor_dialog import open_waypoint_editor
+    om = hqi.omrat
+    asked = _ask(monkeypatch, True)
+    dlg = open_waypoint_editor(om)
+    d = _wp_at(om, D)
+    assert dlg.select_waypoint(d, zoom=False)
+    cands = [tuple(dlg.cmb_cand.itemData(i, Qt.ItemDataRole.UserRole)) for i in range(dlg.cmb_cand.count())]
+    dlg.cmb_cand.setCurrentIndex(cands.index(('84', 'start')))   # D -> E crosses 82 (B -> C)
+    monkeypatch.setattr(dlg, '_confirm', lambda *_a: True)
+    dlg.btn_attach.click()
+    assert len(asked) == 1 and 'LEG_1_82 x LEG_1_84' in asked[0]
+    from geometries.route_validation import find_leg_intersections
+    assert find_leg_intersections(om.segment_data) == []
+    assert len(om.segment_data) == 6
+
+
+def test_run_model_offers_to_split_existing_crossings(hqi, legs, monkeypatch):
+    from omrat_utils import route_validation_ui
+    from omrat_utils.route_validation_ui import check_crossings_before_run
+    om = hqi.omrat
+    om.segment_data['84']['End_Point'] = _txt((13.8, 55.0))         # an X-crossing in the file
+    answers = iter(['cancel', 'run', 'split'])
+    monkeypatch.setattr(route_validation_ui, '_ask_run_choice', lambda _om, _text: next(answers))
+    assert check_crossings_before_run(om, ('drifting',)) == 'run'    # no collisions -> no question
+    assert check_crossings_before_run(om, ('collision',)) == 'cancel'
+    assert check_crossings_before_run(om, ('collision',)) == 'run'
+    assert len(om.segment_data) == 4
+    assert check_crossings_before_run(om, ('collision',)) == 'split'
+    assert len(om.segment_data) == 6
+    assert check_crossings_before_run(om, ('collision',)) == 'run'   # nothing left to ask
+
+
 def test_settings_menu_has_the_editor(hqi):
     from qgis.PyQt.QtWidgets import QMenuBar
     om = hqi.omrat

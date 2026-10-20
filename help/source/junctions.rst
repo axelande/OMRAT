@@ -125,6 +125,15 @@ Pressing **Update all distributions** runs a route-validation pass
   producing four sub-legs that share a real junction node.  Sub-legs
   inherit the parent leg's traffic block.
 
+  Crossings are also caught where they are made: dragging a leg end on
+  the map, or **Connect** in the Waypoint editor, so that a leg crosses
+  others asks at once whether to split them, and **Run model** warns
+  before a ship-ship collision run while unsplit crossings remain
+  (**Split and run** / **Run anyway** / **Cancel**; pairs with a
+  suppressed leg are ignored).  This matters for the result: crossing
+  collisions are only computed where legs share a waypoint, so an
+  unsplit crossing counts as zero.
+
 After the validation pass, the junction registry is rebuilt against
 the (possibly mutated) segment list, AIS update runs as before, and
 junction matrices are refreshed -- AIS-derived where data are

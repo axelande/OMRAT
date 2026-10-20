@@ -238,13 +238,13 @@ QToolTip {
                 <property name="minimumSize">
                  <size>
                   <width>650</width>
-                  <height>150</height>
+                  <height>250</height>
                  </size>
                 </property>
                 <property name="maximumSize">
                  <size>
                   <width>16777215</width>
-                  <height>200</height>
+                  <height>400</height>
                  </size>
                 </property>
                </widget>

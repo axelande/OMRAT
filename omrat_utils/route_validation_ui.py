@@ -10,6 +10,14 @@ skip) and two for crossings (split into 4 sub-legs / skip).
 Kept thin: the actual mutation of ``segment_data`` / ``traffic_data``
 lives in :mod:`geometries.route_validation`; this module is just the
 glue between that and the QGIS UI.
+
+Crossings are also caught where they are made (2026-10-16): a vertex
+drag or a waypoint-editor Connect that makes a leg cross others asks
+right away (:func:`offer_split_new_crossings`), and Run model asks
+before a run that would miss them (:func:`check_crossings_before_run`)
+-- the collision model only counts crossings at a shared waypoint, so an
+unsplit X-crossing silently contributed nothing (ESCOW
+``nelly_med_park``: LEG_8_1_d dragged across four routes).
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from qgis.PyQt.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -37,9 +46,11 @@ from geometries.route_validation import (
     CloseWaypointPair,
     LegIntersection,
     apply_waypoint_merge,
+    describe_crossings,
+    model_crossings,
+    new_crossings,
+    split_at_crossings,
     validate_routes,
-    split_leg_at_points,
-    _make_id_provider,
 )
 
 if TYPE_CHECKING:
@@ -268,19 +279,7 @@ def _apply_merges_and_splits(
         confirmed_hits.append(hit)
 
     if confirmed_hits:
-        # Group split points per leg: {leg_id: [(t_param, point), ...]}
-        from collections import defaultdict
-        leg_splits: dict[str, list[tuple[float, tuple[float, float]]]] = defaultdict(list)
-        for hit in confirmed_hits:
-            leg_splits[hit.leg1_id].append((hit.t1, hit.point))
-            leg_splits[hit.leg2_id].append((hit.t2, hit.point))
-
-        id_prov = _make_id_provider(sd)
-        for leg_id, splits in leg_splits.items():
-            splits.sort(key=lambda x: x[0])
-            split_leg_at_points(sd, leg_id, [s[1] for s in splits], id_prov, td)
-
-        out.splits_applied += len(confirmed_hits)
+        out.splits_applied += split_at_crossings(sd, confirmed_hits, td)
 
 
 def _reload_legs_after_mutation(omrat: "OMRAT") -> None:
@@ -299,6 +298,132 @@ def _reload_legs_after_mutation(omrat: "OMRAT") -> None:
             )
         except Exception:  # nosec B110 B112
             pass
+
+
+def _notify(omrat: "OMRAT", message: str, warning: bool = False) -> None:
+    notifier = getattr(omrat, 'notifier', None)
+    if notifier is None:
+        return
+    try:
+        from qgis.core import Qgis
+        level = Qgis.MessageLevel.Warning if warning else Qgis.MessageLevel.Info
+        notifier.display_message(message, level=level, duration=10)
+    except Exception:  # nosec B110 B112
+        pass
+
+
+def split_crossings(omrat: "OMRAT", hits: list[LegIntersection]) -> int:
+    """Split every crossing in ``hits`` (all at once), rebuild the leg
+    layers / route table and refresh the junction registry.  Returns the
+    number of crossings split."""
+    if not hits:
+        return 0
+    sd = getattr(omrat, 'segment_data', {}) or {}
+    td = getattr(omrat, 'traffic_data', {}) or {}
+    n = split_at_crossings(sd, hits, td)
+    _reload_legs_after_mutation(omrat)
+    handler = getattr(omrat, 'junctions', None)
+    if handler is not None:
+        handler.rebuild_from_segments(sd, prefer_user=True)
+    return n
+
+
+_ZERO_NOTE = (
+    "Crossing collisions are only computed where legs share a waypoint, "
+    "so a crossing like this counts as zero until the legs are split."
+)
+
+
+def _crossing_list(hits: list[LegIntersection], segment_data: dict) -> str:
+    return "\n".join(f"    {line}" for line in describe_crossings(hits, segment_data))
+
+
+def _ask_split_now(omrat: "OMRAT", text: str) -> bool | None:
+    """Split now?  ``None`` headless (``omrat.testing``): never block a
+    test on a modal; tests replace this function to answer."""
+    if getattr(omrat, 'testing', False):
+        return None
+    box = QMessageBox(getattr(omrat, 'main_widget', None))
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle("Legs now cross")
+    box.setText(text)
+    split = box.addButton("Split now", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(split)
+    box.exec()
+    return box.clickedButton() is split
+
+
+def offer_split_new_crossings(omrat: "OMRAT", before: set) -> int:
+    """After an edit: ask to split the crossings that are not in
+    ``before`` (``crossing_pairs`` taken before the edit).  Returns the
+    number of crossings split."""
+    sd = getattr(omrat, 'segment_data', {}) or {}
+    hits = new_crossings(sd, before)
+    if not hits:
+        return 0
+    text = (
+        "After this edit these legs cross without a shared waypoint:\n\n"
+        f"{_crossing_list(hits, sd)}\n\n{_ZERO_NOTE}\n\n"
+        "Split them at the crossings now?  Each crossing becomes a junction "
+        "and the sub-legs keep their traffic."
+    )
+    answer = _ask_split_now(omrat, text)
+    if not answer:
+        if answer is False:
+            _notify(omrat, f"{len(hits)} new crossing(s) left unsplit -- Update all distributions "
+                           "and Run model will ask again.", warning=True)
+        return 0
+    names = "; ".join(describe_crossings(hits, sd))     # before the split renames the legs
+    n = split_crossings(omrat, hits)
+    _notify(omrat, f"Split {n} crossing(s): {names}")
+    return n
+
+
+def _ask_run_choice(omrat: "OMRAT", text: str) -> str:
+    """``'split'`` / ``'run'`` / ``'cancel'``.  Headless (``omrat.testing``)
+    answers ``'run'``; tests replace this function to choose."""
+    if getattr(omrat, 'testing', False):
+        return 'run'
+    box = QMessageBox(getattr(omrat, 'main_widget', None))
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Legs cross without a waypoint")
+    box.setText(text)
+    split = box.addButton("Split and run", QMessageBox.ButtonRole.AcceptRole)
+    run = box.addButton("Run anyway", QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(split)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is split:
+        return 'split'
+    if clicked is run:
+        return 'run'
+    return 'cancel'
+
+
+def check_crossings_before_run(omrat: "OMRAT", phases) -> str:
+    """Before Run model: ``'run'`` (nothing to do / run anyway),
+    ``'split'`` (crossings split -- gather the data again) or
+    ``'cancel'``.  Only asks when ship-ship collisions are part of the run
+    and a crossing involves no suppressed leg."""
+    if 'collision' not in tuple(phases or ()):
+        return 'run'
+    sd = getattr(omrat, 'segment_data', {}) or {}
+    hits = model_crossings(sd)
+    if not hits:
+        return 'run'
+    text = (
+        f"{len(hits)} leg crossing(s) have no shared waypoint:\n\n"
+        f"{_crossing_list(hits, sd)}\n\n{_ZERO_NOTE}\n\n"
+        "Split the legs at the crossings before running?"
+    )
+    choice = _ask_run_choice(omrat, text)
+    if choice != 'split':
+        return choice
+    n = split_crossings(omrat, hits)
+    _notify(omrat, f"Split {n} crossing(s) before the run.")
+    return 'split'
 
 
 def run_validation_pass(

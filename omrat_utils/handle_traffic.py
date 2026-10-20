@@ -1,23 +1,67 @@
 from functools import partial
-from typing import Optional, Any, TYPE_CHECKING, Union
+from typing import Optional, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from omrat import OMRAT, OMRATMainWidget
 
 import matplotlib as mpl
 mpl.use('Qt5Agg')
 import numpy as np  # noqa: E402
-from qgis.PyQt.QtCore import Qt  # noqa: E402
-from qgis.PyQt.QtWidgets import QCheckBox, QDoubleSpinBox, QLabel, QLineEdit, QSpinBox  # noqa: E402
+from qgis.PyQt.QtCore import QEvent, QLocale, QObject, Qt  # noqa: E402
+from qgis.PyQt.QtGui import QColor, QKeySequence  # noqa: E402
+from qgis.PyQt.QtWidgets import (  # noqa: E402
+    QAbstractItemView, QApplication, QCheckBox, QMenu, QTableWidgetItem,
+)
 
-from geometries import isint  # noqa: E402
-from omrat_utils.widgets import NoWheelSpinBox, NoWheelDoubleSpinBox  # noqa: E402
+from omrat_utils.table_clipboard import (  # noqa: E402
+    PastePlan, format_number, parse_number, parse_tsv, plan_paste, strip_headers, to_tsv,
+)
 from omrat_utils.traffic_links import status_suffix  # noqa: E402
 
 
-WidgetType = Union[QLineEdit, QSpinBox, QDoubleSpinBox]
-
+FREQ_VAR = 'Frequency (ships/year)'
 SCALING_VAR = 'Scaling (%)'
 SCALING_DEFAULT = 100.0
+
+_NO_OBSERVATION_TIP = "No AIS observation for this cell. Type a value to set one."
+
+
+class _TableKeyFilter(QObject):
+    """Excel-style keys on the traffic table: Ctrl+C / Ctrl+V / Delete /
+    Ctrl+A.
+
+    QGIS binds the same keys in its main window (Copy / Paste / Delete
+    Selected / Select All *features*), and a window shortcut fires before
+    the key reaches the focused table -- so the table claims them on
+    ``ShortcutOverride`` first.  Only seen while no cell is being edited;
+    the cell editor keeps its own copy / paste / delete.
+    """
+
+    _COPY_PASTE_ALL = (
+        QKeySequence.StandardKey.Copy, QKeySequence.StandardKey.Paste, QKeySequence.StandardKey.SelectAll,
+    )
+
+    def __init__(self, traffic: "Traffic"):
+        super().__init__()
+        self._traffic = traffic
+
+    def _ours(self, event) -> bool:
+        return any(event.matches(k) for k in self._COPY_PASTE_ALL) or event.key() == Qt.Key.Key_Delete
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        if event.type() == QEvent.Type.ShortcutOverride and self._ours(event):
+            event.accept()      # deliver as a KeyPress to the table, not to QGIS
+            return True
+        if event.type() == QEvent.Type.KeyPress:
+            if event.matches(QKeySequence.StandardKey.Copy):
+                self._traffic.copy_selection()
+                return True
+            if event.matches(QKeySequence.StandardKey.Paste):
+                self._traffic.paste_clipboard()
+                return True
+            if event.key() == Qt.Key.Key_Delete:
+                self._traffic.clear_selection()
+                return True
+        return False            # Ctrl+A: the table's own select-all
 
 
 def _default_traffic_scaling() -> dict[str, Any]:
@@ -59,13 +103,24 @@ class Traffic:
         # ``populate_scaling_checkboxes``.  We hold strong references here so
         # GC + Qt's parent-chain don't drop them prematurely.
         self._follow_global_checkboxes: list[QCheckBox] = []
-        self._scaling_cell_signals: list[Any] = []
-        self.last_var = 'Frequency (ships/year)'
+        # The table holds plain text items (selectable, copyable to Excel).
+        # ``_shown[row][col] = (stored value, rendered text)`` for the
+        # matrix on screen: a cell is only written back when its text
+        # differs, so viewing never rounds or overwrites data (inf stays
+        # inf, 1234.5 stays 1234.5).  ``_filling`` mutes ``itemChanged``
+        # while we write the cells ourselves; ``_bulk`` defers the totals
+        # during a paste.
+        self._shown: list[list[tuple[Any, str]]] = []
+        self._filling = False
+        self._bulk = False
+        self._key_filter: Optional[_TableKeyFilter] = None
+        self.last_var = FREQ_VAR
         self.run_update = False
         self.dw.cbSelectType.currentIndexChanged.connect(partial(self.update_traffic_tbl, 'type'))
         self.dw.cbTrafficSelectSeg.currentIndexChanged.connect(partial(self.update_traffic_tbl, 'segment'))
         self.dw.cbTrafficDirectionSelect.currentIndexChanged.connect(partial(self.update_traffic_tbl, 'dir'))
         self._connect_scaling_controls()
+        self._wire_table()
         self.set_table_headings()
         self.run_update = True
 
@@ -123,14 +178,18 @@ class Traffic:
             except (TypeError, ValueError):
                 # Mocked widget or fontMetrics not usable; skip sizing.
                 pass
-        for row in range(len(types)):
-            for col in range(len(sizes)):
-                item = NoWheelSpinBox()
-                item.setMaximum(100000)
-                self.dw.twTrafficData.setCellWidget(row, col, item)
-            self.dw.twTrafficData.setCellWidget(row, len(sizes), self._make_summary_label())
-        for col in range(len(sizes) + 1):
-            self.dw.twTrafficData.setCellWidget(len(types), col, self._make_summary_label())
+        tw = self.dw.twTrafficData
+        self._filling = True
+        try:
+            for row in range(len(types)):
+                for col in range(len(sizes)):
+                    tw.setItem(row, col, self._make_data_item())
+                tw.setItem(row, len(sizes), self._make_summary_item())
+            for col in range(len(sizes) + 1):
+                tw.setItem(len(types), col, self._make_summary_item())
+        finally:
+            self._filling = False
+        self._shown = []
         # Keep the per-type "follow global" checkboxes + the follow_global
         # bool list in sync with the current ship-type count.
         self.populate_scaling_checkboxes()
@@ -173,57 +232,27 @@ class Traffic:
         # about to display.  Legacy projects and freshly-imported IWRAP
         # files may not have it yet.
         self.ensure_scaling_present()
-        is_scaling_view = self.last_var == SCALING_VAR
-        is_freq_view = self.last_var == 'Frequency (ships/year)'
-        # Drop any cellChanged-style signals from the previous render so
-        # they don't fire while we rebuild widgets below.
-        self._disconnect_scaling_cell_signals()
-        for row in range(rows):
-            for col in range(cols):
-                val: float | int | str = self.traffic_data[self.c_seg][self.c_di][self.last_var][row][col]
-
-                if is_scaling_view:
-                    # Scaling cells are always percent values rendered as
-                    # a wide-range double spinbox -- ``isint(100.0)`` is
-                    # True so the generic dispatch below would otherwise
-                    # truncate fractional percentages on edit.
-                    item = NoWheelDoubleSpinBox()
-                    item.setRange(0.0, 100000.0)
-                    item.setSuffix(' %')
-                    item.setDecimals(1)
-                    try:
-                        v = float(val) if val != '' else SCALING_DEFAULT
-                    except (TypeError, ValueError):
-                        v = SCALING_DEFAULT
-                    item.setValue(v)
-                    # Manual edit -> the row stops following the global
-                    # spinbox.  Connect after setValue so the initial
-                    # render doesn't auto-untick everything.
-                    item.valueChanged.connect(
-                        partial(self._on_scaling_cell_edited, row)
-                    )
-                    self._scaling_cell_signals.append((item, row))
-                elif val == '':
-                    item = NoWheelSpinBox()
-                    val = 0
-                    item.setValue(val)
-                elif val == np.inf:
-                    item = NoWheelSpinBox()
-                    item.setEnabled(False)
-                    val = 0
-                    item.setValue(val)
-                elif isint(val):
-                    item = NoWheelSpinBox()
-                    item.setMaximum(100000)
-                    val = int(val)
-                    item.setValue(val)
-                else:
-                    item = NoWheelDoubleSpinBox()
-                    val = float(val)
-                    item.setValue(val)
-                if is_freq_view:
-                    item.valueChanged.connect(self._refresh_summary)
-                self.dw.twTrafficData.setCellWidget(row, col, item)
+        matrix = self.traffic_data[self.c_seg][self.c_di][self.last_var]
+        dp, _gs = self._separators()
+        tw = self.dw.twTrafficData
+        self._shown = []
+        self._filling = True
+        try:
+            for row in range(rows):
+                shown_row: list[tuple[Any, str]] = []
+                for col in range(cols):
+                    val = matrix[row][col]
+                    text = format_number(val, dp)
+                    item = tw.item(row, col)
+                    if item is None:
+                        item = self._make_data_item()
+                        tw.setItem(row, col, item)
+                    item.setText(text)
+                    item.setToolTip(_NO_OBSERVATION_TIP if self._is_unobserved(val) else '')
+                    shown_row.append((val, text))
+                self._shown.append(shown_row)
+        finally:
+            self._filling = False
         self._refresh_summary()
 
     def update_direction_select(self):
@@ -251,18 +280,322 @@ class Traffic:
             return
         if self.last_var not in di:
             return
-        rows = self._data_rows
-        cols = self._data_cols
-        typ = self.last_var
-        for row in range(rows):
-            for col in range(cols):
-                val = self.dw.twTrafficData.cellWidget(row, col)
-                di[typ][row][col] = val.value()
+        # Edits are written through as they happen (``_commit_cell``); this
+        # picks up any cell whose text changed without ``itemChanged``.
+        # Untouched cells keep their stored value exactly.
+        matrix = di[self.last_var]
+        tw = self.dw.twTrafficData
+        for row in range(min(self._data_rows, len(self._shown))):
+            for col in range(min(self._data_cols, len(self._shown[row]))):
+                item = tw.item(row, col)
+                if item is None or item.text() == self._shown[row][col][1]:
+                    continue
+                try:
+                    value = self._value_from_text(item.text())
+                except ValueError:
+                    continue
+                matrix[row][col] = value
+                self._shown[row][col] = (value, item.text())
 
     def commit_changes(self):
         """Copy the output from the traffic data within this module to omrats traffic_data"""
         self.save()
         self.omrat.traffic_data = self.traffic_data
+
+    # ------------------------------------------------------- table editing
+    # Plain text cells instead of spin boxes (2026-10-16): a block can be
+    # selected, copied to Excel, edited there and pasted back.  Numbers
+    # are shown with the locale's decimal point (what Excel expects) and
+    # parsed with either separator (``table_clipboard``).
+
+    def _wire_table(self) -> None:
+        """Connect the table once: cell edits, Ctrl+C / Ctrl+V / Delete and
+        the right-click menu.  Mocked widgets in tests just skip."""
+        tw = self.dw.twTrafficData
+        try:
+            # Cell ranges like a spreadsheet (the dock styling makes every
+            # other table single-row; ``omrat_widget`` exempts this one).
+            tw.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+            tw.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            tw.setCornerButtonEnabled(True)
+            tw.itemChanged.connect(self._on_item_changed)
+            tw.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            tw.customContextMenuRequested.connect(self._show_table_menu)
+            self._key_filter = _TableKeyFilter(self)
+            tw.installEventFilter(self._key_filter)
+        except (TypeError, AttributeError, RuntimeError):
+            pass
+
+    @staticmethod
+    def _separators() -> tuple[str, str]:
+        """``(decimal point, group separator)`` of the current locale."""
+        loc = QLocale()
+        return str(loc.decimalPoint()), str(loc.groupSeparator())
+
+    @staticmethod
+    def _is_unobserved(val: Any) -> bool:
+        if isinstance(val, (list, tuple)):
+            return True     # AIS observation list not collapsed yet
+        try:
+            return not np.isfinite(float(val))
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _make_data_item() -> QTableWidgetItem:
+        item = QTableWidgetItem('')
+        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return item
+
+    @staticmethod
+    def _make_summary_item(text: str = '-') -> QTableWidgetItem:
+        """Non-editable, non-selectable, styled cell of the Total row/column."""
+        item = QTableWidgetItem(text)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item.setBackground(QColor('#dde'))
+        item.setForeground(QColor('#333'))
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        return item
+
+    def _current_matrix(self) -> Optional[list]:
+        seg = self.traffic_data.get(self.c_seg) if self.c_seg else None
+        di = seg.get(self.c_di) if isinstance(seg, dict) else None
+        matrix = di.get(self.last_var) if isinstance(di, dict) else None
+        return matrix if isinstance(matrix, list) else None
+
+    def _blank_value(self) -> Any:
+        """What an emptied cell stores: 0 ships, 100 %, or no observation."""
+        if self.last_var == FREQ_VAR:
+            return 0
+        if self.last_var == SCALING_VAR:
+            return SCALING_DEFAULT
+        return np.inf
+
+    def _value_from_text(self, text: str) -> Any:
+        """Stored value for cell ``text`` in the current variable.  Raises
+        ``ValueError`` for text that is not a number >= 0."""
+        dp, gs = self._separators()
+        v = parse_number(text, dp, gs)
+        if v is None:
+            return self._blank_value()
+        if v < 0:
+            raise ValueError(f"negative value: {text!r}")
+        if self.last_var == FREQ_VAR and v.is_integer():
+            return int(v)
+        return v
+
+    def _set_cell_text(self, row: int, col: int, text: str) -> None:
+        item = self.dw.twTrafficData.item(row, col)
+        if item is None:
+            return
+        self._filling = True
+        try:
+            item.setText(text)
+        finally:
+            self._filling = False
+
+    def _commit_cell(self, row: int, col: int, text: str) -> bool:
+        """Parse ``text`` into cell (row, col) of the matrix on screen and
+        show it normalised.  Invalid text puts the previous text back and
+        returns ``False``."""
+        matrix = self._current_matrix()
+        if matrix is None or row >= len(self._shown) or col >= len(self._shown[row]):
+            return True
+        try:
+            value = self._value_from_text(text)
+        except ValueError:
+            self._set_cell_text(row, col, self._shown[row][col][1])
+            return False
+        matrix[row][col] = value
+        shown = format_number(value, self._separators()[0])
+        self._set_cell_text(row, col, shown)
+        item = self.dw.twTrafficData.item(row, col)
+        if item is not None:
+            self._filling = True
+            try:
+                item.setToolTip(_NO_OBSERVATION_TIP if self._is_unobserved(value) else '')
+            finally:
+                self._filling = False
+        self._shown[row][col] = (value, shown)
+        if self.last_var == SCALING_VAR:
+            self._on_scaling_cell_edited(row, float(value))
+        return True
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._filling or item is None:
+            return
+        row, col = item.row(), item.column()
+        if not (0 <= row < min(self._data_rows, len(self._shown)) and 0 <= col < self._data_cols):
+            return
+        if item.text() == self._shown[row][col][1]:
+            return
+        typed = item.text()
+        if any(ch in typed for ch in '\t\r\n'):
+            # A copied block pasted into one cell's editor (its own
+            # right-click Paste): paste the clipboard as a block from here.
+            self._set_cell_text(row, col, self._shown[row][col][1])
+            self.paste_clipboard(anchor=(row, col))
+            return
+        if not self._commit_cell(row, col, typed):
+            self._notify(f"'{typed}' is not a number >= 0 -- the cell keeps its value.", warning=True)
+        if not self._bulk:
+            self._refresh_summary()
+
+    def _selected_data_cells(self) -> list[tuple[int, int]]:
+        """Selected cells inside the data block (totals excluded), sorted."""
+        tw = self.dw.twTrafficData
+        return sorted({
+            (ix.row(), ix.column()) for ix in tw.selectedIndexes()
+            if ix.row() < self._data_rows and ix.column() < self._data_cols
+        })
+
+    @staticmethod
+    def _header_text(item: Optional[QTableWidgetItem]) -> str:
+        return item.text() if item is not None else ''
+
+    def copy_selection(self, with_headers: bool = False) -> str:
+        """Put the selected cells (or, ``with_headers``, the whole matrix
+        with ship-type / length labels) on the clipboard as TSV.  Returns
+        the text."""
+        tw = self.dw.twTrafficData
+        if with_headers:
+            rows, cols = range(self._data_rows), range(self._data_cols)
+            chosen = None
+        else:
+            cells = self._selected_data_cells()
+            if not cells:
+                return ''
+            rows = range(min(r for r, _ in cells), max(r for r, _ in cells) + 1)
+            cols = range(min(c for _, c in cells), max(c for _, c in cells) + 1)
+            chosen = set(cells)
+        out: list[list[str]] = []
+        if with_headers:
+            corner = f"{self.dw.cbTrafficSelectSeg.currentText()} - {self.c_di} - {self.last_var}"
+            out.append([corner] + [self._header_text(tw.horizontalHeaderItem(c)) for c in cols])
+        for r in rows:
+            line = [self._header_text(tw.verticalHeaderItem(r))] if with_headers else []
+            for c in cols:
+                item = tw.item(r, c)
+                keep = item is not None and (chosen is None or (r, c) in chosen)
+                line.append(item.text() if keep else '')
+            out.append(line)
+        text = to_tsv(out)
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        return text
+
+    def paste_clipboard(
+        self, text: Optional[str] = None, anchor: Optional[tuple[int, int]] = None,
+    ) -> Optional[PastePlan]:
+        """Paste TSV (Excel) into the matrix on screen.
+
+        A block with labels (``copy_selection(with_headers=True)``, or a
+        labelled range from Excel) lands at the top-left cell; a plain
+        block at ``anchor``, else the top-left selected cell; one value
+        fills the whole selection.  Cells that are not a number >= 0 keep
+        their value.  Always reports in the message bar -- also when
+        nothing could be pasted, or nothing changed.
+        """
+        if text is None:
+            clipboard = QApplication.clipboard()
+            text = clipboard.text() if clipboard is not None else ''
+        if self._current_matrix() is None:
+            self._notify("Paste: pick a leg, direction and variable first.", warning=True)
+            return None
+        dp, gs = self._separators()
+        block, had_row, had_col = strip_headers(parse_tsv(text), dp, gs)
+        if not block:
+            self._notify("Paste: the clipboard holds no table cells.", warning=True)
+            return None
+        selection = self._selected_data_cells()
+        tw = self.dw.twTrafficData
+        if anchor is not None:
+            top, left = anchor
+            selection = []
+        elif selection:
+            top, left = min(r for r, _ in selection), min(c for _, c in selection)
+        else:
+            top, left = max(tw.currentRow(), 0), max(tw.currentColumn(), 0)
+        start = (0 if had_row else top, 0 if had_col else left)
+        plan = plan_paste(block, self._data_rows, self._data_cols, start, selection)
+        bad = changed = 0
+        self._bulk = True
+        try:
+            for r, c, cell in plan.cells:
+                old = self._shown[r][c][0] if r < len(self._shown) and c < len(self._shown[r]) else None
+                if not self._commit_cell(r, c, cell):
+                    bad += 1
+                elif r < len(self._shown) and c < len(self._shown[r]) and self._differs(old, self._shown[r][c][0]):
+                    changed += 1
+        finally:
+            self._bulk = False
+        self._refresh_summary()
+        msg = f"Pasted {len(plan.cells) - bad} cell(s) into {self.last_var}, {changed} changed"
+        if bad:
+            msg += f"; {bad} not a number >= 0 (kept their value)"
+        if plan.clipped:
+            msg += f"; {plan.clipped} outside the table ignored"
+        self._notify(msg, warning=bool(bad))
+        return plan
+
+    @staticmethod
+    def _differs(old: Any, new: Any) -> bool:
+        try:
+            return not (old == new or (np.isnan(float(old)) and np.isnan(float(new))))
+        except (TypeError, ValueError):
+            return True
+
+    def clear_selection(self) -> None:
+        """Delete key: empty the selected cells (0 ships, 100 %, or no
+        observation for Speed / Draught / heights / beam)."""
+        if self._current_matrix() is None:
+            return
+        self._bulk = True
+        try:
+            for r, c in self._selected_data_cells():
+                self._commit_cell(r, c, '')
+        finally:
+            self._bulk = False
+        self._refresh_summary()
+
+    def _build_table_menu(self) -> QMenu:
+        tw = self.dw.twTrafficData
+        menu = QMenu(tw)
+        for label, slot, key in (
+            ("Copy", self.copy_selection, QKeySequence.StandardKey.Copy),
+            ("Copy table with headers", partial(self.copy_selection, True), None),
+            ("Paste", self.paste_clipboard, QKeySequence.StandardKey.Paste),
+            ("Clear", self.clear_selection, QKeySequence.StandardKey.Delete),
+            ("Select all", tw.selectAll, QKeySequence.StandardKey.SelectAll),
+        ):
+            act = menu.addAction(label)
+            if key is not None:
+                act.setShortcut(QKeySequence(key))
+            act.triggered.connect(lambda _checked=False, s=slot: s())
+        return menu
+
+    def _show_table_menu(self, pos) -> None:
+        tw = self.dw.twTrafficData
+        menu = self._build_table_menu()
+        menu.exec(tw.viewport().mapToGlobal(pos))
+        menu.deleteLater()      # parented to the table: would pile up otherwise
+
+    def _notify(self, message: str, warning: bool = False) -> None:
+        notifier = getattr(self.omrat, 'notifier', None)
+        if notifier is None:
+            return
+        try:
+            if warning:
+                from qgis.core import Qgis
+                notifier.display_message(message, level=Qgis.MessageLevel.Warning, duration=8)
+            else:
+                notifier.display_message(message, duration=5)
+        except Exception:  # nosec B110 B112
+            pass
 
     # --------------------------------------------------------------- scaling
     # The "easy option" scaling lets a user bump every Frequency cell
@@ -319,19 +652,6 @@ class Traffic:
         scaling.setdefault('global_percent', SCALING_DEFAULT)
         scaling.setdefault('follow_global', [])
         return scaling
-
-    def _disconnect_scaling_cell_signals(self) -> None:
-        """Drop the cell ``valueChanged`` -> auto-untick connections.
-
-        Qt will GC the widget eventually, but we connect on every render
-        so an explicit detach keeps the signal load bounded.
-        """
-        for item, _row in self._scaling_cell_signals:
-            try:
-                item.valueChanged.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-        self._scaling_cell_signals = []
 
     def ensure_scaling_present(
         self, traffic_data: Optional[dict] = None,
@@ -504,7 +824,7 @@ class Traffic:
                 continue
             self._broadcast_scaling_to_row(i, value)
         if refresh_table and self.last_var == SCALING_VAR:
-            # Re-render so the visible spinboxes pick up the broadcast.
+            # Re-render so the visible cells pick up the broadcast.
             prev = self.run_update
             self.run_update = False
             try:
@@ -566,60 +886,48 @@ class Traffic:
             finally:
                 cb.blockSignals(False)
 
-    def _make_summary_label(self, text: str = '-') -> QLabel:
-        """Return a non-editable, styled label for summary row/column cells."""
-        lbl = QLabel(text)
-        align = getattr(Qt, 'AlignCenter', None) or Qt.AlignmentFlag.AlignCenter
-        lbl.setAlignment(align)
-        lbl.setStyleSheet('background: #dde; color: #333; font-weight: bold; padding: 1px;')
-        return lbl
+    def _summary_text(self, row: int, col: int, text: str) -> None:
+        item = self.dw.twTrafficData.item(row, col)
+        if not isinstance(item, QTableWidgetItem):
+            return
+        self._filling = True
+        try:
+            item.setText(text)
+        finally:
+            self._filling = False
 
     def _refresh_summary(self) -> None:
         """Recompute and display row/column totals in the non-editable summary cells.
 
         Only meaningful for Frequency (ships/year); all other variables show '-'.
-        Called after every table render and on every Frequency spinbox edit.
+        Called after every table render and after every Frequency edit / paste.
         """
         rows = self._data_rows
         cols = self._data_cols
         if rows == 0 or cols == 0:
             return
-        is_freq = self.last_var == 'Frequency (ships/year)'
-        if not is_freq:
+        matrix = self._current_matrix() if self.last_var == FREQ_VAR else None
+        if matrix is None:
             for row in range(rows):
-                lbl = self.dw.twTrafficData.cellWidget(row, cols)
-                if isinstance(lbl, QLabel):
-                    lbl.setText('-')
-            for col in range(cols):
-                lbl = self.dw.twTrafficData.cellWidget(rows, col)
-                if isinstance(lbl, QLabel):
-                    lbl.setText('-')
-            corner = self.dw.twTrafficData.cellWidget(rows, cols)
-            if isinstance(corner, QLabel):
-                corner.setText('-')
+                self._summary_text(row, cols, '-')
+            for col in range(cols + 1):
+                self._summary_text(rows, col, '-')
             return
         col_totals = [0.0] * cols
         for row in range(rows):
             row_total = 0.0
             for col in range(cols):
-                w = self.dw.twTrafficData.cellWidget(row, col)
-                if w is not None:
-                    try:
-                        v = float(w.value())
-                        row_total += v
-                        col_totals[col] += v
-                    except (TypeError, ValueError, AttributeError):
-                        pass
-            lbl = self.dw.twTrafficData.cellWidget(row, cols)
-            if isinstance(lbl, QLabel):
-                lbl.setText(f'{row_total:.0f}')
+                try:
+                    v = float(matrix[row][col])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if np.isfinite(v):
+                    row_total += v
+                    col_totals[col] += v
+            self._summary_text(row, cols, f'{row_total:.0f}')
         for col in range(cols):
-            lbl = self.dw.twTrafficData.cellWidget(rows, col)
-            if isinstance(lbl, QLabel):
-                lbl.setText(f'{col_totals[col]:.0f}')
-        corner = self.dw.twTrafficData.cellWidget(rows, cols)
-        if isinstance(corner, QLabel):
-            corner.setText(f'{sum(col_totals):.0f}')
+            self._summary_text(rows, col, f'{col_totals[col]:.0f}')
+        self._summary_text(rows, cols, f'{sum(col_totals):.0f}')
 
     def unload(self):
         """Cleanup resources and disconnect signals."""
@@ -631,7 +939,19 @@ class Traffic:
             self.dw.cbTrafficDirectionSelect.currentIndexChanged.disconnect()
         except TypeError:
             pass
-        self._disconnect_scaling_cell_signals()
+        tw = self.dw.twTrafficData
+        for sig, slot in ((tw.itemChanged, self._on_item_changed),
+                          (tw.customContextMenuRequested, self._show_table_menu)):
+            try:
+                sig.disconnect(slot)
+            except (TypeError, RuntimeError, AttributeError):
+                pass
+        if self._key_filter is not None:
+            try:
+                tw.removeEventFilter(self._key_filter)
+            except (TypeError, RuntimeError, AttributeError):
+                pass
+            self._key_filter = None
         for cb in self._follow_global_checkboxes:
             try:
                 cb.toggled.disconnect()

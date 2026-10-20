@@ -997,11 +997,12 @@ def build_traffic_distributions(parent: ET.Element, traffic_data: dict, segment_
         intervals = ship_categories.get('length_intervals', []) or []
     for leg_key in segment_data:
         leg_td = traffic_data.get(str(leg_key), {}) if isinstance(traffic_data, dict) else {}
-        dirs = segment_data[leg_key].get('Dirs', [])
-        ftl_dir = dirs[0] if len(dirs) > 0 else ''
-        ltf_dir = dirs[1] if len(dirs) > 1 else ''
-        ftl_data = leg_td.get(ftl_dir, {})
-        ltf_data = leg_td.get(ltf_dir, {})
+        # By position, like compute: block 0 = drawn direction = FTL.  The
+        # names can lag behind a re-derived ``Dirs`` (vertex drag across a
+        # naming sector), and a lookup by name then exported no traffic.
+        blocks = [v for v in leg_td.values() if isinstance(v, dict)] if isinstance(leg_td, dict) else []
+        ftl_data = blocks[0] if len(blocks) > 0 else {}
+        ltf_data = blocks[1] if len(blocks) > 1 else {}
         guid_ftl, shiptypes_e = _create_td_element(td_root, leg_key, 'FTL')
         guid_ltf, shiptypes_w = _create_td_element(td_root, leg_key, 'LTF')
         td_guid_map[str(leg_key)] = {'ftl': guid_ftl, 'ltf': guid_ltf}

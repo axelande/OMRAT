@@ -23,6 +23,7 @@ from omrat_utils.copy_traffic import LOCK_KEY, SOURCE_KEY, is_locked, release_co
 from omrat_utils.layer_styles import apply_stored_style
 from omrat_utils.leg_numbering import leg_name, max_leg_number, next_free_segment_id
 from omrat_utils.leg_sort import SORTABLE_COLUMNS, sort_segment_data
+from omrat_utils.project_sanitize import rename_direction_keys
 from geometries.waypoints import (
     WP_END, WP_START, ensure_waypoint, find_waypoint_at, find_waypoint_near,
     merge_waypoints, move_waypoint, points_equal, prune_unused_waypoints,
@@ -857,6 +858,33 @@ class HandleQGISIface:
         if callable(run_traffic):
             run_traffic()
 
+    def _rename_traffic_dirs(self, seg_key: str, dirs: list[str]) -> None:
+        """Rename ``traffic_data[seg_key]``'s direction keys to a re-derived
+        ``Dirs`` (by position, see ``rename_direction_keys``) and re-render
+        the Traffic tab when it shows this leg.  Its pending edits are
+        flushed first, under the old name."""
+        td = getattr(self.omrat, 'traffic_data', None)
+        block = td.get(seg_key) if isinstance(td, dict) else None
+        if not isinstance(block, dict):
+            return
+        traffic = getattr(self.omrat, 'traffic', None)
+        shown = traffic is not None and getattr(traffic, 'c_seg', None) == seg_key
+        if shown:
+            try:
+                traffic.save()
+            except Exception:  # nosec B110 B112
+                pass
+        if not rename_direction_keys(block, dirs) or not shown:
+            return
+        try:
+            traffic.run_update = False
+            traffic.update_direction_select()
+            traffic.run_update = False
+            traffic.update_traffic_tbl('dir')
+            traffic.run_update = True
+        except Exception:  # nosec B110 B112
+            pass
+
     def on_geometry_changed(self, fid: int, geom: QgsGeometry):
         """Handle geometry changes for a feature."""
         # Get the segment ID from the feature's attributes
@@ -920,6 +948,7 @@ class HandleQGISIface:
                         dirs = ['West going', 'East going']
                     self.omrat.segment_data[seg_key]['Dirs'] = dirs
                     self.leg_dirs[seg_key] = dirs
+                    self._rename_traffic_dirs(seg_key, dirs)
 
                     longitude = (start_pointXY.x() + end_pointXY.x()) / 2
                     utm_zone = int((longitude + 180) / 6) + 1
@@ -2192,6 +2221,7 @@ class HandleQGISIface:
         seg = sd.get(str(moved_fid))
         if not isinstance(seg, dict):
             return
+        crossings_before = self._crossings_with_old_ends(str(moved_fid), old_start, old_end)
         wps = self._waypoints()
         touched: set[str] = set()
         self._propagating_vertex_move = True
@@ -2225,6 +2255,37 @@ class HandleQGISIface:
         finally:
             self._propagating_vertex_move = False
         self._invalidate_junction_ais(touched)
+        self._offer_split_after_edit(crossings_before)
+
+    def _crossings_with_old_ends(
+        self, leg_id: str, old_start: tuple[float, float] | None, old_end: tuple[float, float] | None,
+    ) -> set:
+        """``crossing_pairs`` as they were before the drag: the dragged
+        leg's ``segment_data`` already holds its new ends here, its
+        neighbours still hold the old ones."""
+        from geometries.route_validation import crossing_pairs, format_wkt_point
+        sd = self.omrat.segment_data
+        before = dict(sd)
+        old = dict(sd[leg_id])
+        if old_start is not None:
+            old['Start_Point'] = format_wkt_point(*old_start)
+        if old_end is not None:
+            old['End_Point'] = format_wkt_point(*old_end)
+        before[leg_id] = old
+        try:
+            return crossing_pairs(before)
+        except Exception:  # nosec B110 B112
+            return set()
+
+    def _offer_split_after_edit(self, crossings_before: set) -> None:
+        """Ask to split crossings the edit created.  Deferred to the next
+        event-loop turn: a split rebuilds every leg layer, which must not
+        happen inside the ``geometryChanged`` of one of them."""
+        from omrat_utils.route_validation_ui import offer_split_new_crossings
+        if getattr(self.omrat, 'testing', False):
+            offer_split_new_crossings(self.omrat, crossings_before)
+        else:
+            QTimer.singleShot(0, partial(offer_split_new_crossings, self.omrat, crossings_before))
 
     def _invalidate_junction_ais(self, leg_ids) -> None:
         """A leg's passage line changed: drop the AIS junction counts it fed.

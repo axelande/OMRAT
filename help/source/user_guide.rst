@@ -247,6 +247,15 @@ that choice from the next AIS refresh.
    axis is mirrored (means, samples and uniform bounds change sign),
    because "left of the leg" flips with the drawing direction.  For
    sub-legs of the same original leg leave it unticked.
+
+   On OK OMRAT compares the leg bearings (not the direction names: a
+   leg at 44 deg is "North going", one at 46 deg "East going", yet they
+   run the same way).  If the source's direction 1 would land on a
+   target direction heading more than 90 deg away, a warning lists those
+   legs with the angle.  **Swap these legs** swaps only them and copies
+   the rest as chosen -- the way to copy onto several legs when some are
+   drawn one way and some the other.  **Copy as chosen** ignores the
+   warning; **Cancel** returns to the dialog.
 #. Leave **Lock target legs** ticked (default) and press OK.
 
 The dialog does not block QGIS: you can pan and zoom the map while it
@@ -793,7 +802,9 @@ A leg that is alone on its waypoint has nothing to detach from.
 list holds every leg end that is not on the waypoint already, nearest
 first.  Only that one leg moves: other legs on its old waypoint stay
 put.  If the moved leg would cross other legs, the confirmation says
-which ones, and **Update all distributions** will offer to split them.
+which ones, and you are asked to split them right after the move (see
+:doc:`junctions`).  The same question comes when you drag a leg end
+across other legs on the map.
 To join a leg to the *middle* of another leg, move a vertex of that
 leg there first so that it gets a waypoint.
 
@@ -910,6 +921,40 @@ then use the third to pick which variable to edit:
    the model falls back to an L/B ratio estimate from the LOA bin
    midpoint (``ShipCollisionModel.estimate_beam``), so a hand-entered
    project still gets sensible beams.
+
+Editing, and copying to and from Excel
+--------------------------------------
+
+The cells are plain text, like a spreadsheet: click a cell and type,
+or double-click to edit.  Numbers are shown with your system's decimal
+separator (``12,5`` on a Swedish Windows, ``12.5`` on an English one),
+and either separator is accepted when you type or paste.
+
+* **Select** -- drag over cells, Shift-click / Ctrl-click to extend,
+  click a row or column header for the whole row or column, and the
+  top-left corner button (or Ctrl+A) for everything.
+* **Copy** -- press **Ctrl+C** (or right-click **Copy**).  Paste into
+  Excel with Ctrl+V; the numbers arrive as numbers.  The Total row and
+  column are not copied.
+* **Copy table with headers** (right-click) -- the whole matrix with
+  the ship-type and length labels, plus a corner cell naming the leg,
+  direction and variable.
+* **Paste** -- select the top-left cell and press **Ctrl+V**.  A block
+  copied *with* headers always lands at the top-left of the table, so
+  you can copy with headers, edit in Excel and paste the whole range
+  back.  One copied value pasted onto a selection fills every selected
+  cell.  Cells outside the table are ignored, and a cell that is not a
+  number >= 0 keeps its old value.  The message bar reports how many
+  cells were pasted and how many of them *changed* -- pasting back an
+  unedited copy says ``0 changed``.
+* **Delete** clears the selected cells: ``0`` ships/year for
+  Frequency, ``100`` for Scaling, and "no observation" for Speed,
+  Draught and heights.
+
+A blank cell under Speed, Draught or heights means the AIS refresh saw
+no ships there (stored as ``inf``); type a value to set one.  Cells you
+do not change keep their stored value exactly -- the table shows two
+decimals, but the full value is kept.
 
 Matrix shape
 ------------

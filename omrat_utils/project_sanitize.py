@@ -108,6 +108,31 @@ def prune_orphan_traffic(traffic_data: dict[str, Any] | None,
     return orphans
 
 
+def rename_direction_keys(block: dict[str, Any] | None, dirs: list[str] | tuple[str, ...]) -> bool:
+    """Rename the direction keys of one leg's traffic block to ``dirs``, by
+    position and in place.  Returns ``True`` when a key changed.
+
+    Called where ``Dirs`` is re-derived from a new bearing (vertex drag):
+    compute reads the blocks in order, so index 0 stays the drawn
+    direction, but the IWRAP export and the Traffic tab use the names.
+    Before 2026-10-16 the keys kept their old names, and a leg dragged
+    across a naming sector exported with no traffic.  Deliberately not
+    part of :func:`sanitize_project` -- saved files are not rewritten on
+    load.
+    """
+    if not isinstance(block, dict) or not dirs:
+        return False
+    old = [k for k, v in block.items() if isinstance(v, dict)][:len(dirs)]
+    mapping = {o: str(n) for o, n in zip(old, dirs) if o != str(n)}
+    if not mapping:
+        return False
+    items = list(block.items())
+    block.clear()
+    for k, v in items:
+        block[mapping.get(k, k)] = v
+    return True
+
+
 def sanitize_project(data: dict[str, Any]) -> dict[str, Any]:
     """Apply all fixes to ``data`` in place and return it."""
     seed_distribution_defaults(data.get('segment_data'))
