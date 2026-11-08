@@ -18,6 +18,8 @@ Each has its own causation factor: ``pc['grounding_cat1']`` /
 ``pc['allision']`` for Category II.
 """
 
+import math
+
 from numpy import exp
 from typing import Any, Iterator
 
@@ -40,17 +42,31 @@ def _depth_bin_key(draught: float, unique_depths: list[float]) -> float | None:
 
 
 def _extract_positive(array, row_i: int, col_j: int, default: float) -> float:
-    """Return array[row_i][col_j] if positive numeric, else default."""
+    """Return array[row_i][col_j] if a finite positive number, else default.
+
+    ``inf`` is what an AIS update writes for a cell without observations;
+    taken literally a missing draught grounded the ship on every depth class
+    (KNOWN_ISSUES item 9), so it counts as missing here.
+    """
     try:
         if row_i < len(array) and col_j < len(array[row_i]):
             val = array[row_i][col_j]
-            if isinstance(val, (int, float)) and val > 0:
-                return float(val)
-            if isinstance(val, str) and val != '':
+            if isinstance(val, str):
+                val = float(val) if val != '' else default
+            if isinstance(val, (int, float)) and val > 0 and math.isfinite(val):
                 return float(val)
     except Exception:  # nosec B110 B112
         pass
     return default
+
+
+def known_height(value: float) -> bool:
+    """A ship height the clearance check can use: finite and above 0.
+
+    AIS gives no air draught, so traffic from an IWRAP import carries 0 and
+    traffic from an AIS update ``inf``; both mean *unknown*.
+    """
+    return math.isfinite(value) and value > 0.0
 
 
 def _extract_nonneg(array, row_i: int, col_j: int, default: float) -> float:
@@ -222,7 +238,7 @@ class PoweredModelMixin:
                     for d_val in row:
                         try:
                             v = float(d_val) if d_val != '' else 0.0
-                            if v > 0:
+                            if v > 0 and math.isfinite(v):
                                 draught_set.add(v)
                         except (ValueError, TypeError):
                             pass
@@ -383,8 +399,10 @@ class PoweredModelMixin:
                     for category, (kind, obs_id), p_hit, shares in _iter_hit_probs(comp, ai * speed_ms):
                         # Clearance check applies to both categories: a ship
                         # lower than the structure passes under it whether it
-                        # is in the lane or has missed the turn.
-                        if kind == "object" and ship_h < obj_heights.get(str(obs_id), 0.0):
+                        # is in the lane or has missed the turn.  A ship of
+                        # unknown height gets no clearance (KNOWN_ISSUES item 4):
+                        # with 0 m every ship passed under every object.
+                        if kind == "object" and known_height(ship_h) and ship_h < obj_heights.get(str(obs_id), 0.0):
                             continue
                         acc.add(category, pc_by_cat[category] * q * p_hit,
                                 obs_id, dir_key, cell_key, edge_shares=shares)

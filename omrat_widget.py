@@ -26,10 +26,46 @@ import os
 
 
 from qgis.PyQt import QtWidgets, uic
-from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QObject, QSize, Qt, QTimer, pyqtSignal
+from qgis.PyQt.QtGui import QGuiApplication
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'omrat_base.ui'))
+
+
+#: What a parentless widget gets by default, spelt out: on a window that
+#: already exists, plain ``Qt.Window`` came back without the maximise
+#: button (Qt adds it only for an unlimited maximum size, or when
+#: ``CustomizeWindowHint`` asks for it).
+WINDOW_FLAGS = (Qt.WindowType.Window | Qt.WindowType.CustomizeWindowHint
+                | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowSystemMenuHint
+                | Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint)
+
+
+def dock_uses_native_frame() -> bool:
+    """Whether a floating dock gets the window manager's frame.
+
+    Not on X11 (``xcb``): there Qt marks every floating QDockWidget
+    ``FramelessWindowHint`` and draws the title bar itself, so a frameless
+    dock is the normal floating state, not a lost frame.  Mirrors
+    ``QDockWidgetLayout::wmSupportsNativeWindowDeco``.
+    """
+    return QGuiApplication.platformName().lower() != 'xcb'
+
+
+class WheelScrollsPage(QObject):
+    """The wheel over an unfocused spin / combo box scrolls the page.
+
+    Inside the scrolling dock, scrolling past one would otherwise change
+    its value.  Ignored, the event goes on to the parents; a click on the
+    box (focus) gives it the wheel back.
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
+            event.ignore()
+            return True
+        return False
 
 
 class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
@@ -48,6 +84,8 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.plugin = plugin
         self.is_active = True
         self._apply_visual_refresh()
+        self._wrap_in_scroll_area()
+        self._sized_to_screen = False
         # The dock is never added to the QGIS main window, so it is a
         # top-level window of its own; see ``_keep_window_frame``.
         self.topLevelChanged.connect(self._keep_window_frame)
@@ -107,6 +145,7 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.pbAddSimpleDepth: QtWidgets.QPushButton
         self.pbLoadDepth: QtWidgets.QPushButton
         self.pbRemoveDepth: QtWidgets.QPushButton
+        self.pbSimplifyDepth: QtWidgets.QPushButton
         self.twDepthList: QtWidgets.QTableWidget
         self.pbGetGebcoDephts: QtWidgets.QPushButton
         self.PBUpdateDepthIntervals: QtWidgets.QPushButton
@@ -247,8 +286,75 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.label_drift_status.setAlignment(align_left | align_vcenter)
         self.label_drift_status.setMinimumHeight(28)
 
+    def _wrap_in_scroll_area(self) -> None:
+        """Let the window be smaller than its contents (2026-10-29).
+
+        The tabs need 930-960 px of height, more than a laptop or remote
+        desktop screen offers: the window's bottom hung off the screen and a
+        maximised window cut the contents off.  Now the contents scroll and
+        the menu bar (``set_menu_bar``) stays above them.
+        """
+        frame = QtWidgets.QWidget()
+        frame.setObjectName('dockFrame')
+        self._frame_layout = QtWidgets.QVBoxLayout(frame)
+        self._frame_layout.setContentsMargins(0, 0, 0, 0)
+        self._frame_layout.setSpacing(0)
+        self.dockScrollArea = QtWidgets.QScrollArea(frame)
+        self.dockScrollArea.setObjectName('dockScrollArea')
+        self.dockScrollArea.setWidgetResizable(True)
+        self._frame_layout.addWidget(self.dockScrollArea)
+        self.setWidget(frame)
+        self.dockScrollArea.setWidget(self.dockWidgetContents)
+        self._wheel_filter = WheelScrollsPage(self)
+        for kind in (QtWidgets.QAbstractSpinBox, QtWidgets.QComboBox):
+            for box in self.dockWidgetContents.findChildren(kind):
+                # WheelFocus (their default) would focus the box on the wheel.
+                box.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                box.installEventFilter(self._wheel_filter)
+
+    def set_menu_bar(self, menubar: QtWidgets.QMenuBar) -> None:
+        """Place the menu bar above the scrolling contents."""
+        self._frame_layout.setMenuBar(menubar)
+
+    def preferred_size(self) -> QSize:
+        """Room for every tab without scrolling, menu bar included."""
+        contents = self.dockWidgetContents.minimumSizeHint()
+        bar = self._frame_layout.menuBar()
+        bar_height = bar.sizeHint().height() if bar is not None else 0
+        # Room for the vertical scroll bar the screen may still force.
+        scroll_bar = self.style().pixelMetric(QtWidgets.QStyle.PixelMetric.PM_ScrollBarExtent)
+        return QSize(contents.width() + scroll_bar, contents.height() + bar_height)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._sized_to_screen and self.parentWidget() is None:
+            self._sized_to_screen = True
+            # Deferred: the frame margins are known once the window is up.
+            QTimer.singleShot(0, self.size_to_screen)
+
+    def size_to_screen(self) -> None:
+        """As large as the contents want, as far as the screen allows."""
+        if self.parentWidget() is not None:  # docked meanwhile (screenshot tool)
+            return
+        self.resize(self.preferred_size())
+        self._fit_on_screen()
+
+    def event(self, event):
+        """Leave a title-bar double-click to the window manager.
+
+        QDockWidget answers it by toggling docked / floating, while Windows
+        maximises / restores the window on the same double-click.  Without a
+        parent the "docked" half only strips the frame: the window ended up
+        maximised with no title bar, so it could not be restored, moved or
+        minimised (2026-10-29).
+        """
+        if (event.type() == QEvent.Type.NonClientAreaMouseButtonDblClick
+                and self.parentWidget() is None):
+            return True
+        return super().event(event)
+
     def _keep_window_frame(self, floating: bool) -> None:
-        """Float the dock again when something docks it without a parent.
+        """Restore the frame when something docks the dock without a parent.
 
         ``setFloating(False)`` gives a QDockWidget ``Qt.Widget |
         FramelessWindowHint``; without a parent it stays a top-level
@@ -260,11 +366,50 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
             QTimer.singleShot(0, self.ensure_window_frame)
 
     def ensure_window_frame(self) -> None:
-        """Give a frameless, parentless dock its native frame back."""
-        if self.parentWidget() is not None:
+        """Give a parentless dock its normal window frame back.
+
+        Restores the plain ``Qt.Window`` it was created as (title bar,
+        minimise, maximise, close, taskbar entry), not ``setFloating(True)``:
+        that makes a ``Qt.Tool`` window without minimise / maximise, and a
+        maximised one is placed with its title bar above the screen.  A Tool
+        window left by that older repair is converted as well.
+        """
+        if self.parentWidget() is not None or not dock_uses_native_frame():
             return
-        if self.windowFlags() & Qt.WindowType.FramelessWindowHint:
-            self.setFloating(True)
+        frameless = bool(self.windowFlags() & Qt.WindowType.FramelessWindowHint)
+        if frameless or self.windowType() != Qt.WindowType.Window:
+            visible = self.isVisible()
+            self.setWindowFlags(WINDOW_FLAGS)
+            if visible:
+                self.showNormal()
+                self._fit_on_screen()
+
+    def _fit_on_screen(self) -> None:
+        """Keep the whole frame, title bar first, on the window's screen.
+
+        A geometry that fills the screen (left by a maximised frameless
+        window) goes back to ``preferred_size``.  The margins come from the
+        native window: ``frameGeometry()`` still holds the frameless ones
+        right after the restyle.
+        """
+        screen = self.screen()
+        handle = self.windowHandle()
+        if screen is None or handle is None:
+            return
+        avail = screen.availableGeometry()
+        m = handle.frameMargins()
+        margin_w, margin_h = m.left() + m.right(), m.top() + m.bottom()
+        size = self.size()
+        if size.width() + margin_w >= avail.width() and size.height() + margin_h >= avail.height():
+            size = self.preferred_size()
+        self.resize(min(size.width(), avail.width() - margin_w),
+                    min(size.height(), avail.height() - margin_h))
+        geo = self.geometry()
+        frame_w, frame_h = geo.width() + margin_w, geo.height() + margin_h
+        left = max(avail.left(), min(geo.left() - m.left(), avail.right() + 1 - frame_w))
+        top = max(avail.top(), min(geo.top() - m.top(), avail.bottom() + 1 - frame_h))
+        # setGeometry() places the client area; move() would use the stale frame.
+        self.setGeometry(left + m.left(), top + m.top(), geo.width(), geo.height())
 
     def closeEvent(self, event):
         # Give the plugin a chance to ask "save changes?" and veto the

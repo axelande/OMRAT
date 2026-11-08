@@ -15,56 +15,11 @@ from shapely.ops import transform
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
-
-SCALING_KEY = 'Scaling (%)'
-FREQ_KEY = 'Frequency (ships/year)'
-
-
-def _scale_direction_freq(var: dict) -> None:
-    freq = var.get(FREQ_KEY)
-    if freq is None:
-        return
-    scaling = var.get(SCALING_KEY)
-    for i, row in enumerate(freq):
-        if not hasattr(row, '__iter__'):
-            continue
-        for j, q in enumerate(row):
-            factor = 1.0
-            if scaling is not None and i < len(scaling):
-                s_row = scaling[i]
-                if hasattr(s_row, '__iter__') and j < len(s_row):
-                    try:
-                        factor = float(s_row[j]) / 100.0
-                    except (TypeError, ValueError):
-                        factor = 1.0
-            if factor == 1.0:
-                continue
-            if q == '' or q is None:
-                continue
-            try:
-                q_val = float(q)
-            except (TypeError, ValueError):
-                continue
-            if not np.isfinite(q_val):
-                continue
-            row[j] = q_val * factor
-
-
-def apply_traffic_scaling(data: dict[str, Any]) -> None:
-    """Multiply every ``Frequency (ships/year)`` cell by its ``Scaling (%)`` / 100.
-
-    Mutates ``data['traffic_data']`` in place.  Callers must pass a deep-copy
-    of the live UI state so the user's stored Q values stay untouched.
-    """
-    traffic = data.get('traffic_data') or {}
-    if not isinstance(traffic, dict):
-        return
-    for _seg, dirs in traffic.items():
-        if not isinstance(dirs, dict):
-            continue
-        for _di, var in dirs.items():
-            if isinstance(var, dict):
-                _scale_direction_freq(var)
+# The scaling rule is pure (no QGIS) so the Traffic report can use it too;
+# re-exported here for the callers that import it from this module.
+from compute.traffic_scaling import (  # noqa: F401
+    FREQ_KEY, SCALING_KEY, _scale_direction_freq, apply_traffic_scaling,
+)
 
 
 def _is_qgis_available() -> bool:

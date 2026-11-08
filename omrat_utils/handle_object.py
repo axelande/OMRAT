@@ -717,6 +717,49 @@ class OObject:
 
         self._apply_depth_graduated_style()
 
+    @staticmethod
+    def _table_rows(table: QTableWidget) -> list[list[str]]:
+        """``[id, value, wkt]`` rows of a depth / structure table (full WKT, not the summary)."""
+        rows: list[list[str]] = []
+        for row in range(table.rowCount()):
+            cells = [table.item(row, col) for col in range(3)]
+            if any(c is None for c in cells):
+                continue
+            wkt = cells[2].data(_USER_ROLE) or cells[2].text()
+            rows.append([cells[0].text(), cells[1].text(), str(wkt)])
+        return rows
+
+    def depth_rows(self) -> list[list[str]]:
+        """The depth table as ``[id, depth, wkt]`` rows."""
+        return self._table_rows(self.p.main_widget.twDepthList)
+
+    def object_rows(self) -> list[list[str]]:
+        """The structure table as ``[id, height, wkt]`` rows."""
+        return self._table_rows(self.p.main_widget.twObjectList)
+
+    def replace_depths(self, rows: list[list[str]]) -> None:
+        """Replace every depth polygon (table and "Depth Areas" layer) with ``rows``."""
+        table = self.p.main_widget.twDepthList
+        if self.depth_layer is not None and self._depth_layer_in_project():
+            pr = self.depth_layer.dataProvider()
+            if pr is not None:
+                pr.deleteFeatures([f.id() for f in self.depth_layer.getFeatures()])
+            self.depth_layer.updateExtents()
+        self.depth_feature_row = {}
+        table.setRowCount(0)
+        for row_index, (depth_id, depth, wkt) in enumerate(rows):
+            table.insertRow(row_index)
+            table.setItem(row_index, 0, QTableWidgetItem(str(depth_id)))
+            table.setItem(row_index, 1, QTableWidgetItem(str(depth)))
+            table.setItem(row_index, 2, _wkt_table_item(wkt))
+            try:
+                depth_val = float(depth)
+            except (TypeError, ValueError):
+                depth_val = 0.0
+            self._add_depth_feature(row_index + 1, depth_val, wkt, row_index, defer_style=True)
+        self.deph_id = len(rows)
+        self._apply_depth_graduated_style()
+
     def remove_depth(self) -> None:
         table = self.p.main_widget.twDepthList
         selected_rows: set[int] = {item.row() for item in table.selectedItems()}

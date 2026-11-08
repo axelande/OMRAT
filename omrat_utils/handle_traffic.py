@@ -16,6 +16,10 @@ from omrat_utils.table_clipboard import (  # noqa: E402
     PastePlan, format_number, parse_number, parse_tsv, plan_paste, strip_headers, to_tsv,
 )
 from omrat_utils.traffic_links import status_suffix  # noqa: E402
+from omrat_utils.ais_binning import interval_bounds  # noqa: E402
+from compute.traffic_gaps import (  # noqa: E402
+    GAP_FIELDS, cell_gaps, describe_gap_cell, describe_new_gaps, gap_cells, new_gaps,
+)
 
 
 FREQ_VAR = 'Frequency (ships/year)'
@@ -23,6 +27,9 @@ SCALING_VAR = 'Scaling (%)'
 SCALING_DEFAULT = 100.0
 
 _NO_OBSERVATION_TIP = "No AIS observation for this cell. Type a value to set one."
+_GAP_NAME_BY_VAR = {field: name for name, field in GAP_FIELDS}
+GAP_WARNING_S = 20
+"""Message-bar seconds for the ships-without-speed/draught warning (it explains the fill)."""
 
 
 class _TableKeyFilter(QObject):
@@ -99,6 +106,8 @@ class Traffic:
         # Data dimensions (excluding the summary row/column added to twTrafficData).
         self._data_rows = 0
         self._data_cols = 0
+        # (min, max) per length class, the columns AIS pings are binned into.
+        self.length_bounds: list[tuple[float, float]] = []
         # Checkboxes (one per ship-type row) are populated in
         # ``populate_scaling_checkboxes``.  We hold strong references here so
         # GC + Qt's parent-chain don't drop them prematurely.
@@ -114,6 +123,9 @@ class Traffic:
         self._filling = False
         self._bulk = False
         self._key_filter: Optional[_TableKeyFilter] = None
+        # (leg, direction) already warned about cells with ships but no
+        # speed / draught while typing; cleared once that block has none.
+        self._gap_warned: set[tuple[str, str]] = set()
         self.last_var = FREQ_VAR
         self.run_update = False
         self.dw.cbSelectType.currentIndexChanged.connect(partial(self.update_traffic_tbl, 'type'))
@@ -146,14 +158,17 @@ class Traffic:
             text = it.text() if it is not None else ""
             types.append(text)
         sizes: list[str] = []
+        intervals: list[dict[str, str]] = []
         for i in range(self.omrat.ship_cat.scw.twLengths.rowCount()):
             it1 = self.omrat.ship_cat.scw.twLengths.item(i, 0)
             text1 = it1.text() if it1 is not None else ""
             it2 = self.omrat.ship_cat.scw.twLengths.item(i, 1)
             text2 = it2.text() if it2 is not None else ""
             sizes.append(f'{text1} - {text2}')
+            intervals.append({'min': text1, 'max': text2})
         self._data_rows = len(types)
         self._data_cols = len(sizes)
+        self.length_bounds = interval_bounds(intervals)
         # Table gets one extra row and one extra column for the summary.
         self.dw.twTrafficData.setColumnCount(len(sizes) + 1)
         self.dw.twTrafficData.setHorizontalHeaderLabels(sizes + ['Total'])
@@ -248,7 +263,7 @@ class Traffic:
                         item = self._make_data_item()
                         tw.setItem(row, col, item)
                     item.setText(text)
-                    item.setToolTip(_NO_OBSERVATION_TIP if self._is_unobserved(val) else '')
+                    item.setToolTip(self._cell_tip(row, col, val))
                     shown_row.append((val, text))
                 self._shown.append(shown_row)
         finally:
@@ -360,11 +375,62 @@ class Traffic:
         item.setFont(font)
         return item
 
-    def _current_matrix(self) -> Optional[list]:
+    def _current_block(self) -> Optional[dict]:
+        """All matrices of the leg / direction on screen."""
         seg = self.traffic_data.get(self.c_seg) if self.c_seg else None
         di = seg.get(self.c_di) if isinstance(seg, dict) else None
-        matrix = di.get(self.last_var) if isinstance(di, dict) else None
+        return di if isinstance(di, dict) else None
+
+    def _current_matrix(self) -> Optional[list]:
+        di = self._current_block()
+        matrix = di.get(self.last_var) if di is not None else None
         return matrix if isinstance(matrix, list) else None
+
+    # ---------------------------------------- ships without speed / draught
+    # A run fills these (``compute/traffic_gaps.py``, KNOWN_ISSUES 14); the
+    # tab says so where the gap is made: a warning after the edit and a
+    # tooltip on the cell.  Typing warns once per leg / direction (a hand-
+    # built leg gets its frequencies before its speeds); a paste always
+    # says it, in its own report.
+
+    def _cell_tip(self, row: int, col: int, value: Any) -> str:
+        block = self._current_block()
+        missing = cell_gaps(block, row, col) if block is not None else []
+        if self.last_var == FREQ_VAR:
+            return describe_gap_cell(missing)
+        name = _GAP_NAME_BY_VAR.get(self.last_var)
+        if name is not None and name in missing:
+            return describe_gap_cell([name])
+        return _NO_OBSERVATION_TIP if self._is_unobserved(value) else ''
+
+    def _gap_snapshot(self) -> Optional[dict[str, set[tuple[int, int]]]]:
+        block = self._current_block()
+        return gap_cells(block) if block is not None else None
+
+    def _axis_labels(self) -> tuple[list[str], list[str]]:
+        tw = self.dw.twTrafficData
+        return ([self._header_text(tw.verticalHeaderItem(r)) for r in range(self._data_rows)],
+                [self._header_text(tw.horizontalHeaderItem(c)) for c in range(self._data_cols)])
+
+    def _gap_warning(self, before: Optional[dict[str, set[tuple[int, int]]]], once: bool = False) -> str:
+        """Warning for the cells the last edit left with ships but no speed /
+        draught, and how the run fills them ('' when it made none)."""
+        block = self._current_block()
+        if block is None or before is None:
+            return ''
+        after = gap_cells(block)
+        key = (self.c_seg, self.c_di)
+        if not any(after.values()):
+            self._gap_warned.discard(key)
+            return ''
+        if once and key in self._gap_warned:
+            return ''
+        text = describe_new_gaps(new_gaps(before, after), *self._axis_labels())
+        if not text:
+            return ''
+        self._gap_warned.add(key)
+        leg = self.dw.cbTrafficSelectSeg.currentText() or self.c_seg
+        return f"{leg} {self.c_di}: {text}"
 
     def _blank_value(self) -> Any:
         """What an emptied cell stores: 0 ships, 100 %, or no observation."""
@@ -416,7 +482,7 @@ class Traffic:
         if item is not None:
             self._filling = True
             try:
-                item.setToolTip(_NO_OBSERVATION_TIP if self._is_unobserved(value) else '')
+                item.setToolTip(self._cell_tip(row, col, value))
             finally:
                 self._filling = False
         self._shown[row][col] = (value, shown)
@@ -439,8 +505,13 @@ class Traffic:
             self._set_cell_text(row, col, self._shown[row][col][1])
             self.paste_clipboard(anchor=(row, col))
             return
+        before = self._gap_snapshot()
         if not self._commit_cell(row, col, typed):
             self._notify(f"'{typed}' is not a number >= 0 -- the cell keeps its value.", warning=True)
+        else:
+            gap = self._gap_warning(before, once=True)
+            if gap:
+                self._notify(gap, warning=True, duration=GAP_WARNING_S)
         if not self._bulk:
             self._refresh_summary()
 
@@ -523,6 +594,7 @@ class Traffic:
         start = (0 if had_row else top, 0 if had_col else left)
         plan = plan_paste(block, self._data_rows, self._data_cols, start, selection)
         bad = changed = 0
+        before = self._gap_snapshot()
         self._bulk = True
         try:
             for r, c, cell in plan.cells:
@@ -539,7 +611,10 @@ class Traffic:
             msg += f"; {bad} not a number >= 0 (kept their value)"
         if plan.clipped:
             msg += f"; {plan.clipped} outside the table ignored"
-        self._notify(msg, warning=bool(bad))
+        gap = self._gap_warning(before)
+        if gap:
+            msg += f". {gap}"
+        self._notify(msg, warning=bool(bad or gap), duration=GAP_WARNING_S if gap else None)
         return plan
 
     @staticmethod
@@ -554,6 +629,7 @@ class Traffic:
         observation for Speed / Draught / heights / beam)."""
         if self._current_matrix() is None:
             return
+        before = self._gap_snapshot()
         self._bulk = True
         try:
             for r, c in self._selected_data_cells():
@@ -561,6 +637,9 @@ class Traffic:
         finally:
             self._bulk = False
         self._refresh_summary()
+        gap = self._gap_warning(before, once=True)
+        if gap:
+            self._notify(gap, warning=True, duration=GAP_WARNING_S)
 
     def _build_table_menu(self) -> QMenu:
         tw = self.dw.twTrafficData
@@ -584,16 +663,16 @@ class Traffic:
         menu.exec(tw.viewport().mapToGlobal(pos))
         menu.deleteLater()      # parented to the table: would pile up otherwise
 
-    def _notify(self, message: str, warning: bool = False) -> None:
+    def _notify(self, message: str, warning: bool = False, duration: Optional[int] = None) -> None:
         notifier = getattr(self.omrat, 'notifier', None)
         if notifier is None:
             return
         try:
             if warning:
                 from qgis.core import Qgis
-                notifier.display_message(message, level=Qgis.MessageLevel.Warning, duration=8)
+                notifier.display_message(message, level=Qgis.MessageLevel.Warning, duration=duration or 8)
             else:
-                notifier.display_message(message, duration=5)
+                notifier.display_message(message, duration=duration or 5)
         except Exception:  # nosec B110 B112
             pass
 

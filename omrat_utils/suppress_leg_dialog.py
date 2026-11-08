@@ -377,12 +377,11 @@ class _SuppressDialog(QDialog):
         self.fill_sources(select=src)
 
     def _notify(self, text: str) -> None:
-        notifier = getattr(self.omrat, 'notifier', None)
-        if notifier is not None:
-            try:
-                notifier.display_message(text, duration=10)
-            except Exception:  # nosec B110 B112
-                pass
+        try:
+            from omrat_utils.traffic_report_dialog import notify_with_report
+            notify_with_report(self.omrat, text, duration=10)
+        except Exception:  # nosec B110 B112
+            pass
 
 
 COPY_TIP_KEY = 'omrat/suppress_leg_copy_tip_shown'

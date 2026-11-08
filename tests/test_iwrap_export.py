@@ -7,9 +7,7 @@ covers ``write_iwrap_xml`` / ``generate_iwrap_xml`` / the small
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -19,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.iwrap_convertion import (
+from compute.iwrap_convertion import (  # noqa: E402
     parse_wkt_polygon,
     parse_point_str,
     parse_generic_polygon,
@@ -29,10 +27,10 @@ from compute.iwrap_convertion import (
     build_drifting,
     build_bridges,
     build_waypoints,
-    build_legs,
     build_areas,
     build_traffic_distributions,
     generate_iwrap_xml,
+    parse_iwrap_xml,
     write_iwrap_xml,
 )
 
@@ -385,7 +383,6 @@ class TestGenerateIwrapXml:
         assert root.tag == 'riskmodel'
 
     def test_output_xml_is_well_formed(self, tmp_path):
-        from io import BytesIO
         data_path = tmp_path / 'data.omrat'
         data_path.write_text(json.dumps(self._minimal_data()))
         out_path = tmp_path / 'out.xml'
@@ -422,3 +419,73 @@ class TestBuildTrafficDistributions:
                           'Dirs': ['East going', 'West going']}}
         # Just run without exception.
         build_traffic_distributions(root, traffic, seg_data)
+
+
+# ---------------------------------------------------------------------------
+# Distribution weights survive export -> import (KNOWN_ISSUES item 3)
+# ---------------------------------------------------------------------------
+
+class TestWeightRoundTrip:
+    def _data(self):
+        data = TestGenerateIwrapXml()._minimal_data()
+        seg = data['segment_data']['1']
+        seg.update({
+            'mean1_1': -500.0, 'std1_1': 300.0, 'weight1_1': 80.0,
+            'mean1_2': 400.0, 'std1_2': 200.0, 'weight1_2': 20.0,
+            'mean2_1': 100.0, 'std2_1': 500.0, 'weight2_1': 90.0,
+            'u_min2': -1000.0, 'u_max2': 1000.0, 'u_p2': 10,
+        })
+        return data
+
+    def test_exported_weights_are_fractions(self):
+        root = generate_iwrap_xml(self._data())
+        weights = sorted(float(el.get('weight')) for el in root.iter('mixed_dist_item'))
+        assert weights == pytest.approx([0.1, 0.2, 0.8, 0.9])
+
+    def test_round_trip_keeps_percent_weights(self, tmp_path):
+        data_path = tmp_path / 'data.omrat'
+        data_path.write_text(json.dumps(self._data()))
+        out_path = tmp_path / 'out.xml'
+        write_iwrap_xml(str(data_path), str(out_path))
+        back = parse_iwrap_xml(str(out_path))
+        seg = next(iter(back['segment_data'].values()))
+        assert seg['weight1_1'] == pytest.approx(80.0)
+        assert seg['weight1_2'] == pytest.approx(20.0)
+        assert seg['weight2_1'] == pytest.approx(90.0)
+        assert seg['u_p2'] == 10
+
+
+# ---------------------------------------------------------------------------
+# Depth / structure polygons with holes survive export -> import (KNOWN_ISSUES 10)
+# ---------------------------------------------------------------------------
+
+class TestAreasWithHoles:
+    RING = '14.00 55.00, 14.10 55.00, 14.10 55.10, 14.00 55.10, 14.00 55.00'
+    HOLE = '14.04 55.04, 14.06 55.04, 14.06 55.06, 14.04 55.06, 14.04 55.04'
+
+    def _round_trip(self, tmp_path, polygon):
+        from shapely import wkt as shp_wkt
+        from shapely.ops import unary_union
+        data = TestGenerateIwrapXml()._minimal_data()
+        data['depths'] = [['d1', '12', polygon]]
+        data['objects'] = []
+        data_path = tmp_path / 'data.omrat'
+        data_path.write_text(json.dumps(data))
+        out_path = tmp_path / 'out.xml'
+        write_iwrap_xml(str(data_path), str(out_path))
+        back = parse_iwrap_xml(str(out_path))
+        depth_rows = [r for r in back['depths'] if float(r[1]) == 12.0]
+        return shp_wkt.loads(polygon), unary_union([shp_wkt.loads(r[2]) for r in depth_rows]), depth_rows
+
+    def test_polygon_with_hole_keeps_its_area_and_its_hole(self, tmp_path):
+        from shapely.geometry import Point
+        original, back, rows = self._round_trip(tmp_path, f'POLYGON (({self.RING}), ({self.HOLE}))')
+        assert len(rows) >= 2  # cut into hole-free parts
+        assert back.area == pytest.approx(original.area, rel=1e-6)
+        assert not back.contains(Point(14.05, 55.05))  # the hole is still a hole
+
+    def test_multipolygon_with_hole_is_not_dropped(self, tmp_path):
+        second = '14.20 55.00, 14.30 55.00, 14.30 55.10, 14.20 55.10, 14.20 55.00'
+        original, back, _ = self._round_trip(
+            tmp_path, f'MULTIPOLYGON ((({self.RING}), ({self.HOLE})), (({second})))')
+        assert back.area == pytest.approx(original.area, rel=1e-6)

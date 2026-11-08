@@ -6,6 +6,7 @@ decomposed into smaller, testable helper methods for each collision type
 (head-on, overtaking, bend, crossing).
 """
 
+import math
 from typing import Any
 
 import numpy as np
@@ -233,14 +234,25 @@ class ShipCollisionModelMixin:
 
     @staticmethod
     def _extract_speed_ms(speed_arr: Any, loa_i: int, type_j: int) -> float:
-        """Extract speed in m/s for a ship cell from a nested speed array."""
+        """Extract speed in m/s for a ship cell from a nested speed array.
+
+        A missing speed (``inf`` from an AIS cell without observations, or
+        <= 0) falls back to 10 kn like ``powered_model._extract_positive``:
+        every encounter formula has ``Q / V`` times a relative speed, so one
+        ``inf`` made the whole accident total NaN (KNOWN_ISSUES 14).
+        ``traffic_gaps.fill_missing_speeds`` normally fills it first.
+        """
         v_kts = 10.0
         if loa_i < len(speed_arr) and type_j < len(speed_arr[loa_i]):
             s_list = speed_arr[loa_i][type_j]
             if isinstance(s_list, (list, np.ndarray)) and len(s_list) > 0:
-                v_kts = float(np.mean(s_list))
+                raw = float(np.mean(s_list))
             elif isinstance(s_list, (int, float)):
-                v_kts = float(s_list)
+                raw = float(s_list)
+            else:
+                raw = math.nan
+            if math.isfinite(raw) and raw > 0.0:
+                v_kts = raw
         return v_kts * 1852.0 / 3600.0
 
     @staticmethod

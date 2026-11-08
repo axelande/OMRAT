@@ -189,3 +189,45 @@ class TestSaveLoadRoundTrip:
         Storage(omrat).load_from_path(str(target))
         assert len(leg_layers(omrat)) == 2
         assert _leg_color(leg_layers(omrat)[0]) == '#0000ff'   # style_layer default: blue
+
+
+class TestRebuildKeepsLooks:
+    """A crossing split rebuilds every leg layer (``reload_legs_from_segment_data``).
+    The legs must keep the project's look and a suppressed leg its dashes
+    (ESCOW Anna_med_park_omrade_B156, 2026-11-08: route 17 was suppressed,
+    then route 25 drawn across it -> 17 drawn solid until reload)."""
+
+    @staticmethod
+    def _by_id(omrat):
+        from omrat_utils.layer_styles import leg_layers
+        return {str(next(lyr.getFeatures())['segmentId']): lyr for lyr in leg_layers(omrat)}
+
+    @staticmethod
+    def _pens(layer):
+        return {sl.penStyle() for sl in _main_symbol(layer).symbolLayers()}
+
+    def test_suppressed_leg_stays_dashed_and_style_survives(self, omrat, legs):
+        from qgis.PyQt.QtCore import Qt
+        from omrat_utils.suppress_leg_dialog import apply_suppression
+        apply_suppression(omrat, '78', True, [{'from_dir': 0, 'leg': '77', 'dir': 0, 'share': 100}])
+        _set_leg_color(self._by_id(omrat)['77'], '#ff0000', 2.5)     # restyled in QGIS, not saved
+        omrat.qgis_geoms.reload_legs_from_segment_data()
+        layers = self._by_id(omrat)
+        assert set(layers) == {'77', '78'} and all(lyr not in legs for lyr in layers.values())
+        assert self._pens(layers['78']) == {Qt.PenStyle.DashLine}
+        assert self._pens(layers['77']) == {Qt.PenStyle.SolidLine}
+        for lyr in layers.values():
+            assert _leg_color(lyr) == '#ff0000'
+            assert _main_symbol(lyr).width() == pytest.approx(2.5)
+
+    def test_stored_style_when_every_leg_is_suppressed(self, omrat, legs):
+        from qgis.PyQt.QtCore import Qt
+        from omrat_utils.layer_styles import export_style
+        from omrat_utils.suppress_leg_dialog import apply_suppression
+        _set_leg_color(legs[0], '#00aa00')
+        omrat.layer_styles = {'legs': export_style(legs[0])}
+        apply_suppression(omrat, '77', True, [], members=['78'])
+        omrat.qgis_geoms.reload_legs_from_segment_data()
+        for lyr in self._by_id(omrat).values():
+            assert _leg_color(lyr) == '#00aa00'
+            assert self._pens(lyr) == {Qt.PenStyle.DashLine}

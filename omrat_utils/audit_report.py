@@ -227,6 +227,28 @@ def _drift_section(drift: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _traffic_gap_rows(data: dict[str, Any]) -> list[str]:
+    """Rows for ships without speed / draught and how the run filled them.
+
+    ``data`` is the project snapshot, taken before ``fill_traffic_gaps``
+    runs on the calculation's own copy, so the count is what was filled.
+    """
+    from compute.traffic_gaps import describe_sources, preview_traffic_gaps
+    summaries = sorted(preview_traffic_gaps(data), key=lambda s: s['quantity'] != 'speed')
+    rows = []
+    for summary in summaries:
+        label = f"Ships without {summary['quantity']}"
+        if summary['cells']:
+            rows.append(
+                f"| {label} | ⚠ {summary['ships']:.0f} ships/yr in {summary['cells']} traffic cell(s); "
+                f"filled with the traffic-weighted mean {summary['quantity']} of the other legs "
+                f"({describe_sources(summary)}) |"
+            )
+        else:
+            rows.append(f"| {label} | none ✓ |")
+    return rows
+
+
 def _completeness_section(data: dict[str, Any]) -> list[str]:
     lines = ["### Input completeness"]
     lines.append("| Input | Status |")
@@ -258,6 +280,7 @@ def _completeness_section(data: dict[str, Any]) -> list[str]:
     lines.append(
         f"| Traffic per leg | {legs_with_traffic}/{n_legs} {status} |"
     )
+    lines.extend(_traffic_gap_rows(data))
 
     junctions = data.get('junctions') or {}
     n_junc = len(junctions) if isinstance(junctions, dict) else 0

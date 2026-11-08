@@ -88,6 +88,7 @@ def run_phases_headless(
     """
     from compute.data_preparation import apply_traffic_scaling
     from compute.run_calculations import Calculation
+    from compute.traffic_gaps import fill_traffic_gaps
     from compute.traffic_redirect import apply_traffic_redirects
 
     cancelled = is_cancelled or (lambda: False)
@@ -105,6 +106,7 @@ def run_phases_headless(
 
     calc = Calculation(StubParent())
     calc.set_progress_callback(_progress)
+    fill_traffic_gaps(data)
     apply_traffic_scaling(data)
     apply_traffic_redirects(data)
     for idx, (name, method) in enumerate(ordered):

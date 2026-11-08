@@ -35,11 +35,15 @@ from defusedxml import minidom as defused_minidom
 
 # Geometry fixing utilities
 try:
+    from shapely import wkt as shp_wkt
     from shapely.geometry import (  # noqa: E501
         Polygon as ShpPolygon,
         MultiPolygon as ShpMultiPolygon,
         GeometryCollection as ShpGeometryCollection,
+        LineString as ShpLineString,
+        box as shp_box,
     )
+    from shapely.ops import split as shp_split
     HAVE_SHAPELY = True
 except Exception:  # nosec B110 B112
     HAVE_SHAPELY = False
@@ -337,10 +341,16 @@ _MAL_DEFAULT_ATTRS = [
 
 
 def _fill_mal_mixed_dist(md_el: ET.Element, seg: dict, dir_num: int) -> None:
+    # OMRAT keeps the mixture weights in percent; IWRAP's own files use
+    # fractions (``weight="1"``) and ``_fill_segment_from_mal`` multiplies by
+    # 100 on import, so export divides by 100.  Writing percent made every
+    # export -> import round trip multiply the weights by 100 (KNOWN_ISSUES
+    # item 3).
     for i in range(1, 4):
         w = _as_float(seg.get(f'weight{dir_num}_{i}', 0))
         if w <= 0:
             continue
+        w = w / 100.0
         item = ET.SubElement(md_el, 'mixed_dist_item')
         item.set('combi', '/Mean/Std. Dev.')
         mean = _as_float(seg.get(f'mean{dir_num}_{i}', 0))
@@ -365,7 +375,7 @@ def _fill_mal_mixed_dist(md_el: ET.Element, seg: dict, dir_num: int) -> None:
         u_item.set('param_0', str(u_min))
         u_item.set('param_1', str(u_max))
         u_item.set('type', 'Uniform')
-        u_item.set('weight', str(u_p))
+        u_item.set('weight', str(u_p / 100.0))
 
 
 def _build_mal_for_direction(
@@ -659,8 +669,66 @@ def _parse_area_entry(dep, idx: int) -> tuple:
     return dep_id, dep_depth, polygon, is_object_area
 
 
+def _hole_free_parts(poly) -> list:
+    """Cut a polygon with holes into hole-free polygons covering the same area.
+
+    An IWRAP ``area_polygon`` is a single ring, so a hole cannot be written.
+    Each hole is opened by a vertical cut through it (a vertical line inside
+    the hole's x-range always crosses it), which removes it from both pieces.
+    """
+    out, todo = [], [poly]
+    while todo:
+        piece = todo.pop()
+        if not piece.interiors:
+            out.append(piece)
+            continue
+        x = piece.interiors[0].centroid.x
+        minx, miny, maxx, maxy = piece.bounds
+        parts = [g for g in shp_split(piece, ShpLineString([(x, miny - 1), (x, maxy + 1)])).geoms
+                 if isinstance(g, ShpPolygon) and g.area > 0]
+        if len(parts) < 2:
+            # Degenerate cut (the line only touches a vertex): halve by boxes.
+            halves = (piece.intersection(shp_box(minx - 1, miny - 1, x, maxy + 1)),
+                      piece.intersection(shp_box(x, miny - 1, maxx + 1, maxy + 1)))
+            parts = [g for h in halves for g in getattr(h, 'geoms', [h])
+                     if isinstance(g, ShpPolygon) and g.area > 0]
+            if len(parts) < 2:
+                out.append(ShpPolygon(piece.exterior))  # cannot cut: keep the outline
+                continue
+        todo.extend(parts)
+    return out
+
+
+def _wkt_area_rings(polygon: str) -> List[List[Tuple[float, float]]] | None:
+    """Outer rings (lat, lon) of hole-free parts of a WKT (multi)polygon, or None.
+
+    Every polygon is kept, holes included: the regex parsers below drop any
+    polygon that has a hole, which lost 59 % of the Kattegatt depth area in
+    an export -> import round trip (KNOWN_ISSUES item 10).
+    """
+    if not HAVE_SHAPELY:
+        return None
+    try:
+        geom = shp_wkt.loads(polygon)
+    except Exception:  # nosec B110 - not WKT: the generic parsers below handle it
+        return None
+    if not geom.is_valid:
+        from shapely import make_valid as _make_valid
+        geom = _make_valid(geom)
+    rings: List[List[Tuple[float, float]]] = []
+    for part in getattr(geom, 'geoms', [geom]):
+        if not isinstance(part, ShpPolygon) or part.is_empty:
+            continue
+        for piece in _hole_free_parts(part):
+            rings.append([(lat, lon) for (lon, lat) in piece.exterior.coords])
+    return rings
+
+
 def _collect_coords_from_polygon(polygon) -> List[List[Tuple[float, float]]]:
     if isinstance(polygon, str):
+        rings = _wkt_area_rings(polygon)
+        if rings is not None:
+            return rings
         if polygon.strip().upper().startswith('MULTIPOLYGON'):
             return parse_wkt_multipolygon(polygon)
         coords = parse_wkt_polygon(polygon)

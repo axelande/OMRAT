@@ -139,6 +139,15 @@ class CalculationTask(QgsTask):
         QgsMessageLog.logMessage('Starting calculation...', 'OMRAT', Qgis.MessageLevel.Info)
         try:
             from compute.data_preparation import apply_traffic_scaling
+            from compute.traffic_gaps import (
+                describe_fill, describe_negative_weights, fill_traffic_gaps, negative_weights)
+            for summary in fill_traffic_gaps(self.data):
+                filled = describe_fill(summary)
+                if filled:
+                    QgsMessageLog.logMessage(filled, 'OMRAT', Qgis.MessageLevel.Warning)
+            negative = describe_negative_weights(negative_weights(self.data.get('segment_data')))
+            if negative:
+                QgsMessageLog.logMessage(negative, 'OMRAT', Qgis.MessageLevel.Warning)
             apply_traffic_scaling(self.data)
             self._apply_traffic_redirects()
             if hasattr(self.calc, 'begin_run'):

@@ -111,6 +111,26 @@ class TestAisUpdateVsDistributionsTab:
         assert plugin.segment_data['2']['ai1'] == 60.0
 
 
+class TestKeepsCheckInterval:
+    """KNOWN_ISSUES 7: AIS does not measure ai, so an update keeps the leg's value."""
+
+    def test_hand_set_ai_survives_the_update(self, plugin):
+        plugin.segment_data['1'] = _seg(ai=60.0)
+        plugin.segment_data['1']['ai2'] = 0.0          # Cat II switched off for direction 2
+        _apply_ais(plugin, '1', [-900.0, -1000.0], [1400.0, 1500.0])
+        assert plugin.segment_data['1']['ai1'] == 60.0
+        assert plugin.segment_data['1']['ai2'] == 0.0
+
+    def test_missing_ai_gets_the_default(self, plugin):
+        seg = _seg()
+        del seg['ai1']
+        seg['ai2'] = 'n/a'
+        plugin.segment_data['1'] = seg
+        _apply_ais(plugin, '1', [-900.0, -1000.0], [1400.0, 1500.0])
+        assert plugin.segment_data['1']['ai1'] == 180
+        assert plugin.segment_data['1']['ai2'] == 180
+
+
 class TestClearModel:
     def test_first_leg_after_clear_keeps_its_weights(self, plugin):
         plugin.clear_model()

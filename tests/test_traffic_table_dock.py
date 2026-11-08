@@ -87,8 +87,10 @@ def test_menu_paste_reports_what_changed(omrat, dock, monkeypatch):
     assert msgs[-1] == f'Pasted 315 cell(s) into {FREQ}, 0 changed'   # ...and it says so
     text = text.replace('\t0\t', '\t9\t', 1)
     acts['Paste'].trigger()
-    assert msgs[-1].endswith('1 changed')
+    assert '1 changed' in msgs[-1]
     assert traffic._current_matrix()[0][0] == 9
+    # The new leg has no speeds / draughts yet: the same report says how the run fills them.
+    assert 'now have ships but no speed or draught' in msgs[-1] and 'Run model fills' in msgs[-1]
 
 
 def test_block_pasted_into_one_cell_editor_lands_as_a_block(omrat, dock, monkeypatch):

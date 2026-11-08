@@ -742,3 +742,94 @@ class TestExcelCopyPaste:
         _show(traffic)
         labels = [a.text() for a in traffic._build_table_menu().actions()]
         assert labels == ['Copy', 'Copy table with headers', 'Paste', 'Clear', 'Select all']
+
+
+# ---------------------------------------------------------------------------
+# Ships without speed / draught (KNOWN_ISSUES 14)
+# ---------------------------------------------------------------------------
+
+SPEED = 'Speed (knots)'
+DRAUGHT = 'Draught (meters)'
+
+
+def _messages(traffic):
+    """``(text, kwargs)`` of every message-bar call since the last reset."""
+    return [(c.args[0], c.kwargs) for c in traffic.omrat.notifier.display_message.call_args_list]
+
+
+class TestShipsWithoutSpeedOrDraught:
+    """Salvorev LEG_9_1_c: frequencies edited by hand put ships in cells
+    whose speed was ``inf``; the tab now warns and says how the run fills
+    them (``compute.traffic_gaps.FILL_RULE``)."""
+
+    def test_typing_ships_into_a_cell_without_speed_warns_once(self, traffic, locale_en):
+        from compute.traffic_gaps import FILL_RULE
+        from omrat_utils.handle_traffic import GAP_WARNING_S
+        _show(traffic)
+        traffic.omrat.notifier.display_message.reset_mock()
+        tw = traffic.dw.twTrafficData
+        tw.item(0, 1).setText('5')
+        (text, kwargs), = _messages(traffic)
+        assert text.startswith('LEG_1_L1 East: 1 cell(s) now have ships but no speed or draught (Cargo 25 - 50). ')
+        assert FILL_RULE in text
+        assert kwargs['duration'] == GAP_WARNING_S and 'level' in kwargs
+        tw.item(1, 0).setText('3')                 # same leg / direction: no second warning
+        assert len(_messages(traffic)) == 1
+
+    def test_warning_comes_back_once_the_gaps_are_filled(self, traffic, locale_en):
+        _show(traffic)
+        tw = traffic.dw.twTrafficData
+        tw.item(0, 0).setText('5')
+        _show(traffic, SPEED)
+        tw.item(0, 0).setText('12')
+        _show(traffic, DRAUGHT)
+        tw.item(0, 0).setText('6')                 # no gaps left on L1 / East
+        _show(traffic)
+        traffic.omrat.notifier.display_message.reset_mock()
+        tw.item(1, 1).setText('4')
+        (text, _kwargs), = _messages(traffic)
+        assert '(Tanker 25 - 50)' in text
+
+    def test_no_warning_when_the_cell_has_speed_and_draught(self, traffic, locale_en):
+        data = _show(traffic)
+        data[SPEED][0][0], data[DRAUGHT][0][0] = 12.0, 6.0
+        traffic.omrat.notifier.display_message.reset_mock()
+        traffic.dw.twTrafficData.item(0, 0).setText('5')
+        assert _messages(traffic) == []
+
+    def test_paste_report_includes_the_warning(self, traffic, locale_en):
+        _show(traffic)
+        traffic.omrat.notifier.display_message.reset_mock()
+        _select(traffic, [(0, 0)])
+        traffic.paste_clipboard('5\t6')
+        (text, kwargs), = _messages(traffic)
+        assert text.startswith(f'Pasted 2 cell(s) into {FREQ}, 2 changed. LEG_1_L1 East: 2 cell(s) now have '
+                               'ships but no speed or draught (Cargo 0 - 25, Cargo 25 - 50). ')
+        assert 'level' in kwargs                    # a warning, not an info message
+
+    def test_deleting_the_speed_of_ships_warns(self, traffic, locale_en):
+        data = _show(traffic)
+        data[FREQ][0][0], data[SPEED][0][0], data[DRAUGHT][0][0] = 5, 12.0, 6.0
+        _show(traffic, SPEED)
+        traffic.omrat.notifier.display_message.reset_mock()
+        _select(traffic, [(0, 0)])
+        traffic.clear_selection()
+        (text, _kwargs), = _messages(traffic)
+        assert 'now have ships but no speed (Cargo 0 - 25)' in text
+        assert text.endswith(f'Enter {SPEED} for these cells to use your own values.')
+
+    def test_tooltips_explain_the_fill(self, traffic, locale_en):
+        from compute.traffic_gaps import describe_gap_cell
+        from omrat_utils.handle_traffic import _NO_OBSERVATION_TIP
+        data = _show(traffic)
+        data[FREQ][0][0] = 5
+        data[DRAUGHT][0][0] = 6.0
+        _show(traffic)
+        tw = traffic.dw.twTrafficData
+        assert tw.item(0, 0).toolTip() == describe_gap_cell(['speed'])
+        assert tw.item(0, 1).toolTip() == ''
+        _show(traffic, SPEED)
+        assert tw.item(0, 0).toolTip() == describe_gap_cell(['speed'])
+        assert tw.item(0, 1).toolTip() == _NO_OBSERVATION_TIP      # no ships: nothing to fill
+        tw.item(0, 0).setText('11')
+        assert tw.item(0, 0).toolTip() == ''

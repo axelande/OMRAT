@@ -6,6 +6,7 @@ and is the only place that touches UI widgets or mutates shared plugin state.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -31,13 +32,18 @@ class AisUpdateTask(QgsTask):
         leg_dirs: dict[str, list[str]],
         fetch_junctions: bool = True,
         bulk: bool = False,
+        length_bounds: list[tuple[float, float]] | None = None,
     ) -> None:
         super().__init__("OMRAT: Fetching AIS data", QgsTask.Flag.CanCancel)
         self.ais = ais
         self.legs = legs
         self.seg_table = seg_table
+        # Matrix size = ship types x length classes (never the Traffic
+        # table's size, which has an extra Total row and column).
         self.rows = rows
         self.cols = cols
+        # (min, max) of each length class; empty -> 25 m classes over ``cols``.
+        self.length_bounds = list(length_bounds or [])
         self.variables = variables
         self.var_defaults = var_defaults
         self.leg_dirs = leg_dirs
@@ -85,6 +91,7 @@ class AisUpdateTask(QgsTask):
         self, td_block: dict, dirs: list, row: tuple,
         leg_bearing: float, line1: list, line2: list,
     ) -> None:
+        from omrat_utils.ais_binning import add_observations, length_bin
         from omrat_utils.handle_ais import close_to_line, resolve_ship_type
         # ``sh_type`` is the custom IMO/MMSI mapping or external-lookup value
         # (NULL when neither is configured); it wins over the AIS code.
@@ -105,22 +112,13 @@ class AisUpdateTask(QgsTask):
         else:
             return
         dir_ = dirs[0] if l1 else dirs[1]
-        if loa is None:
-            loa = 100
-        loa = int(loa)
         freq_data = td_block[dir_]['Frequency (ships/year)']
         n_cats = len(freq_data[0]) if freq_data else 0
-        loa_cat = next((i for i in range(n_cats) if i * 25 < loa <= i * 25 + 25), max(n_cats - 1, 0))
+        bounds = self.length_bounds if len(self.length_bounds) == n_cats else []
+        loa_cat = length_bin(loa, bounds, n_cats)
         type_cat = resolve_ship_type(sh_type, toc)
         td_block[dir_]['Frequency (ships/year)'][type_cat][loa_cat] += self.multiplier
-        if sog is not None:
-            td_block[dir_]['Speed (knots)'][type_cat][loa_cat].append(float(sog))
-        if air_draught is not None:
-            td_block[dir_]['Ship heights (meters)'][type_cat][loa_cat].append(float(air_draught))
-        if beam is not None:
-            td_block[dir_]['Ship Beam (meters)'][type_cat][loa_cat].append(float(beam))
-        if draugt is not None:
-            td_block[dir_]['Draught (meters)'][type_cat][loa_cat].append(float(draugt))
+        add_observations(td_block[dir_], type_cat, loa_cat, sog, air_draught, beam, draugt)
 
     def _collapse_td_block(self, td_block: dict) -> None:
         for di in td_block:
@@ -183,7 +181,9 @@ class AisUpdateTask(QgsTask):
     def run(self) -> bool:
         try:
             ais = self.ais
-            if ais.recalc_to_full_year:
+            # No legs = a junction-only recount (every leg locked): the
+            # shares do not depend on the annualisation.
+            if ais.recalc_to_full_year and self.legs:
                 info = ais.compute_year_multiplier()
                 if info is not None:
                     self.multiplier = info[0]
@@ -241,8 +241,17 @@ class AisUpdateTask(QgsTask):
             sd[f'u_min{j}'] = 0
             sd[f'u_max{j}'] = 0
             sd[f'u_p{j}'] = 0
-        sd['ai1'] = 180
-        sd['ai2'] = 180
+        # The mean time between position checks is not something AIS
+        # measures: keep the leg's own value (a hand-set 60 s, or 0 to
+        # switch Cat II off) and only seed the default on a new leg.
+        # Every update used to reset it to 180 s (KNOWN_ISSUES 7).
+        for key in ('ai1', 'ai2'):
+            try:
+                keep = math.isfinite(float(sd.get(key))) and float(sd.get(key)) >= 0
+            except (TypeError, ValueError):
+                keep = False
+            if not keep:
+                sd[key] = 180
         # The leg now carries its own AIS traffic: it is no longer a copy.
         # Cleared before ``_refresh_junction_registry`` so the junction
         # defaults stop forcing continuation with the old source.
@@ -390,6 +399,20 @@ class AisUpdateTask(QgsTask):
                 qg.refresh_distribution_curves(list(self.results))
             except Exception:  # nosec B110 B112
                 pass
+        self._notify_done(omrat)
         self._prompt_remove_bad_legs(omrat)
         if self.bulk:
             self._open_junction_matrix(omrat)
+
+    def _notify_done(self, omrat: Any) -> None:
+        """Say how many legs got new traffic, with a *Traffic report* button."""
+        updated = [k for k in self.results if k in (getattr(omrat, 'segment_data', None) or {})]
+        if not updated:
+            return
+        try:
+            from omrat_utils.traffic_report_dialog import notify_with_report
+            what = omrat.tr("Update all distributions") if self.bulk else omrat.tr("Update AIS")
+            notify_with_report(omrat, omrat.tr("{what} finished: new traffic on {n} leg(s).").format(
+                what=what, n=len(updated)), duration=10)
+        except Exception:  # nosec B110 B112
+            pass

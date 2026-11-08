@@ -227,12 +227,13 @@ class TestRunPoweredAllision:
         data_tall = _minimal_powered_data()
         r_tall = allision_host.run_powered_allision_model(data_tall)
 
-        # Now make the ship height 0 -> always below a 20m structure.
+        # Now make the ships 5 m high -> below a 20 m structure.  (0 m means
+        # an unknown height, which gets no clearance: KNOWN_ISSUES item 4.)
         data_short = _minimal_powered_data()
         for leg in data_short['traffic_data'].values():
             for di in leg.values():
                 h = di['Ship heights (meters)']
-                di['Ship heights (meters)'] = [[0.0 for _ in row] for row in h]
+                di['Ship heights (meters)'] = [[5.0 for _ in row] for row in h]
         r_short = allision_host.run_powered_allision_model(data_short)
         if r_tall > 0.0:
             assert r_short < r_tall
@@ -420,9 +421,20 @@ class TestCategoryOneAllision:
         for leg in data['traffic_data'].values():
             for di in leg.values():
                 di['Ship heights (meters)'] = [
-                    [0.0 for _ in row] for row in di['Ship heights (meters)']
+                    [5.0 for _ in row] for row in di['Ship heights (meters)']
                 ]
         assert allision_host.run_powered_allision_model(data) == 0.0
+
+    def test_unknown_ship_height_gets_no_clearance(self, allision_host):
+        """0 m (IWRAP import) and inf (AIS update) mean unknown: every ship counts."""
+        for unknown in (0.0, float('inf')):
+            data = self._in_lane_allision_data(height='20')
+            for leg in data['traffic_data'].values():
+                for di in leg.values():
+                    di['Ship heights (meters)'] = [
+                        [unknown for _ in row] for row in di['Ship heights (meters)']
+                    ]
+            assert allision_host.run_powered_allision_model(data) > 0.0
 
     def test_zero_height_structure_counts_every_ship(self, allision_host):
         data = self._in_lane_allision_data(height='0')

@@ -273,8 +273,15 @@ button (you get a message instead) and the global **Update all
 distributions** pass (skipped legs are listed in the message bar).
 The Traffic tab marks locked legs with ``[locked]`` in the leg
 selector.  You can tick or untick the box by hand at any time, for
-example to protect a leg whose matrices you edited manually.  The
-flag and the source leg are saved in the project file.
+example to protect a leg whose matrices or lateral distributions you
+edited manually.  The flag and the source leg are saved in the project
+file.
+
+With **every** leg locked, **Update all distributions** re-counts only
+the junction transition matrices from AIS and leaves all traffic and
+distributions as they are.  An AIS update never changes a leg's
+**Mean time between checks** (``ai``): AIS does not measure it, so a
+value you set (or 0, which switches Category II off) is kept.
 
 **Unlocking a copy releases it.**  The lock and the copy belong
 together: an unlocked copy is replaced by the leg's own AIS traffic on
@@ -632,7 +639,7 @@ Checking the set-up
 ~~~~~~~~~~~~~~~~~~~
 
 These tools are easy to lose track of in a busy junction area.  Check a
-scenario in three places.
+scenario in four places.
 
 **1. The leg labels.**  Every leg label in the Copy traffic and Suppress
 leg dialogs and in the Traffic tab's leg selector says where the leg's
@@ -672,7 +679,40 @@ follows the leg when it is moved and disappears when it is removed.
 The layer follows every change and is not saved; press the button again
 to remove it.
 
-**3. The QGIS log** (*View -> Panels -> Log Messages*, tab *OMRAT*).
+With many copies and suppressed legs, all the arrows at once get hard to
+read.  While the view is on, a **Show links** list appears next to
+**Route** / **Next leg no.** to show fewer arrows:
+
+* **All links** -- every arrow (the default).
+* **Selected leg** -- only the arrows to and from the leg you click in
+  the route table.
+* **One group at a time** -- the numbered entries.  Example 3 has two
+  (9 arrows in all):
+
+  .. code-block:: text
+
+     1/2  LEG_7_3_b suppressed -> LEG_2_6, LEG_2_3_b +2, +3 leg(s) with it
+     2/2  LEG_2_3_a copied to LEG_2_3_c, LEG_2_3_b
+
+  A group is a leg whose traffic was copied, with all its copies (also
+  copies of copies), or a suppressed leg with the legs its ships move to
+  and the legs suppressed with it.  Every arrow is in exactly one group.
+  The group's legs are highlighted (the copied or suppressed leg yellow,
+  the others orange), and the map zooms to them when they are not all in
+  view.  Step through the groups with the arrow buttons on either side of
+  the list.
+
+The list follows every change.  If the group you are looking at goes
+away, the list moves to the group that took its place.
+
+**3. The traffic report.**  **Traffic report...** (Traffic Data tab or
+File menu, and the button in the message after Copy traffic / Suppress
+leg) lists every leg with its ships per year as stored and *in the
+calculation*, where its traffic comes from, each suppressed leg's
+moves, and warns about copies that no longer match their source and
+directions whose ships have no target.  See :ref:`traffic-report`.
+
+**4. The QGIS log** (*View -> Panels -> Log Messages*, tab *OMRAT*).
 Every run lists each move, for example::
 
    Suppressed leg 27 (dir 1): moved 497.0 ships/year (100 %) to leg 6 (dir 1)
@@ -956,6 +996,47 @@ no ships there (stored as ``inf``); type a value to set one.  Cells you
 do not change keep their stored value exactly -- the table shows two
 decimals, but the full value is kept.
 
+.. _traffic-gaps:
+
+Ships without a speed or draught
+--------------------------------
+
+Every matrix of a leg describes the *same* ships.  An AIS refresh fills
+them together, but an edit changes only the matrix on screen: type or
+paste ships into a Frequency cell, and Speed and Draught still hold
+what the AIS saw in that cell -- often nothing, if those ships never
+crossed this leg's passage line.  (A project once had a leg's Frequency
+replaced by the sum of the two legs feeding it; 27 ships/year landed in
+cells with no speed, and every head-on, overtaking and merging result
+came out ``nan``.)
+
+OMRAT tells you where this happens and what it does about it:
+
+* **Warning after the edit.**  When an edit leaves cells with ships but
+  no speed or draught, the message bar names the leg, direction and
+  cells, for example *"LEG_9_1_c East going: 11 cell(s) now have ships
+  but no speed or draught (Fishing 25.0 - 50.0, ...)"*.  Typing warns
+  once per leg and direction (until its gaps are filled); a paste puts
+  it in its own report every time.
+* **Tooltip on the cell.**  Hover a Frequency cell, or the blank Speed /
+  Draught cell, to see what is missing and how it will be filled.
+* **What Run model does.**  A missing speed or draught (blank, ``0`` or
+  ``inf``) is filled with the traffic-weighted mean of the **same ship
+  type and length on the other legs**; if no other leg has that cell,
+  the same ship type over all lengths, then the same length over all
+  types, and as a last resort 10 kn / 5 m.  Your project is not
+  changed -- only the run's own copy.
+* **In the results.**  The report's *Input completeness* table has the
+  rows *Ships without speed* and *Ships without draught* (ships/year,
+  cells and where the values came from), and the QGIS log
+  (**OMRAT** tab) says the same for every run.
+
+To use your own values, enter them in the Speed / Draught tables for
+those cells.  If the frequencies came from somewhere else on purpose
+(for example the sum of two incoming legs), check that the leg's own
+AIS count is not the better number: an AIS update replaces hand-edited
+frequencies.
+
 Matrix shape
 ------------
 
@@ -1073,6 +1154,90 @@ column, else the broadcast AIS code.  Legs already fetched keep their
 old categories until you refresh them, so run **Update all
 distributions** after changing the mapping.
 
+.. _traffic-report:
+
+Traffic report
+--------------
+
+The Traffic Data tab shows one leg, one direction and one variable at a
+time.  For the overview -- how many ships are on each leg, where that
+traffic comes from, and whether it is what you expected -- press
+**Traffic report...** (top right of the Traffic Data tab, or
+**File -> Traffic report...**).  OMRAT asks where to save the page,
+suggesting ``<project>_traffic_report_<date>_<time>.html`` next to the
+project file, writes it and opens it in your browser.  The messages
+after **Update AIS**, **Update all distributions**, **Copy traffic** and
+**Suppress leg** have a **Traffic report** button too, so you can check
+the result straight away.  Because the file name carries the time, a
+report from before a copy and one from after it sit side by side.
+
+The report is one self-contained HTML file: it opens in any browser,
+without QGIS or OMRAT and without an internet connection, so it can be
+mailed or attached as it is.  The browser's **Print -> Save as PDF**
+(or the **Print / Save as PDF** button on the page) gives a PDF with
+every leg's details opened.  It shows the model as it is when the
+report is made, unsaved changes included.
+
+What the page holds, top to bottom:
+
+* **Key figures** -- the number of legs (in the calculation /
+  suppressed), the busiest leg, legs without ships, copied and locked
+  legs, and the number of warnings and notes.
+* **Things to check** -- automatic checks, *warnings* (probably wrong)
+  first, then *notes* (check that it is expected), each with links to
+  the legs it is about:
+
+  - a leg in the calculation without any ships;
+  - ships in one direction only (fine for a one-way lane);
+  - a copy that no longer carries the same traffic as its source leg
+    (one of them changed after the copy), or whose source leg was
+    removed;
+  - two legs that meet alone at a waypoint -- so the same ships sail
+    both -- but differ by more than 1.5 times and at least 100
+    ships/year: a passage line in a polluted spot, typically next to a
+    crossing;
+  - ships without a speed or draught, and how Run model fills them
+    (see :ref:`traffic-gaps`; a warning only when more than 5 % of a
+    leg's ships lack it);
+  - traffic scaling other than 100 %;
+  - each suppressed leg and where its ships go, and a direction whose
+    ships have no target (they are left out of the calculation);
+  - locked legs, which **Update all distributions** leaves as they are.
+
+  *What was checked* lists every check and how many it found.
+* **Map** -- every leg with one band per direction, on the side the
+  ships keep to (starboard), as wide as its ships per year; a white
+  arrow points the way they sail.  The colour says where the traffic
+  comes from: blue own data, aqua copied traffic, orange ships moved
+  from a suppressed leg, grey suppressed; a dashed red line is a leg
+  without ships.  When scaling or suppressed legs change anything,
+  switch between **As stored** and **In the calculation**.  Hover a
+  band for the numbers, click it to jump to the leg's details.  Leg
+  names can be switched on and off (off by default above 25 legs).
+* **Legs** -- one row per leg: length, ships/year per direction and in
+  total (with a bar), the total *in the calculation* when that differs,
+  where the traffic comes from, the three main ship types, the mean
+  speed and draught, and the number of warnings / notes.  Click a
+  header to sort, type in the box to filter.
+* **Ship types per leg** -- ships/year per ship type and leg, shaded
+  darker for more ships; only ship types with ships somewhere are shown.
+* **Leg details** -- collapsed per leg: the facts, its checks, ships
+  moved in from suppressed legs, and per direction the ship type x
+  length matrix (only rows and columns with ships) with the mean speed
+  and draught per ship type.
+
+*As stored* is what the Traffic Data tab holds.  *In the calculation*
+repeats what Run model does to its own copy: every cell times its
+**Scaling (%)**, then suppressed legs left out and their ships added to
+the target legs.  Ships are counted at each leg's own passage line, so
+one ship that sails three legs is counted on each of them -- adding up
+the legs does not give a number of ships, and the report never does.
+
+**Download CSV (Excel)** under the leg table and the ship-type table
+saves that table as a CSV file.  It uses the decimal separator of your
+computer, with ``;`` between the fields when that is a comma, as Excel
+expects.
+
 
 Depths tab
 ===========
@@ -1121,6 +1286,50 @@ How depths drive the calculation
   (:math:`N_I = P_{c,I} Q m`, no distance term); the shallowest depth
   encountered along a ray cast *past* the leg's bend gives the
   Category-II contribution (:math:`N_{II} = P_c Q m \exp(-d/(a_i V))`).
+
+.. _simplify-depths:
+
+Simplifying the depth layer
+---------------------------
+
+The drift model works through every depth class for each leg, direction
+and wind sector, so a detailed depth layer is what makes a drifting run
+slow.  **Simplify...** (next to **Remove**) makes a lighter layer that
+gives the same result:
+
+* **Everywhere**, every class down to the *detail limit* is kept.  The
+  dialog suggests the first class deeper than the deepest draught in
+  the traffic.  That is all grounding needs: the anchoring area always
+  encloses the grounding area, so a drifting ship crosses it first, and
+  where the anchoring area starts does not change the grounding result.
+* **In the drift corridors that reach a structure**, every class is
+  kept.  A ship that can anchor anywhere between its leg and a structure
+  never reaches the structure, and large ships anchor in 40-70 m, so all
+  depths on the way matter.  For every leg, travel direction and drift
+  direction of the wind rose the tool builds the drift model's own
+  corridor (the leg, five standard deviations of its lateral
+  distribution to each side, swept the length of the drift), keeps the
+  corridors that touch a structure and cuts each just past it.  The
+  default length is the **model reach**: the drift by which 99 % of the
+  ships are repaired (at most ten times the longest leg).  The drift
+  model reads nothing beyond it, so the 99.9 % / 99.99 % options or a
+  length you type only add margin.  The corridors are drawn dashed on
+  the map while the dialog is open.
+* Deeper water outside the corridors is removed.
+
+The depth areas in use before the first simplification are kept as the
+hidden layer **Depth Areas (before simplification)**.  Running the tool
+again with other settings always starts from them, and **Restore
+original** puts them back (while QGIS is open; the saved project holds
+whichever depth areas are on the tab).  Simplify again after changing
+the legs, the lateral distributions, the wind rose or the repair time.
+
+On the Kattegat project (17 classes, Anholt wind farm) 57 corridors from
+9 legs reach the farm at the model reach (5.0 nm): about 1,700 km2,
+classes 17 -> 12.  Checked against the full layer: on the 9 legs that
+reach the farm the drifting allision is identical and the grounding
+differs by 0.003 %; on ``tests/example_data/proj.omrat`` both are
+identical.
 
 
 Objects tab

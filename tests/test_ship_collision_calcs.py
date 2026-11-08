@@ -110,6 +110,34 @@ class TestCalcHeadOnCollisions:
     # always pre-averaged to scalars by handle_ais.convert_list2avg before
     # reaching the ship-collision pipeline.
 
+    def test_missing_speed_does_not_make_the_total_nan(self, mixin):
+        """KNOWN_ISSUES 14: an ``inf`` speed in a cell with ships gave
+        ``Q/V * V_rel = 0 * inf = NaN`` and the whole head-on total NaN."""
+        lengths = [{'min': 0, 'max': 25, 'label': '0-25'},
+                   {'min': 25, 'max': 50, 'label': '25-50'}]
+        kwargs = dict(seg_info=_segment_data(), leg_length_m=10_000.0,
+                      pc_headon=4.9e-5, length_intervals=lengths)
+        missing = _two_dir_traffic(speed_list_for_one_cell=float('inf'))
+        at_default = _two_dir_traffic(speed_list_for_one_cell=10.0)
+        out = mixin._calc_head_on_collisions(leg_dirs=missing, **kwargs)
+        assert out > 0.0
+        assert out == pytest.approx(mixin._calc_head_on_collisions(leg_dirs=at_default, **kwargs))
+
+
+class TestExtractSpeed:
+    KN = 1852.0 / 3600.0
+
+    @pytest.mark.parametrize('stored', [float('inf'), float('nan'), 0.0, -3.0, 'x', []])
+    def test_missing_speed_falls_back_to_10_kn(self, stored):
+        assert ShipCollisionModelMixin._extract_speed_ms([[stored]], 0, 0) == pytest.approx(10.0 * self.KN)
+
+    @pytest.mark.parametrize('stored, knots', [(12.0, 12.0), (7, 7.0), ([8.0, 12.0], 10.0)])
+    def test_valid_speed_is_used(self, stored, knots):
+        assert ShipCollisionModelMixin._extract_speed_ms([[stored]], 0, 0) == pytest.approx(knots * self.KN)
+
+    def test_cell_outside_the_matrix_uses_10_kn(self):
+        assert ShipCollisionModelMixin._extract_speed_ms([[12.0]], 3, 0) == pytest.approx(10.0 * self.KN)
+
 
 # ---------------------------------------------------------------------------
 # _calc_overtaking_collisions

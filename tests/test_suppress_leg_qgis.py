@@ -276,3 +276,66 @@ def test_copy_tip_is_shown_once_and_can_open_copy_traffic(hqi, legs, monkeypatch
     assert len(shown) == 1
     # Windows QSettings returns the flag as the string "true".
     assert suppress_leg_dialog.maybe_show_copy_tip(hqi.omrat, settings=_FakeSettings('true')) is False
+
+
+def test_traffic_links_one_group_at_a_time(hqi, legs):
+    """The view chooser under the buttons draws all links, the selected
+    leg's links or one group; the arrows step through the groups."""
+    from qgis.core import QgsRectangle
+    from omrat_utils.suppress_leg_dialog import apply_suppression
+    from omrat_utils.traffic_links import VIEW_ALL, VIEW_LEG
+    om = hqi.omrat
+    mw = om.main_widget
+    combo = mw.cbTrafficLinkView
+    assert combo.receivers(combo.currentIndexChanged) > 0
+    assert combo.isHidden() and mw.pbTrafficLinkNext.isHidden()     # only with the view on
+    om.segment_data['92'].update({'traffic_source': '91', 'traffic_locked': True})
+    apply_suppression(om, '91', True, [{'from_dir': 0, 'leg': '92', 'dir': 0, 'share': 100}])
+
+    def drawn():
+        return sorted((f['kind'], f['src'], f['dst']) for f in hqi.traffic_links_layer.getFeatures())
+
+    hqi.show_traffic_links(True)
+    try:
+        assert not combo.isHidden()
+        assert [combo.itemData(i) for i in range(combo.count())] == [VIEW_ALL, VIEW_LEG, 'copy:91', 'suppress:91']
+        assert drawn() == [('copy', '91', '92'), ('redirect', '91', '92')]
+
+        canvas = om.iface.mapCanvas()
+        canvas.setExtent(QgsRectangle(14.0, 54.0, 14.001, 54.001))        # far from the legs
+        mw.pbTrafficLinkNext.click()
+        assert combo.currentData() == 'copy:91'
+        assert drawn() == [('copy', '91', '92')]
+        assert hqi.highlighted_legs() == 2                                  # source + copy
+        bands = hqi._link_bands[0].asGeometry().boundingBox()
+        bands.combineExtentWith(hqi._link_bands[1].asGeometry().boundingBox())
+        assert canvas.extent().contains(bands)                              # brought into view
+        mw.pbTrafficLinkNext.click()
+        assert drawn() == [('redirect', '91', '92')]
+        mw.pbTrafficLinkNext.click()                                        # wraps around
+        assert combo.currentData() == 'copy:91'
+
+        # A group that goes away is replaced by the one now in its place.
+        om.segment_data['92'].pop('traffic_source')
+        hqi.refresh_traffic_links()
+        assert combo.currentData() == 'suppress:91'
+        assert drawn() == [('redirect', '91', '92')]
+
+        # "Selected leg": the route-table leg's links, nothing before a click.
+        hqi._clear_link_highlight()
+        combo.setCurrentIndex(combo.findData(VIEW_LEG))
+        assert drawn() == []
+        hqi.highlight_leg('92')
+        assert drawn() == [('redirect', '91', '92')]
+        combo.setCurrentIndex(combo.findData(VIEW_ALL))
+        assert drawn() == [('redirect', '91', '92')]
+        assert hqi.highlighted_legs() == 2                                  # still the route-table leg
+
+        # Switching the view off drops a group highlight, not the leg's.
+        mw.pbTrafficLinkPrev.click()
+        assert hqi._highlight_group == 'suppress:91'
+    finally:
+        hqi.show_traffic_links(False)
+    assert combo.isHidden()
+    assert hqi._highlight_group is None
+    assert hqi._highlight_seg == '92' and hqi.highlighted_legs() == 2

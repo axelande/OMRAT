@@ -601,6 +601,19 @@ class OMRAT(
                 wp_dlg.close()
             except RuntimeError:
                 pass
+        # The depth simplification tool draws its zone and keeps the original depths as layers.
+        ds_dlg = getattr(self, '_depth_simplify_dlg', None)
+        if ds_dlg is not None:
+            try:
+                ds_dlg.close()
+            except RuntimeError:
+                pass
+        try:
+            from omrat_utils.depth_simplify_dialog import BEFORE_LAYER_NAME, ZONE_LAYER_NAME, remove_layer
+            remove_layer(ZONE_LAYER_NAME)
+            remove_layer(BEFORE_LAYER_NAME)
+        except Exception:  # nosec B110 B112
+            pass
         self.traffic.unload()
         self.ais.unload()
         self.object.unload()
@@ -1209,10 +1222,20 @@ class OMRAT(
             self.junctions.rebuild_from_segments(prefer_user=True)
         open_junction_dialog(self)
 
+    def open_depth_simplify(self) -> None:
+        """Open the depth simplification tool (Depths tab)."""
+        from omrat_utils.depth_simplify_dialog import open_depth_simplify
+        open_depth_simplify(self)
+
     def open_waypoint_editor(self) -> None:
         """Open the waypoint editor (connect / disconnect leg ends)."""
         from omrat_utils.waypoint_editor_dialog import open_waypoint_editor
         open_waypoint_editor(self)
+
+    def open_traffic_report(self) -> None:
+        """Save the traffic on every leg as an HTML report and open it."""
+        from omrat_utils.traffic_report_dialog import open_traffic_report
+        open_traffic_report(self)
 
     _DOCS_BASE_URL = "https://axelande.github.io/OMRAT/"
 
@@ -1300,6 +1323,9 @@ class OMRAT(
             self.main_widget.pbSuppressLeg.clicked.connect(self.qgis_geoms.open_suppress_leg_dialog)
         if hasattr(self.main_widget, 'pbTrafficLinks'):
             self.main_widget.pbTrafficLinks.toggled.connect(self.qgis_geoms.show_traffic_links)
+            self.qgis_geoms.wire_traffic_link_view()
+        if hasattr(self.main_widget, 'pbTrafficReport'):
+            self.main_widget.pbTrafficReport.clicked.connect(lambda _checked=False: self.open_traffic_report())
         self.main_widget.pbUpdateAIS.clicked.connect(self.update_ais)
         self.main_widget.pbGetGebcoDephts.clicked.connect(self.object.obtain_gebco_data)
         self.main_widget.PBUpdateDepthIntervals.clicked.connect(self.object.update_depth_intervals)
@@ -1307,6 +1333,7 @@ class OMRAT(
     def _build_menubar(self):
         menubar = QMenuBar(self.main_widget)
         menubar.setMinimumSize(320, 20)
+        self.main_widget.set_menu_bar(menubar)
         fileMenu = menubar.addMenu('File')
         fileMenu.addAction("Save", self.save_work)
         fileMenu.addAction("Save as...", self.save_work_as)
@@ -1314,6 +1341,8 @@ class OMRAT(
         fileMenu.addSeparator()
         fileMenu.addAction("Export to IWRAP XML", self.export_to_iwrap)
         fileMenu.addAction("Import from IWRAP XML", self.import_from_iwrap)
+        fileMenu.addSeparator()
+        fileMenu.addAction("Traffic report...", self.open_traffic_report)
         sm = menubar.addMenu('Settings')
         sm.addAction("Drift settings", self.open_drift)
         sm.addAction("Ship Categories", self.open_ship_categories)
@@ -1345,6 +1374,8 @@ class OMRAT(
         self.main_widget.pbAddSimpleDepth.clicked.connect(self.object.add_simple_depth)
         self.main_widget.pbLoadDepth.clicked.connect(self.object.load_depths)
         self.main_widget.pbRemoveDepth.clicked.connect(self.object.remove_depth)
+        if hasattr(self.main_widget, 'pbSimplifyDepth'):
+            self.main_widget.pbSimplifyDepth.clicked.connect(self.open_depth_simplify)
         self.main_widget.pbAddSimpleObject.clicked.connect(self.object.add_simple_object)
         self.main_widget.pbLoadObject.clicked.connect(self.object.load_objects)
         self.main_widget.pbRemoveObject.clicked.connect(self.object.remove_object)

@@ -269,6 +269,33 @@ class TestAdjustWeights:
         ])
         assert total == pytest.approx(100.0, abs=1e-6)
 
+    @pytest.mark.parametrize('typed, kept', [('140', 100.0), ('-20', 0.0)])
+    def test_typed_weight_stays_within_0_and_100(self, dist_quiet, typed, kept):
+        """KNOWN_ISSUES 6: a weight over 100 used to push the others negative."""
+        d = dist_quiet
+        d.adjust_weights = type(d).adjust_weights.__get__(d)
+        d.dw.leNormWeight1_1.setText(typed)
+        d.dw.leNormWeight1_2.setText('30')
+        d.dw.leNormWeight1_3.setText('20')
+        d.dw.sbUniformP1.setValue(0)
+        d.adjust_weights(d.dw.leNormWeight1_1)
+        values = [float(d.dw.leNormWeight1_1.text()), float(d.dw.leNormWeight1_2.text()),
+                  float(d.dw.leNormWeight1_3.text()), float(d.dw.sbUniformP1.value())]
+        assert values[0] == kept
+        assert min(values) >= 0.0
+        assert sum(values) == pytest.approx(100.0, abs=1e-6)
+
+    def test_negative_stored_weight_counts_as_zero(self, dist_quiet):
+        d = dist_quiet
+        d.adjust_weights = type(d).adjust_weights.__get__(d)
+        d.dw.leNormWeight1_1.setText('50')
+        d.dw.leNormWeight1_2.setText('-4900')
+        d.dw.leNormWeight1_3.setText('50')
+        d.dw.sbUniformP1.setValue(0)
+        d.adjust_weights(d.dw.leNormWeight1_1)
+        assert float(d.dw.leNormWeight1_2.text()) == 0.0
+        assert float(d.dw.leNormWeight1_3.text()) == pytest.approx(50.0)
+
     def test_other_total_zero_distributes_equally(self, dist_quiet):
         d = dist_quiet
         d.adjust_weights = type(d).adjust_weights.__get__(d)

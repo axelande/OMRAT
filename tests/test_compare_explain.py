@@ -269,6 +269,21 @@ def test_cancel_returns_none():
     assert ce.explain_collisions(a, b, is_cancelled=lambda: True) is None
 
 
+def test_missing_speed_is_filled_like_run_model():
+    """KNOWN_ISSUES 14 (Salvorev): ships in a cell whose speed is ``inf``
+    made head-on / overtaking / merging NaN.  ``run_collision_model`` fills
+    the speed from the same cell on the other legs first (12 kn here; the
+    collision model's own 10 kn fallback would give a different total)."""
+    import math
+    reference = ce.run_collision_model(ce.model_data(_project()))['totals']
+    proj = _project()
+    proj['traffic_data']['2']['East going']['Speed (knots)'] = [[math.inf]]
+    totals = ce.run_collision_model(ce.model_data(proj))['totals']
+    for key in ce.TYPES + (ce.TOTAL,):
+        assert math.isfinite(totals[key]), key
+        assert totals[key] == pytest.approx(reference[key], rel=1e-12), key
+
+
 def test_identical_runs():
     a = _project()
     expl = ce.explain_collisions(a, copy.deepcopy(a))

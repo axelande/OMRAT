@@ -700,6 +700,11 @@ def run_sensitivity(
         t0 = time.monotonic()
         partial = run_phases(perturbed, item.phases)
         seconds = time.monotonic() - t0
+        if cancelled():
+            # A run cancelled half-way returns what it had (often zeros);
+            # never store it as a result (22 Sep report: speed +20 % -> 0).
+            result.cancelled = True
+            break
         totals = {k: base.total(k) for k in ACCIDENT_KEYS}
         for p in item.phases:
             for k in PHASE_TOTALS[p]:

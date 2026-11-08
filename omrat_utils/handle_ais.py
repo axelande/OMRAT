@@ -16,6 +16,7 @@ from compute.junction_transitions import (
     DEFAULT_TIME_WINDOW_S, Crossing, match_summary, transition_counts_from_crossings,
 )
 from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
+from omrat_utils.ais_binning import add_observations, length_bin
 from omrat_utils.copy_traffic import describe_targets, split_locked
 from omrat_utils.ship_type_map import (
     ShipTypeMapConfig, get_type, resolve_ship_type, statics_have_imo,
@@ -422,6 +423,18 @@ class AIS:
         multiplier = self._YEAR_SECONDS / coverage_s
         return multiplier, coverage_s, gap_s
 
+    def _report_junction_only(self) -> None:
+        msg = self.omrat.tr(
+            "Every leg is locked: only the junction transition matrices are re-counted from AIS.")
+        notifier = getattr(self.omrat, 'notifier', None)
+        if notifier is not None:
+            try:
+                notifier.display_message(msg, duration=10)
+                return
+            except Exception:  # nosec B110 B112
+                pass
+        QgsMessageLog.logMessage(msg, 'OMRAT', Qgis.MessageLevel.Info)
+
     def _report_locked_skipped(self, skipped: list[str], segment_data: dict, *, single: bool) -> None:
         names = describe_targets(skipped, segment_data)
         if single:
@@ -495,29 +508,35 @@ class AIS:
         )
         if not legs:
             return
-        # Locked legs keep their (copied / hand-edited) traffic.
+        # Locked legs keep their (copied / hand-edited) traffic,
+        # distributions and ai.  With every leg locked, **Update all
+        # distributions** still re-counts the junction transitions: that is
+        # the junction-only recount (KNOWN_ISSUES 7).
         segment_data = getattr(self.omrat, 'segment_data', None)
         if isinstance(segment_data, dict):
             legs, skipped = split_locked(legs, segment_data)
             if skipped:
                 self._report_locked_skipped(skipped, segment_data, single=key is not None)
             if not legs:
-                return
+                if key is not None:
+                    return
+                self._report_junction_only()
         leg_dirs = self._ensure_leg_dirs(legs)
         fetch_junctions = True if key is None else self.junction_pass_needed()
-        tw = self.omrat.main_widget.twTrafficData
+        rows, cols = self._matrix_shape()
         from omrat_utils.ais_update_task import AisUpdateTask
         task = AisUpdateTask(
             ais=self,
             legs=legs,
             seg_table=seg_table,
-            rows=tw.rowCount(),
-            cols=tw.columnCount(),
+            rows=rows,
+            cols=cols,
             variables=list(self.omrat.traffic.variables),
             var_defaults=dict(self.omrat.traffic._var_cell_defaults),
             leg_dirs=leg_dirs,
             fetch_junctions=fetch_junctions,
             bulk=key is None,
+            length_bounds=self._length_bounds(cols),
         )
         btn = getattr(self.omrat.main_widget, 'pbUpdateAIS', None)
         if btn is not None:
@@ -623,34 +642,47 @@ class AIS:
         else:
             raise TypeError(ais_data[0][0])
 
+    def _length_bounds(self, n_cols: int) -> list[tuple[float, float]]:
+        """The project's length classes, when they match the matrix width.
+
+        Empty otherwise, which makes :func:`length_bin` fall back to 25 m
+        classes over the matrix columns.
+        """
+        bounds = getattr(getattr(self.omrat, 'traffic', None), 'length_bounds', None)
+        if isinstance(bounds, list) and len(bounds) == n_cols:
+            return bounds
+        return []
+
+    def _matrix_shape(self) -> tuple[int, int]:
+        """Traffic matrix size: ship types x length classes.
+
+        Never the Traffic table's size -- the table has an extra Total row
+        and column, which AIS updates used to write into the data as a
+        22nd type / 15th length class (KNOWN_ISSUES item 1).
+        """
+        traffic = getattr(self.omrat, 'traffic', None)
+        rows = getattr(traffic, '_data_rows', 0)
+        cols = getattr(traffic, '_data_cols', 0)
+        if isinstance(rows, int) and isinstance(cols, int) and rows > 0 and cols > 0:
+            return rows, cols
+        tw = self.omrat.main_widget.twTrafficData
+        try:
+            return max(int(tw.rowCount()) - 1, 0), max(int(tw.columnCount()) - 1, 0)
+        except (TypeError, ValueError):
+            return 0, 0
+
     def _bin_one_ping(
         self, leg_key: str, dir_: str,
         loa, toc, sog, air_draught, beam, draugt, multiplier: float,
         mapped_type=None,
     ) -> None:
-        if loa is None:
-            loa = 100
-        loa = int(loa)
-        loa_cat = -1
         freq_data = self.omrat.traffic.traffic_data[leg_key][dir_]['Frequency (ships/year)']
         n_loa_cats = len(freq_data[0]) if freq_data else 0
-        for loa_i in range(n_loa_cats):
-            if loa_i * 25 < loa <= (loa_i * 25 + 25):
-                loa_cat = loa_i
-                continue
-        if loa_cat < 0:
-            loa_cat = n_loa_cats - 1 if n_loa_cats > 0 else 0
+        loa_cat = length_bin(loa, self._length_bounds(n_loa_cats), n_loa_cats)
         type_cat = resolve_ship_type(mapped_type, toc)
         td = self.omrat.traffic.traffic_data[leg_key][dir_]
         td['Frequency (ships/year)'][type_cat][loa_cat] += multiplier
-        if sog is not None:
-            td['Speed (knots)'][type_cat][loa_cat].append(float(sog))
-        if air_draught is not None:
-            td['Ship heights (meters)'][type_cat][loa_cat].append(float(air_draught))
-        if beam is not None:
-            td['Ship Beam (meters)'][type_cat][loa_cat].append(float(beam))
-        if draugt is not None:
-            td['Draught (meters)'][type_cat][loa_cat].append(float(draugt))
+        add_observations(td, type_cat, loa_cat, sog, air_draught, beam, draugt)
 
     def update_ais_data(
         self, leg_key: str, ais_data: list[list[Any]],

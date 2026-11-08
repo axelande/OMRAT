@@ -121,12 +121,17 @@ class HandleQGISIface:
         self.leg_dirs: dict[str, list[str]] = {}
         self._rubber_band: QgsRubberBand | None = None
         # "Traffic links" view (omrat_utils/traffic_links.py): the memory
-        # layer, whether the user switched it on, and the highlight bands
-        # of the leg last clicked in the route table.
+        # layer, whether the user switched it on, which links it draws
+        # (all / the selected leg's / one group, cbTrafficLinkView) and the
+        # highlight bands: of the leg last clicked in the route table, or of
+        # the group picked in the view list.
         self.traffic_links_layer: QgsVectorLayer | None = None
         self._links_shown = False
+        self._links_view = 'all'               # traffic_links.VIEW_ALL
+        self._link_view_keys: list[str] = []
         self._link_bands: list[QgsRubberBand] = []
         self._highlight_seg: str | None = None
+        self._highlight_group: str | None = None
         # What each leg's distribution curves were last drawn from
         # (geometries/distribution_curves.signature), to skip redraws.
         self._curve_sig: dict[str, tuple] = {}
@@ -477,9 +482,12 @@ class HandleQGISIface:
             self.tangent_layer = None
 
         # Traffic links layer + highlight (rebuilt after the next load when
-        # the view is still switched on).
+        # the view is still switched on); a group of this project means
+        # nothing in the next one.
         self._remove_traffic_links_layer()
         self._clear_link_highlight()
+        self._links_view = 'all'               # traffic_links.VIEW_ALL
+        self._link_view_keys = []
 
         # Disconnect itemChanged if connected (will be reconnected on next load)
         if self.item_changed_connected:
@@ -691,6 +699,10 @@ class HandleQGISIface:
         widget = self.omrat.main_widget
         if widget is None:
             return
+        # ``load_lines`` draws plain legs: remember the current leg style
+        # (or else the project's stored one) to put back afterwards.
+        from omrat_utils.layer_styles import current_style
+        leg_qml = current_style(self.omrat, 'legs') or (getattr(self.omrat, 'layer_styles', None) or {}).get('legs')
 
         # Disconnect geometry-changed slots on the existing layers.
         self.unwire_all_leg_layers()
@@ -716,12 +728,26 @@ class HandleQGISIface:
         # load -- one source of truth for the layer construction.
         widget.twRouteList.setRowCount(0)
         self.omrat.load_lines({'segment_data': segment_data})
+        self._restore_leg_looks(leg_qml)
 
         self.rebuild_route_table_rows()
+        _refresh_link_views(self, 'refresh_traffic_links')
 
         canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
         if canvas is not None:
             canvas.refresh()
+
+    def _restore_leg_looks(self, leg_qml: str | None) -> None:
+        """After the leg layers were rebuilt: the leg style the project had
+        and the dashes of suppressed legs, as file load does through
+        ``apply_styles``.  Without this a crossing split (drawing a leg
+        across others, the validation pass, Split and run) left every
+        suppressed leg drawn solid until the project was reloaded."""
+        from omrat_utils.layer_styles import apply_style, leg_layers
+        if leg_qml:
+            for layer in leg_layers(self.omrat):
+                apply_style(layer, leg_qml)
+        self.refresh_suppressed_styles()
 
     def rebuild_route_table_rows(self, *, redraw_tangents: bool = True) -> None:
         """Rewrite every row of ``twRouteList`` from ``segment_data`` in
@@ -1258,33 +1284,133 @@ class HandleQGISIface:
             pass
         self.refresh_traffic_links()
 
+    #: The view-chooser row under the buttons; shown only while the view is on.
+    _LINK_VIEW_WIDGETS = ('laTrafficLinkView', 'pbTrafficLinkPrev', 'cbTrafficLinkView', 'pbTrafficLinkNext')
+
+    def wire_traffic_link_view(self) -> None:
+        """Connect the view chooser (all links / the selected leg's / one
+        group at a time) and hide it until the view is switched on.  Run
+        once, from ``OMRAT._connect_toolbar_buttons``."""
+        mw = self.omrat.main_widget
+        combo = getattr(mw, 'cbTrafficLinkView', None)
+        if combo is None:
+            return
+        combo.currentIndexChanged.connect(self._on_link_view_chosen)
+        mw.pbTrafficLinkPrev.clicked.connect(lambda _checked=False: self.step_traffic_links(-1))
+        mw.pbTrafficLinkNext.clicked.connect(lambda _checked=False: self.step_traffic_links(1))
+        self._set_link_view_row_visible(False)
+
+    def _set_link_view_row_visible(self, visible: bool) -> None:
+        for name in self._LINK_VIEW_WIDGETS:
+            widget = getattr(self.omrat.main_widget, name, None)
+            if widget is not None:
+                widget.setVisible(visible)
+
     def show_traffic_links(self, show: bool) -> None:
         """Switch the "Traffic links" map layer on / off (toggle button).
-        The leg highlight is independent of it and stays."""
+        The route-table leg highlight is independent of it and stays; a
+        group highlight belongs to the view and goes with it."""
         self._links_shown = bool(show)
+        self._set_link_view_row_visible(self._links_shown)
         if self._links_shown:
             self.refresh_traffic_links()
         else:
             self._remove_traffic_links_layer()
+            if self._highlight_group is not None:
+                self._highlight_group = None
+                self._redraw_highlight()
 
     def refresh_traffic_links(self) -> None:
-        """Rebuild the links layer from ``segment_data`` (when switched on)
-        and redraw the leg highlight, so it follows a moved, re-linked or
-        removed leg (every such edit ends up here)."""
+        """Rebuild the links layer and the view list from ``segment_data``
+        (when switched on) and redraw the highlight, so it follows a moved,
+        re-linked or removed leg (every such edit ends up here)."""
+        if self._links_shown:
+            self._fill_link_view_combo()
+            self._rebuild_traffic_links_layer()
+        self._redraw_highlight()
+
+    def _fill_link_view_combo(self) -> None:
+        """Refill the view list, keeping the chosen view -- or, when that
+        group is gone, the group now in its place."""
+        from omrat_utils.traffic_links import VIEW_ALL, VIEW_LEG, resolve_view, view_entries
+        entries = view_entries(getattr(self.omrat, 'segment_data', None) or {})
+        keys = [key for _text, key in entries]
+        self._links_view = resolve_view(self._link_view_keys, keys, self._links_view)
+        self._link_view_keys = keys
+        if self._highlight_group is not None and self._highlight_group not in keys:
+            moved = self._links_view not in (VIEW_ALL, VIEW_LEG)
+            self._highlight_group = self._links_view if moved else None
+        mw = self.omrat.main_widget
+        combo = getattr(mw, 'cbTrafficLinkView', None)
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for i, (text, key) in enumerate(entries):
+                combo.addItem(text, key)
+                combo.setItemData(i, text, Qt.ItemDataRole.ToolTipRole)
+            combo.setCurrentIndex(keys.index(self._links_view))
+        finally:
+            combo.blockSignals(False)
+        for name in ('pbTrafficLinkPrev', 'pbTrafficLinkNext'):
+            button = getattr(mw, name, None)
+            if button is not None:
+                button.setEnabled(len(keys) > 2)
+
+    def _on_link_view_chosen(self, index: int) -> None:
+        key = self.omrat.main_widget.cbTrafficLinkView.itemData(index)
+        if key is not None:
+            self.set_traffic_link_view(str(key))
+
+    def step_traffic_links(self, step: int) -> None:
+        """Previous (-1) / next (+1) link group, wrapping around."""
+        from omrat_utils.traffic_links import step_view
+        self.set_traffic_link_view(step_view(self._link_view_keys, self._links_view, step))
+
+    def set_traffic_link_view(self, view: str) -> None:
+        """Draw only the links of ``view`` (``traffic_links.VIEW_ALL``,
+        ``VIEW_LEG`` or a group key).  A group also gets its legs
+        highlighted and is brought into view when it is not."""
+        from omrat_utils.traffic_links import VIEW_ALL, VIEW_LEG
+        self._links_view = view
+        combo = getattr(self.omrat.main_widget, 'cbTrafficLinkView', None)
+        if combo is not None:
+            idx = combo.findData(view)
+            if idx >= 0 and idx != combo.currentIndex():
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
         if self._links_shown:
             self._rebuild_traffic_links_layer()
-        if self._highlight_seg is not None:
-            self.highlight_leg(self._highlight_seg)
+        if view in (VIEW_ALL, VIEW_LEG):
+            if self._highlight_group is not None:
+                self._highlight_group = None
+                self._redraw_highlight()
+            return
+        group = self._link_group(view)
+        if group is None:
+            return
+        self._highlight_group = group.key
+        self._draw_leg_bands(group.origin, group.legs()[1:])
+        self._bring_highlight_into_view()
+
+    def _link_group(self, key: str | None):
+        from omrat_utils.traffic_links import link_groups
+        groups = link_groups(getattr(self.omrat, 'segment_data', None) or {})
+        return next((g for g in groups if g.key == key), None)
 
     def _rebuild_traffic_links_layer(self) -> None:
-        from omrat_utils.traffic_links import link_geometries
+        from omrat_utils.traffic_links import link_geometries, links_in_view
         layer = self._ensure_traffic_links_layer()
         if layer is None:
             return
         provider = layer.dataProvider()
         provider.truncate()
         feats = []
-        for link, pts in link_geometries(getattr(self.omrat, 'segment_data', None) or {}):
+        segs = getattr(self.omrat, 'segment_data', None) or {}
+        shown = links_in_view(segs, self._links_view, self._highlight_seg)
+        for link, pts in link_geometries(segs, shown):
             feat = QgsFeature(layer.fields())
             feat.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(x, y) for x, y in pts]))
             feat.setAttributes([link.kind, link.src, link.dst, link.label])
@@ -1355,20 +1481,46 @@ class HandleQGISIface:
     def highlight_leg(self, segment_id: int | str) -> None:
         """Highlight leg ``segment_id`` (yellow) -- the leg picked in the
         route table -- and every leg its traffic is linked with (orange:
-        copy source / copies, detours, suppressed together)."""
+        copy source / copies, detours, suppressed together).  Replaces a
+        group highlight; with the view on "Selected leg" the map then
+        draws this leg's links."""
+        from omrat_utils.traffic_links import VIEW_LEG
+        self._highlight_group = None
+        self._show_leg_highlight(str(segment_id))
+        if self._links_shown and self._links_view == VIEW_LEG:
+            self._rebuild_traffic_links_layer()
+
+    def _show_leg_highlight(self, seg: str) -> None:
         from omrat_utils.traffic_links import related_legs
-        self._clear_link_highlight()
-        seg = str(segment_id)
         segs = getattr(self.omrat, 'segment_data', None) or {}
         if not isinstance(segs.get(seg), dict):
+            self._clear_link_highlight()
             return  # removed leg: nothing left to highlight
-        related = related_legs(seg, segs)
         self._highlight_seg = seg
+        self._draw_leg_bands(seg, sorted(related_legs(seg, segs)))
+
+    def _redraw_highlight(self) -> None:
+        """Redraw what is highlighted: the picked group while the view
+        shows it, else the route-table leg (gone legs are dropped)."""
+        group = self._link_group(self._highlight_group) if self._highlight_group and self._links_shown else None
+        if group is not None:
+            self._draw_leg_bands(group.origin, group.legs()[1:])
+            return
+        self._highlight_group = None
+        if self._highlight_seg is not None:
+            self._show_leg_highlight(self._highlight_seg)
+        else:
+            self._clear_bands()
+
+    def _draw_leg_bands(self, main: str, others: list[str]) -> None:
+        """Rubber bands: ``main`` yellow, ``others`` orange."""
+        self._clear_bands()
+        segs = getattr(self.omrat, 'segment_data', None) or {}
         canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
         if canvas is None:
             return
         crs = QgsCoordinateReferenceSystem("EPSG:4326")
-        for leg, colour in [(seg, QColor(255, 220, 0, 200))] + [(r, QColor(255, 120, 0, 170)) for r in sorted(related)]:
+        for leg, colour in [(main, QColor(255, 220, 0, 200))] + [(r, QColor(255, 120, 0, 170)) for r in others]:
             seg_d = segs.get(leg)
             if not isinstance(seg_d, dict):
                 continue
@@ -1386,7 +1538,25 @@ class HandleQGISIface:
         """Number of highlight bands on the canvas (for tests)."""
         return len(self._link_bands)
 
-    def _clear_link_highlight(self) -> None:
+    def _bring_highlight_into_view(self) -> None:
+        """Zoom to the highlighted legs when they are not all in view."""
+        canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
+        if canvas is None or not self._link_bands:
+            return
+        extent = None
+        for band in self._link_bands:
+            box = band.asGeometry().boundingBox()   # canvas CRS
+            if extent is None:
+                extent = box
+            else:
+                extent.combineExtentWith(box)
+        if extent is None or canvas.extent().contains(extent):
+            return
+        extent.grow(max(extent.width(), extent.height()) * 0.15)
+        canvas.setExtent(extent)
+        canvas.refresh()
+
+    def _clear_bands(self) -> None:
         canvas = self.omrat.iface.mapCanvas() if self.omrat.iface else None
         for band in self._link_bands:
             try:
@@ -1396,7 +1566,11 @@ class HandleQGISIface:
             except Exception:  # nosec B110 B112
                 pass
         self._link_bands = []
+
+    def _clear_link_highlight(self) -> None:
+        self._clear_bands()
         self._highlight_seg = None
+        self._highlight_group = None
 
     def start_move_tangent(self) -> None:
         """One-click entry point for dragging a tangent line.

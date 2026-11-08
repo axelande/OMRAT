@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 from pathlib import Path  # noqa: E402
 
 import geopandas as gpd  # noqa: E402
-from scipy import stats  # noqa: E402
-from shapely.geometry import LineString, Polygon  # noqa: E402
+from shapely import clip_by_rect  # noqa: E402
+from shapely.geometry import LineString, MultiPolygon, Polygon  # noqa: E402
 from shapely.geometry.base import BaseGeometry  # noqa: E402
 from shapely.ops import unary_union  # noqa: E402
+from shapely.prepared import prep  # noqa: E402
 
 try:
     from shapely import make_valid as shp_make_valid
@@ -31,6 +32,7 @@ except Exception:  # nosec B110 B112
     shp_make_valid = None
 
 from compute.basic_equations import get_not_repaired  # noqa: E402
+from compute.drift_reach import REACH_QUANTILE, drift_reach_m  # noqa: E402
 from compute.drift_corridor_geometry import (  # noqa: E402
     _compass_idx_to_math_idx,
     _extract_obstacle_segments,
@@ -78,48 +80,12 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
 
     # --- Drifting model helpers ---
     def _compute_reach_distance(self, data: dict[str, Any], longest_length: float) -> float:
+        """Corridor length: drift distance by which 99 % are repaired, capped at 10 x the longest leg."""
         reach_distance = longest_length * 10.0
         try:
-            rep = data.get('drift', {}).get('repair', {})
-            use_ln = rep.get('use_lognormal', False)
-            dist_type = rep.get('dist_type', '')
-            t99_h = None
-
-            if dist_type == 'weibull':
-                wb_shape = float(rep.get('wb_shape', 1.0))
-                wb_loc = float(rep.get('wb_loc', 0.0))
-                wb_scale = float(rep.get('wb_scale', 1.0))
-                t99_h = float(stats.weibull_min(c=wb_shape, loc=wb_loc, scale=wb_scale).ppf(0.99))
-            elif dist_type == 'normal':
-                n_mean = float(rep.get('norm_mean', 0.0))
-                n_std = float(rep.get('norm_std', 1.0))
-                t99_h = float(stats.norm(loc=n_mean, scale=n_std).ppf(0.99))
-            elif use_ln:
-                s = float(rep.get('std', 0.0))
-                loc = float(rep.get('loc', 0.0))
-                scale = float(rep.get('scale', 1.0))
-                t99_h = float(stats.lognorm(s, loc=loc, scale=scale).ppf(0.99))
-            elif rep.get('func'):
-                # User-defined repair CDF: find t99 numerically by bisection
-                # on the compiled expression (t such that cdf(t) >= 0.99).
-                from compute.basic_equations import _safe_compile, _safe_eval
-                code = _safe_compile(str(rep['func']))
-                lo, hi = 0.0, 200.0
-                if _safe_eval(code, hi) >= 0.99:
-                    for _ in range(60):
-                        mid = 0.5 * (lo + hi)
-                        if _safe_eval(code, mid) >= 0.99:
-                            hi = mid
-                        else:
-                            lo = mid
-                    t99_h = hi
-
-            if t99_h is not None and t99_h > 0:
-                drift_speed_kts = float(data.get('drift', {}).get('speed', 0.0))
-                drift_speed = drift_speed_kts * 1852.0 / 3600.0  # Convert knots to m/s
-                if drift_speed > 0:
-                    reach_distance = drift_speed * 3600.0 * t99_h
-                    reach_distance = min(reach_distance, longest_length * 10.0)
+            reach = drift_reach_m(data.get('drift', {}), REACH_QUANTILE)
+            if reach is not None and reach > 0:
+                reach_distance = min(reach, longest_length * 10.0)
         except Exception:  # nosec B110 B112
             pass
         return reach_distance
@@ -192,6 +158,74 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         if shadow_cache is not None:
             shadow_cache[(id(geom), float(compass_angle))] = result
         return result
+
+    @staticmethod
+    def _ahead_of_leg(line: LineString, math_angle: float,
+                      drift_corridor: BaseGeometry | None) -> BaseGeometry | None:
+        """The part of the drift corridor on the drift side of the leg centerline.
+
+        Ships start on the leg (the reference line for every drift distance
+        and edge in this model), so water behind it is never crossed.  The
+        corridor itself also spans the lateral spread behind the leg.  For
+        drift exactly along the leg there is no "behind"; the corridor is
+        returned unchanged.
+        """
+        if drift_corridor is None or drift_corridor.is_empty:
+            return drift_corridor
+        try:
+            coords = np.asarray(line.coords, dtype=float)
+            a, b = coords[0], coords[-1]
+            length = float(np.hypot(*(b - a)))
+            if length <= 0.0:
+                return drift_corridor
+            e = (b - a) / length
+            n = np.array([-e[1], e[0]])
+            rad = np.radians(math_angle)
+            side = float(n @ np.array([np.cos(rad), np.sin(rad)]))
+            if abs(side) < 1e-6:
+                return drift_corridor
+            if side < 0.0:
+                n = -n
+            minx, miny, maxx, maxy = drift_corridor.bounds
+            big = 10.0 * (float(np.hypot(maxx - minx, maxy - miny)) + length)
+            half_plane = Polygon([a - e * big, b + e * big, b + e * big + n * big, a - e * big + n * big])
+            ahead = drift_corridor.intersection(half_plane)
+            return ahead if not ahead.is_empty else drift_corridor
+        except Exception:  # nosec B110 B112
+            return drift_corridor
+
+    def _corridor_shadow(
+        self,
+        poly: BaseGeometry,
+        drift_corridor: BaseGeometry | None,
+        corridor_prep,
+        compass_angle: float,
+        shadow_bounds: tuple[float, float, float, float] | None,
+        shadow_memo: dict[tuple[int, float], BaseGeometry] | None,
+    ) -> BaseGeometry:
+        """Shadow of the part of ``poly`` ahead of the leg, inside its corridor.
+
+        ``drift_corridor`` is the corridor ahead of the leg
+        (:meth:`_ahead_of_leg`).  A merged depth polygon reaches far behind
+        most legs; sweeping it whole let water the ships never cross shadow
+        the structures in front (KNOWN_ISSUES 11).  Obstacles that lie
+        entirely inside keep the cross-leg shadow memo; clipped parts are
+        new objects every call and are never memoised (``id``s are reused
+        after garbage collection).
+        """
+        try:
+            if drift_corridor is None or corridor_prep is None or corridor_prep.contains(poly):
+                return self._build_blocker_shadow(poly, compass_angle, shadow_bounds, shadow_memo)
+            if not corridor_prep.intersects(poly):
+                return Polygon()
+            part = clip_by_rect(poly, *drift_corridor.bounds).intersection(drift_corridor)
+            polys = extract_polygons(part)
+            if not polys:
+                return Polygon()
+            part = polys[0] if len(polys) == 1 else MultiPolygon(polys)
+            return self._build_blocker_shadow(part, compass_angle, shadow_bounds, None)
+        except Exception:  # nosec B110 B112
+            return Polygon()
 
     def _analytical_hole_for_geom(
         self,
@@ -665,6 +699,9 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         drift_corridor, bounds = self._compute_drift_corridor_and_bounds(
             line, math_angle, reach_distance, lateral_spread, dists_dir, w_dir, structures, depths)
         shadow_bounds = global_shadow_bounds if global_shadow_bounds is not None else bounds
+        drift_corridor_ahead = self._ahead_of_leg(line, math_angle, drift_corridor)
+        corridor_prep = (prep(drift_corridor_ahead)
+                         if drift_corridor_ahead is not None and not drift_corridor_ahead.is_empty else None)
         shadows: dict = {}
         edge_geom: dict = {}
         for s_idx, s in enumerate(structures):
@@ -678,11 +715,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                         continue
                 except (IndexError, TypeError):
                     pass
-            try:
-                sh = self._build_blocker_shadow(poly, compass_angle, shadow_bounds, shadow_memo)
-            except Exception:  # nosec B110 B112
-                sh = Polygon()
-            shadows[('allision', s_idx)] = sh
+            shadows[('allision', s_idx)] = self._corridor_shadow(
+                poly, drift_corridor_ahead, corridor_prep, compass_angle, shadow_bounds, shadow_memo)
             edge_geom[('allision', s_idx)] = self._build_edge_geom_for_poly(
                 poly, drift_corridor, math_angle, line, leg_state,
                 drift_repair, drift_speed, use_leg_offset, compass_angle)
@@ -697,11 +731,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                         continue
                 except (IndexError, TypeError):
                     pass
-            try:
-                sh = self._build_blocker_shadow(poly, compass_angle, shadow_bounds, shadow_memo)
-            except Exception:  # nosec B110 B112
-                sh = Polygon()
-            shadows[('depth', d_idx2)] = sh
+            shadows[('depth', d_idx2)] = self._corridor_shadow(
+                poly, drift_corridor_ahead, corridor_prep, compass_angle, shadow_bounds, shadow_memo)
             edge_geom[('depth', d_idx2)] = self._build_edge_geom_for_poly(
                 poly, drift_corridor, math_angle, line, leg_state,
                 drift_repair, drift_speed, use_leg_offset, compass_angle)
@@ -984,9 +1015,11 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                         h_in_anchor = 0.0
             entries.append({'obs_type': obs_type, 'obs_idx': obs_idx,
                             'dist': dist, 'hole_pct': hole_pct, 'h_reach': h_reach, 'h_in_anchor': h_in_anchor})
-            # Anchoring obstacles reference depth polygons; map 'anchoring' -> 'depth'
-            # so the shadow lookup populates anchor_union correctly.
-            lookup_type = 'depth' if obs_type == 'anchoring' else obs_type
+            # Shadows are stored as ('allision', i) / ('depth', i); grounding
+            # and anchoring obstacles are both depth polygons.  Grounding was
+            # looked up as ('grounding', i) before, so a shoal never shielded
+            # anything behind it (KNOWN_ISSUES 12).
+            lookup_type = 'allision' if obs_type == 'allision' else 'depth'
             _s = shadows_map.get((lookup_type, obs_idx))
             if obs_type in ('allision', 'grounding'):
                 if _s is not None and not _s.is_empty:
@@ -1677,6 +1710,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         hole_pct: float, h_eff: float, h_reach: float,
         base: float, rp: float,
         structures: list, depths: list,
+        recarve_scale: float = 1.0,
         seg_id: str, cell: dict, d_idx: int, leg_dir_key: str,
         precomputed_edges: list, drift: dict, drift_speed: float,
         freq: float, ship_type: int, ship_size: int,
@@ -1722,8 +1756,10 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             shadow_ratio = max(0.0, min(1.0, shadow_ratio))
             for eg in precomputed_edges:
                 # Pure geometric per-edge share (uniform ships), attenuated
-                # only by between-polygon shadow.
-                edge_hole = float(eg['edge_h_eff']) * shadow_ratio
+                # only by between-polygon shadow.  ``recarve_scale`` undoes
+                # the inter-obstacle re-carve's share loss, which h_reach
+                # already counts.
+                edge_hole = float(eg['edge_h_eff']) * recarve_scale * shadow_ratio
                 if edge_hole <= 0.0:
                     continue
                 p_nr = eg['edge_p_nr']
@@ -1822,6 +1858,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 continue
             obs_geom_key = 'allision' if obs_type == 'allision' else 'depth'
             precomputed_edges = edge_geom_map.get((obs_geom_key, obs_idx), []) if edge_geom_map else []
+            share_before = sum(float(e.get('edge_h_eff', 0.0)) for e in precomputed_edges)
             # Re-carve edges against ``covered_perp`` before we consume them.
             # ``precomputed_edges`` are per-obstacle only (intra-polygon
             # 1D shadow-carve); this pass extends the "ship grounds once"
@@ -1829,6 +1866,13 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             precomputed_edges, obs_perp_intervals = self._recarve_edges_inter_obstacle(
                 precomputed_edges, covered_perp,
             )
+            share_after = sum(float(e.get('edge_h_eff', 0.0)) for e in precomputed_edges or [])
+            # The shadow of closer obstacles is already in h_reach (the
+            # polygon-level carve), so the re-carve only decides WHICH edges
+            # are hit; scale the survivors back to the uncarved share.
+            # Applying both cut a half-shadowed structure to a quarter
+            # (KNOWN_ISSUES 13).
+            recarve_scale = share_before / share_after if share_after > 0.0 else 1.0
             if precomputed_edges is None:
                 # Empty list is fine (fall back to obstacle-level simple branch);
                 # None means the helper decided to skip this obstacle entirely.
@@ -1858,6 +1902,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 a_d, g_d = self._apply_hit_entry(
                     obs_type=obs_type, obs_idx=obs_idx, dist=dist,
                     hole_pct=hole_pct, h_eff=h_eff, h_reach=h_reach,
+                    recarve_scale=recarve_scale,
                     base=base, rp=rp, structures=structures, depths=depths,
                     seg_id=seg_id, cell=cell, d_idx=d_idx, leg_dir_key=leg_dir_key,
                     precomputed_edges=precomputed_edges, drift=drift, drift_speed=drift_speed,

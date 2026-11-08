@@ -63,9 +63,11 @@ Top-level call tree
      |     +-- ThreadPoolExecutor (per leg x direction)
      |           +-- _shadow_task(leg_idx, d_idx)
      |                 +-- _create_drift_corridor(...)
-     |                 +-- _build_blocker_shadow(..., shadow_memo)
-     |                 |     +-- extract_polygons(geom)
-     |                 |     +-- create_obstacle_shadow(p, compass, bounds)  # cached per (id(geom),dir)
+     |                 +-- _ahead_of_leg(line, angle, corridor)          # corridor on the drift side of the leg
+     |                 +-- _corridor_shadow(poly, ahead, ...)            # obstacle clipped to it first
+     |                 |     +-- _build_blocker_shadow(..., shadow_memo)
+     |                 |           +-- extract_polygons(geom)
+     |                 |           +-- create_obstacle_shadow(p, compass, bounds)  # memo only when unclipped
      |                 +-- _edge_geom_for(poly)
      |                       +-- _extract_obstacle_segments(poly)
      |                       +-- _edge_weighted_holes(...)                # batched drift filter + shapely
@@ -285,7 +287,15 @@ Per-task work (``_shadow_task(leg_idx, d_idx)``):
    ``struct_min_dists`` / ``depth_min_dists`` to those within
    ``reach_distance``):
 
-   a. Build the quad-sweep shadow -> :meth:`_build_blocker_shadow`.
+   a. Clip the obstacle to the corridor **ahead of the leg**
+      (:meth:`_ahead_of_leg`: the corridor on the drift side of the leg
+      centerline, the reference of every drift distance) and build the
+      quad-sweep shadow of what is left -> :meth:`_corridor_shadow` /
+      :meth:`_build_blocker_shadow`.  Without the clip a merged depth
+      polygon that also reached into the corridor shadowed the structures
+      from water far *behind* the leg, which drifting ships never cross
+      (KNOWN_ISSUES 11, fixed 2026-10-20).  An obstacle wholly inside
+      keeps the cross-leg memo; a clipped part is never memoised.
    b. Build per-edge geometry -> inner ``_edge_geom_for(poly)``.
 
 3. Return ``(key, entry)`` where ``entry`` has
@@ -304,10 +314,12 @@ check aborts the remaining work if the user clicks stop.
 :meth:`_build_blocker_shadow`
 -----------------------------
 
-Memoises the **full** obstacle shadow (union over all Polygon
-components) by ``(id(geom), compass_angle)``.  Because every leg passes
-the same Python object for a given obstacle, the cache hits
-``(legs - 1) x 8`` times per obstacle.
+Memoises the obstacle shadow (union over all Polygon components) by
+``(id(geom), compass_angle)`` for obstacles that lie wholly inside the
+corridor ahead of the leg (the same Python object for every leg).
+Clipped parts are new objects on every call and are passed with
+``shadow_cache=None`` -- ``id`` values are reused after garbage
+collection, so memoising them could return another polygon's shadow.
 
 Implementation:
 
@@ -472,7 +484,11 @@ Per bucket:
 1. Sort obstacles by along-drift distance.
 2. Walk the sorted list maintaining a running ``blocker_union`` (for
    grounding/allision) and ``anchor_union`` (for anchoring).  The
-   shadows come from the memo built in Phase 2.
+   shadows come from the memo built in Phase 2, keyed
+   ``('allision', i)`` for structures and ``('depth', i)`` for both
+   grounding and anchoring obstacles.  Grounding obstacles were looked
+   up as ``('grounding', i)`` before 2026-10-20, so a shoal never
+   shielded a structure behind it (KNOWN_ISSUES 12).
 3. For each obstacle:
 
    * Carve ``reach = geom.difference(blocker_union)`` - the part of
@@ -537,10 +553,16 @@ and the per-direction contribution is:
 3. For each entry:
 
    * Compute ``h_eff = max(0, h_reach - anchor_p * h_in_anchor)``.
+   * Re-carve the obstacle's edges against the perpendicular intervals
+     the closer obstacles occupy (``covered_perp``).  This only decides
+     *which* edges are still hit: the shadow is already in ``h_reach``,
+     so the surviving edges are scaled back to the uncarved share
+     (``recarve_scale``).  Applying both had cut a half-shadowed
+     structure to a quarter (KNOWN_ISSUES 13).
    * If the obstacle has precomputed per-edge geometry, sum
-     ``contrib = base * r_p * (h_eff * len_frac) * edge_p_nr`` across
-     edges.  Otherwise fall back to the obstacle-level ``contrib =
-     base * r_p * h_eff * P_NR(dist)``.
+     ``contrib = base * r_p * edge_h_eff * recarve_scale * (h_eff / hole_pct)
+     * edge_p_nr`` across edges.  Otherwise fall back to the
+     obstacle-level ``contrib = base * r_p * h_eff * P_NR(dist)``.
    * Call :meth:`_update_report` / :meth:`_update_anchoring_report`
      to record the per-leg-direction breakdown.
    * Call :meth:`_add_direct_segment_contrib` to record the

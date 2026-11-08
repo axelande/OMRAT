@@ -422,11 +422,14 @@ def _collision_host():
 def run_collision_model(data: dict[str, Any]) -> dict[str, Any]:
     """Collision report for ``data`` exactly as Run model computes it.
 
-    Applies traffic scaling and the suppressed-leg redirects first, like
-    ``CalculationTask.run``.  ``data`` is consumed (pass a private copy).
+    Fills missing speeds / draughts and applies traffic scaling and the
+    suppressed-leg redirects first, like ``CalculationTask.run``.  ``data``
+    is consumed (pass a private copy).
     """
     from compute.data_preparation import apply_traffic_scaling
+    from compute.traffic_gaps import fill_traffic_gaps
     from compute.traffic_redirect import apply_traffic_redirects
+    fill_traffic_gaps(data)
     apply_traffic_scaling(data)
     apply_traffic_redirects(data)
     host = _collision_host()

@@ -211,7 +211,7 @@ QToolTip {
        <number>0</number>
       </property>
       <property name="topMargin">
-       <number>20</number>
+       <number>0</number>
       </property>
       <item>
        <widget class="QTabWidget" name="tabWidget">
@@ -322,7 +322,7 @@ QToolTip {
                 <item>
                  <widget class="QPushButton" name="pbTrafficLinks">
                   <property name="toolTip">
-                   <string>Show which leg's traffic refers to which: arrows from copied-from legs to their copies (green), from suppressed legs to the legs their traffic is moved to (orange, dashed) and from legs suppressed together with a lead leg (grey). Click a leg in the route table to highlight its linked legs.</string>
+                   <string>Show which leg's traffic refers to which: arrows from copied-from legs to their copies (green), from suppressed legs to the legs their traffic is moved to (orange, dashed) and from legs suppressed together with a lead leg (grey). Click a leg in the route table to highlight its linked legs. With many links, pick one group at a time in the Show links list that appears next to Route / Next leg no.</string>
                   </property>
                   <property name="text">
                    <string>Traffic links</string>
@@ -335,7 +335,7 @@ QToolTip {
                </layout>
               </item>
               <item>
-               <layout class="QHBoxLayout" name="horizontalLayout_DrawingIds">
+               <layout class="QHBoxLayout" name="horizontalLayout_DrawingIds" stretch="0,0,0,0,0,0,0,1,0">
                 <item>
                  <widget class="QLabel" name="label_route_id">
                   <property name="text">
@@ -400,6 +400,52 @@ QToolTip {
                    </size>
                   </property>
                  </spacer>
+                </item>
+                <item>
+                 <widget class="QLabel" name="laTrafficLinkView">
+                  <property name="text">
+                   <string>Show links:</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QToolButton" name="pbTrafficLinkPrev">
+                  <property name="toolTip">
+                   <string>Previous link group</string>
+                  </property>
+                  <property name="arrowType">
+                   <enum>Qt::LeftArrow</enum>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QComboBox" name="cbTrafficLinkView">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                    <horstretch>0</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="toolTip">
+                   <string>Which traffic links to draw: all of them, only those of the leg selected in the route table, or one group at a time (a copied leg with all its copies, or a suppressed leg with the legs its traffic moves to and the legs suppressed with it). A group's legs are highlighted, and the map zooms to them when they are not all in view.</string>
+                  </property>
+                  <property name="sizeAdjustPolicy">
+                   <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
+                  </property>
+                  <property name="minimumContentsLength">
+                   <number>20</number>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QToolButton" name="pbTrafficLinkNext">
+                  <property name="toolTip">
+                   <string>Next link group</string>
+                  </property>
+                  <property name="arrowType">
+                   <enum>Qt::RightArrow</enum>
+                  </property>
+                 </widget>
                 </item>
                </layout>
               </item>
@@ -1012,7 +1058,7 @@ QToolTip {
          </attribute>
          <layout class="QVBoxLayout" name="verticalLayout_3">
           <item>
-           <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="0,0,0">
+           <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="0,0,0,0">
             <item>
              <widget class="QComboBox" name="cbTrafficSelectSeg">
               <property name="sizePolicy">
@@ -1066,6 +1112,16 @@ QToolTip {
                 <string>Scaling (%)</string>
                </property>
               </item>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="pbTrafficReport">
+              <property name="toolTip">
+               <string>Save an HTML report of the traffic on every leg (ships per year per direction, where the traffic comes from, ship types, a map and automatic checks) and open it in the browser. Also under File and in the message after Update AIS, Copy traffic and Suppress leg.</string>
+              </property>
+              <property name="text">
+               <string>Traffic report...</string>
+              </property>
              </widget>
             </item>
            </layout>
@@ -1251,6 +1307,16 @@ QToolTip {
              <widget class="QPushButton" name="pbRemoveDepth">
               <property name="text">
                <string>Remove</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="pbSimplifyDepth">
+              <property name="toolTip">
+               <string>Keep all depth classes down to a detail limit everywhere and every class near the structures; remove deeper water elsewhere (faster drift runs)</string>
+              </property>
+              <property name="text">
+               <string>Simplify...</string>
               </property>
              </widget>
             </item>
@@ -2539,6 +2605,7 @@ shadows/holes created by shallow depths and low structures.</string>
   <tabstop>pbAddSimpleDepth</tabstop>
   <tabstop>pbLoadDepth</tabstop>
   <tabstop>pbRemoveDepth</tabstop>
+  <tabstop>pbSimplifyDepth</tabstop>
   <tabstop>twObjectList</tabstop>
   <tabstop>pbAddSimpleObject</tabstop>
   <tabstop>pbLoadObject</tabstop>

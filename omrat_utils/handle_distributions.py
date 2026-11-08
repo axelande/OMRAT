@@ -451,13 +451,24 @@ class Distributions:
             widget_sb: QSpinBox = cast(QSpinBox, changed_widget)
             changed_value = float(widget_sb.value())
 
+        # A weight is a share of 100: a typed -20 or 140 would push the
+        # others below zero, and the compute silently drops a component
+        # with a negative weight (KNOWN_ISSUES 6).
+        if not 0.0 <= changed_value <= total_weight:
+            changed_value = min(max(changed_value, 0.0), float(total_weight))
+            if hasattr(changed_widget, 'setText'):
+                changed_widget.setText(f'{changed_value:g}')
+            else:
+                changed_widget.setValue(int(changed_value))
+
         # Calculate the remaining weight
         remaining_weight = total_weight - changed_value
 
         # Distribute the remaining weight proportionally among the other widgets
         other_widgets = [w for w in widgets if w != changed_widget]
         other_values = [
-            float(w.text()) if hasattr(w, 'text') and w.text() != '' else w.value() if hasattr(w, 'value') else 0
+            max(0.0, parse_float(w.text()) or 0.0) if hasattr(w, 'text')
+            else max(0.0, float(w.value())) if hasattr(w, 'value') else 0.0
             for w in other_widgets
         ]
         other_total = sum(other_values)

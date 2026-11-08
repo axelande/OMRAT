@@ -943,6 +943,19 @@ class TestUpdateLegsSkipsLocked:
         assert 'locked' in MockMsg.information.call_args.args[2]
         assert submitted == []
 
+    def test_every_leg_locked_recounts_the_junctions_only(self, ais_with_mocks, monkeypatch):
+        """KNOWN_ISSUES 7: Update all distributions with every leg locked is the junction-only recount."""
+        from unittest.mock import patch
+        import omrat_utils.handle_ais as mod
+        segs = {'L1': {'Dirs': ['E', 'W'], 'traffic_locked': True},
+                'L2': {'Dirs': ['E', 'W'], 'traffic_locked': True}}
+        submitted = self._setup(ais_with_mocks, monkeypatch, segs)
+        with patch.object(mod, 'QMessageBox'):
+            ais_with_mocks.update_legs()
+        assert len(submitted) == 1
+        assert submitted[0]['legs'] == {}
+        assert submitted[0]['fetch_junctions'] is True and submitted[0]['bulk'] is True
+
     def test_unlocked_legs_unaffected(self, ais_with_mocks, monkeypatch):
         from unittest.mock import patch
         import omrat_utils.handle_ais as mod
@@ -1070,7 +1083,6 @@ class TestRunSqlShipTypeMap:
         ais_with_mocks.set_type_map(cfg)
         assert ais_with_mocks.type_map is cfg
         assert ais_with_mocks._imo_probe == {}
-
 
 
 class TestAisWriteClearsCopyLink:

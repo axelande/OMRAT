@@ -8,7 +8,6 @@ Run with::
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -140,6 +139,27 @@ def test_missing_depths_warns_about_zero_grounding():
     d['depths'] = []
     md = build_choices_and_deltas_markdown(d)
     assert "drifting/powered grounding will be 0" in md
+
+
+def test_ships_without_speed_or_draught_say_how_they_were_filled():
+    """KNOWN_ISSUES 14: the report says which ships had no speed / draught
+    and what the run used instead (the snapshot is taken before the fill)."""
+    inf = float('inf')
+    d = _baseline_data()
+    md = build_choices_and_deltas_markdown(d)
+    assert "| Ships without speed | none ✓ |" in md
+    assert "| Ships without draught | none ✓ |" in md
+    d['traffic_data'] = {
+        '1': {'East going': {'Frequency (ships/year)': [[4, 6]], 'Speed (knots)': [[inf, 12.0]],
+                             'Draught (meters)': [[5.0, 7.0]]}},
+        '2': {'East going': {'Frequency (ships/year)': [[3, 0]], 'Speed (knots)': [[11.0, inf]],
+                             'Draught (meters)': [[6.0, inf]]}},
+    }
+    md = build_choices_and_deltas_markdown(d)
+    assert ("| Ships without speed | ⚠ 4 ships/yr in 1 traffic cell(s); filled with the traffic-weighted "
+            "mean speed of the other legs (same type and length: 4) |") in md
+    assert "| Ships without draught | none ✓ |" in md
+    assert d['traffic_data']['1']['East going']['Speed (knots)'][0][0] == inf   # report never fills
 
 
 # ---------------------------------------------------------------------------

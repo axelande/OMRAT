@@ -14,6 +14,13 @@ that uses it:
               (:mod:`compute.traffic_redirect`); the label gives the
               shares per direction.
 ``with``      a leg suppressed *with* a lead -> the lead.
+
+With many links the map gets cluttered, so the view can show them one
+*group* at a time (:func:`link_groups`, :func:`view_entries`): a copy
+source with every copy of it, or a suppressed leg with the legs its
+traffic moves to and the legs suppressed with it.  Every link is in
+exactly one group.  :data:`VIEW_LEG` shows only the links of the leg
+picked in the route table.
 """
 from __future__ import annotations
 
@@ -129,6 +136,145 @@ def related_legs(seg: str, segment_data: dict[str, Any]) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
+# One group at a time
+# ---------------------------------------------------------------------------
+
+VIEW_ALL = 'all'
+VIEW_LEG = 'leg'
+
+
+@dataclass(frozen=True)
+class LinkGroup:
+    """A copy source with its copies (``kind='copy'``), or a suppressed leg
+    with its targets and the legs suppressed with it (``'suppress'``)."""
+    key: str
+    kind: str
+    origin: str
+    links: tuple[Link, ...]
+    title: str
+
+    def legs(self) -> list[str]:
+        """The origin first, then the other legs in link order."""
+        out = [self.origin]
+        for link in self.links:
+            for leg in (link.src, link.dst):
+                if leg not in out:
+                    out.append(leg)
+        return out
+
+
+def _copy_root(seg: str, segment_data: dict[str, Any]) -> str:
+    """Follow ``traffic_source`` back while the source leg exists (like
+    ``geometries.junctions.traffic_link_root``, which also follows a source
+    that was removed); a cycle resolves to its smallest id."""
+    chain = [str(seg)]
+    while True:
+        src = _copy_source(chain[-1], segment_data)
+        if src is None or src not in segment_data:
+            return chain[-1]
+        if src in chain:
+            return min(chain[chain.index(src):])
+        chain.append(src)
+
+
+def _names(legs: list[str], segment_data: dict[str, Any], limit: int = 2) -> str:
+    """``'LEG_a, LEG_b +3'``."""
+    shown = ', '.join(leg_name(leg, segment_data) for leg in legs[:limit])
+    return f"{shown} +{len(legs) - limit}" if len(legs) > limit else shown
+
+
+def _group_title(kind: str, origin: str, links: list[Link], segment_data: dict[str, Any]) -> str:
+    name = leg_name(origin, segment_data)
+    if kind == 'copy':
+        copies = list(dict.fromkeys(lk.dst for lk in links if lk.dst != origin))
+        return f"{name} copied to {_names(copies, segment_data)}"
+    targets = list(dict.fromkeys(lk.dst for lk in links if lk.kind == 'redirect'))
+    members = list(dict.fromkeys(lk.src for lk in links if lk.kind == 'with'))
+    title = f"{name} suppressed -> {_names(targets, segment_data)}" if targets else f"{name} suppressed"
+    if members:
+        title += f", +{len(members)} leg(s) with it"
+    return title
+
+
+def link_groups(segment_data: dict[str, Any]) -> list[LinkGroup]:
+    """Every link in exactly one group, ordered like the route table
+    (position of the group's origin leg in ``segment_data``)."""
+    segs = segment_data or {}
+    buckets: dict[tuple[str, str], list[Link]] = {}
+    for link in build_links(segs):
+        if link.kind == 'copy':
+            bucket = ('copy', _copy_root(link.dst, segs))
+        elif link.kind == 'with':
+            bucket = ('suppress', link.dst)
+        else:
+            bucket = ('suppress', link.src)
+        buckets.setdefault(bucket, []).append(link)
+    order = {str(k): i for i, k in enumerate(segs)}
+    groups = []
+    for kind, origin in sorted(buckets, key=lambda b: (order.get(b[1], len(order)), b[0] != 'copy', b[1])):
+        links = buckets[(kind, origin)]
+        groups.append(LinkGroup(f"{kind}:{origin}", kind, origin, tuple(links),
+                                _group_title(kind, origin, links, segs)))
+    return groups
+
+
+def view_entries(segment_data: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(text, view key)`` for the view chooser: all links, the selected
+    leg's links, then one entry per group (``'2/5  LEG_a copied to ...'``)."""
+    groups = link_groups(segment_data)
+    n_links = sum(len(g.links) for g in groups)
+    entries = [(f"All links ({n_links})", VIEW_ALL),
+               ("Selected leg (click a leg in the route table)", VIEW_LEG)]
+    entries += [(f"{i}/{len(groups)}  {g.title}", g.key) for i, g in enumerate(groups, 1)]
+    return entries
+
+
+def _group_keys(keys: list[str]) -> list[str]:
+    return [k for k in keys if k not in (VIEW_ALL, VIEW_LEG)]
+
+
+def step_view(keys: list[str], current: str, step: int) -> str:
+    """The group ``step`` places from ``current``, wrapping around.  From
+    :data:`VIEW_ALL` / :data:`VIEW_LEG` a step forward goes to the first
+    group, a step back to the last.  ``current`` when there is no group."""
+    groups = _group_keys(keys)
+    if not groups:
+        return current
+    if current not in groups:
+        return groups[0] if step > 0 else groups[-1]
+    return groups[(groups.index(current) + step) % len(groups)]
+
+
+def resolve_view(old_keys: list[str], new_keys: list[str], current: str) -> str:
+    """The view to keep after the links changed: ``current`` while it still
+    exists; a group that is gone gives the group now in its place (so a
+    user stepping through them stays one at a time); otherwise all."""
+    if current in new_keys:
+        return current
+    old_groups, new_groups = _group_keys(old_keys), _group_keys(new_keys)
+    if current in old_groups and new_groups:
+        return new_groups[min(old_groups.index(current), len(new_groups) - 1)]
+    return VIEW_ALL
+
+
+def links_in_view(segment_data: dict[str, Any], view: str, selected_leg: str | None = None) -> list[Link]:
+    """The links the map shows for ``view``: every link (:data:`VIEW_ALL`),
+    those touching ``selected_leg`` (:data:`VIEW_LEG`; none without a leg),
+    or one group (its key; none when the group is gone)."""
+    if view == VIEW_ALL:
+        return build_links(segment_data)
+    if view == VIEW_LEG:
+        if selected_leg is None:
+            return []
+        seg = str(selected_leg)
+        return [lk for lk in build_links(segment_data) if seg in (lk.src, lk.dst)]
+    for group in link_groups(segment_data):
+        if group.key == view:
+            return list(group.links)
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Geometry of a link arrow
 # ---------------------------------------------------------------------------
 
@@ -160,10 +306,13 @@ def curve_points(
     return pts
 
 
-def link_geometries(segment_data: dict[str, Any]) -> list[tuple[Link, list[tuple[float, float]]]]:
-    """``(link, points)`` for every link whose legs both have coordinates."""
+def link_geometries(
+    segment_data: dict[str, Any], links: list[Link] | None = None,
+) -> list[tuple[Link, list[tuple[float, float]]]]:
+    """``(link, points)`` for every link (or each of ``links``) whose legs
+    both have coordinates."""
     out = []
-    for link in build_links(segment_data):
+    for link in build_links(segment_data) if links is None else links:
         a = leg_midpoint((segment_data or {}).get(link.src))
         b = leg_midpoint((segment_data or {}).get(link.dst))
         if a is None or b is None or a == b:

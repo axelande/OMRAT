@@ -385,6 +385,26 @@ def test_run_sensitivity_cancel_keeps_partial(project):
     assert len(model.calls) < 5
 
 
+def test_run_sensitivity_drops_a_case_cancelled_mid_run(project):
+    """KNOWN_ISSUES 8: a cancelled run returns zeros; they must not become a result."""
+    specs = build_parameter_specs(project)
+    chosen = [_spec(specs, 'drift.anchor_d')]
+    model = _FakeModel()
+    state = {'cancel': False}
+
+    def run(data, phases):
+        if len(model.calls) == 2:          # baseline, minus run, then cancel during the plus run
+            state['cancel'] = True
+            model.calls.append(tuple(phases))
+            return BaselineReports(totals={'drift_grounding': 0.0, 'drift_allision': 0.0})
+        return model(data, phases)
+
+    result = run_sensitivity(project, chosen, run, delta=0.2, is_cancelled=lambda: state['cancel'])
+    assert result.cancelled
+    assert 'drift.anchor_d' not in result.completed_keys()
+    assert result.results == []
+
+
 # ---------------------------------------------------------------------------
 # Ranking
 # ---------------------------------------------------------------------------

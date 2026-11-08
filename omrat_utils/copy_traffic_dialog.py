@@ -319,14 +319,15 @@ def run(omrat: "OMRAT") -> None:
             lock=lock,
         )
         dlg.close()
-        notifier = getattr(omrat, 'notifier', None)
-        if notifier is not None and done:
+        if done:
             try:
+                from omrat_utils.traffic_report_dialog import notify_with_report
                 lock_txt = omrat.tr(" and locked") if lock else ""
                 swapped = [t for t in done if swaps.get(t)]
                 swap_txt = omrat.tr("; directions swapped on {names}").format(
                     names=describe_targets(swapped, seg_now)) if swapped else ""
-                notifier.display_message(
+                notify_with_report(
+                    omrat,
                     omrat.tr("Copied traffic from {src} to {n} leg(s){lock}: {names}").format(
                         src=describe_targets([src], seg_now), n=len(done), lock=lock_txt,
                         names=describe_targets(done, seg_now),

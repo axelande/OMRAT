@@ -98,17 +98,16 @@ def test_anchor_p_actually_reduces_grounding(proj_data):
         f"anchor_p=0.7 should REDUCE the grounding total, but got "
         f"{grounding_seven:.4e} vs {grounding_zero:.4e} at anchor_p=0.  "
         f"If these are equal, the anchor-shadow lookup bug is back: "
-        f"check the `lookup_type = 'depth' if obs_type == 'anchoring' "
-        f"else obs_type` remap in compute/drifting_model.py near lines "
-        f"828 and 2471."
+        f"check the `lookup_type = 'allision' if obs_type == 'allision' "
+        f"else 'depth'` remap in compute/drifting_model.py."
     )
 
 
 def test_shadow_lookup_remaps_anchoring_to_depth_in_source():
-    """Static guard: the cascade MUST remap `obs_type='anchoring'` to
-    `lookup_type='depth'` before calling `shadows_map.get(...)`, because
-    shadows are stored under `('depth', idx)` by
-    `_precompute_shadow_layer`.
+    """Static guard: the cascade MUST remap `obs_type='anchoring'` (and
+    `'grounding'`, KNOWN_ISSUES 12) to `lookup_type='depth'` before calling
+    `shadows_map.get(...)`, because shadows are stored under
+    `('depth', idx)` by `_precompute_shadow_layer`.
 
     This fast test complements the slow cascade-based characterization
     test below.  It catches the bug purely by inspecting the source --
@@ -128,10 +127,11 @@ def test_shadow_lookup_remaps_anchoring_to_depth_in_source():
         # Look at the 500 chars preceding this call: the remap line
         # should appear.
         preceding = src[max(0, offset - 500):offset]
-        assert "lookup_type" in preceding and "'anchoring'" in preceding, (
+        assert "lookup_type = 'allision' if obs_type == 'allision' else 'depth'" in preceding, (
             f"shadows_map.get at offset {offset}: preceding code must "
-            f"define `lookup_type = 'depth' if obs_type == 'anchoring' "
-            f"else obs_type`; otherwise anchor_union is never populated. "
+            f"define `lookup_type = 'allision' if obs_type == 'allision' "
+            f"else 'depth'`; otherwise anchor_union / blocker_union miss the "
+            f"depth shadows. "
             f"Preceding 500 chars were:\n---\n{preceding}\n---"
         )
 

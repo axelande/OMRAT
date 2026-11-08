@@ -184,6 +184,19 @@ def _layers_for(omrat: "OMRAT", key: str) -> list[Any]:
 # Project-level collect / apply
 # ---------------------------------------------------------------------------
 
+def current_style(omrat: "OMRAT", key: str) -> str | None:
+    """QML of the first ``key`` layer on the map, ``None`` when there is
+    none.  For legs the first leg that is not suppressed: a suppressed leg
+    is drawn dashed, which is not the project's leg style."""
+    try:
+        layers = _layers_for(omrat, key)
+    except Exception:  # nosec B110 B112
+        layers = []
+    if key == 'legs':
+        layers = [lyr for lyr in layers if not _is_suppressed_leg(omrat, lyr)]
+    return (export_style(layers[0]) or None) if layers else None
+
+
 def collect_styles(omrat: "OMRAT") -> dict[str, str]:
     """Current style of each layer type that exists, as ``{key: qml}``.
 
@@ -196,20 +209,7 @@ def collect_styles(omrat: "OMRAT") -> dict[str, str]:
     if isinstance(remembered, dict):
         styles.update({k: v for k, v in remembered.items() if isinstance(v, str) and v})
     for key in STYLE_KEYS:
-        try:
-            layers = _layers_for(omrat, key)
-        except Exception:  # nosec B110 B112
-            layers = []
-        if not layers:
-            continue
-        if key == 'legs':
-            # A suppressed leg is drawn dashed; that is not the project's
-            # leg style, so take the first leg that is not suppressed.
-            normal = [lyr for lyr in layers if not _is_suppressed_leg(omrat, lyr)]
-            if not normal:
-                continue
-            layers = normal
-        qml = export_style(layers[0])
+        qml = current_style(omrat, key)
         if qml:
             styles[key] = qml
     return styles
