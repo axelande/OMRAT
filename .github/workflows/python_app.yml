@@ -47,7 +47,7 @@ jobs:
       run: |
         docker run --volume $(pwd):/app -w=/app qgis_with_deps sh -c "
           export PYTHONPATH=\$PYTHONPATH:/app:/usr/share/qgis/python/plugins && \
-          xvfb-run -s '+extension GLX -screen 0 1024x768x24' python3 -m pytest tests -s
+          xvfb-run -s '+extension GLX -screen 0 1024x768x24' python3 -m pytest tests -s -o qgis_gui_enabled=true
         "
 
   flake8:

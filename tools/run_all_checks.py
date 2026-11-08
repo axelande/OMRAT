@@ -9,6 +9,11 @@ individual scripts stay the canonical place for their configuration):
    ``C:/OSGeo4W/apps/Python312/python.exe`` is all you need to launch it.
    Runs with ``-p no:faulthandler`` to silence the harmless
    ``0xc0000139`` first-chance DLL probe noise from pyarrow.
+   ``pytest.ini`` runs Qt offscreen, so no window shows up.
+1b. **native windows** -- the tests that need the real platform (window
+   frame / title bar, a native mouse wheel; ``NATIVE_WINDOW_TESTS``)
+   once more with ``-o qgis_gui_enabled=true``.  Their windows flash up
+   for a few seconds.
 2. **Qt6 check** -- ``tools/run_qt6_check.py`` (plugins.qgis.org's
    pyqgis4-checker, locally).
 3. **flake8** -- ``tools/run_flake8.py`` on the shipped surface.
@@ -66,6 +71,11 @@ class Step:
     tail: list[str] = field(default_factory=list)
 
 
+#: Tests that only mean something on the real platform plugin (Windows
+#: frames, native wheel events).  Offscreen they pass or skip trivially.
+NATIVE_WINDOW_TESTS = ("tests/test_dock_window_frame.py", "tests/test_dock_scroll.py")
+
+
 def _build_steps(args: argparse.Namespace) -> list[Step]:
     py = sys.executable
     pytest_cmd = [py, "-m", "pytest", "-q", "-p", "no:faulthandler", "tests"]
@@ -73,8 +83,11 @@ def _build_steps(args: argparse.Namespace) -> list[Step]:
         pytest_cmd += ["-m", "slow or not slow"]
     if args.pytest_args:
         pytest_cmd += shlex.split(args.pytest_args)
+    native_cmd = [py, "-m", "pytest", "-q", "-p", "no:faulthandler", "-o", "qgis_gui_enabled=true",
+                  *NATIVE_WINDOW_TESTS]
     return [
         Step("tests", "pytest (QGIS conftest)", pytest_cmd, needs_qgis_env=True),
+        Step("windows", "pytest (native windows)", native_cmd, needs_qgis_env=True),
         Step("qt6", "Qt6 / QGIS 4 check", [py, str(TOOLS_DIR / "run_qt6_check.py")]),
         Step("flake8", "flake8", [py, str(TOOLS_DIR / "run_flake8.py")]),
         Step("bandit", "bandit", [py, str(TOOLS_DIR / "run_bandit.py")]),
@@ -142,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stop-on-fail", action="store_true",
                         help="abort after the first failing step (pycache is still cleared)")
     parser.add_argument("--skip", action="append", default=[],
-                        choices=["tests", "qt6", "flake8", "bandit", "pycache"],
+                        choices=["tests", "windows", "qt6", "flake8", "bandit", "pycache"],
                         help="skip a step; may be given more than once")
     parser.add_argument("--slow", action="store_true",
                         help="include tests marked @slow (pytest.ini deselects them by default)")
