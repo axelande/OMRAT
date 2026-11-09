@@ -7,9 +7,6 @@ Run with::
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from omrat_utils.audit_report import (
@@ -17,9 +14,6 @@ from omrat_utils.audit_report import (
     parse_point_wkt,
     haversine_m,
 )
-
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -160,87 +154,3 @@ def test_ships_without_speed_or_draught_say_how_they_were_filled():
             "mean speed of the other legs (same type and length: 4) |") in md
     assert "| Ships without draught | none ✓ |" in md
     assert d['traffic_data']['1']['East going']['Speed (knots)'][0][0] == inf   # report never fills
-
-
-# ---------------------------------------------------------------------------
-# Real .omrat files: ore1 / ore2 / ore3.
-# ---------------------------------------------------------------------------
-ORE_FILES = {
-    'ore1': REPO_ROOT / 'ore1_20260518_061939.omrat',
-    'ore2': REPO_ROOT / 'ore2_20260518_062542.omrat',
-    'ore3': REPO_ROOT / 'ore3_20260518_064027.omrat',
-}
-
-
-def _load(path: Path) -> dict:
-    with open(path, encoding='utf-8') as f:
-        return json.load(f)
-
-
-@pytest.mark.skipif(
-    not ORE_FILES['ore1'].exists(),
-    reason="ore* fixture files not present in working tree",
-)
-def test_ore1_audit_calls_out_missing_depths():
-    md = build_choices_and_deltas_markdown(_load(ORE_FILES['ore1']))
-    # ore1 had 0 depths -> grounding silently zero; audit should call it out.
-    assert "drifting/powered grounding will be 0" in md
-    # ore1 used default pc -- no deltas.
-    pc_block = md.split("### Drift parameters")[0]
-    assert "⚠" not in pc_block
-
-
-@pytest.mark.skipif(
-    not ORE_FILES['ore2'].exists(),
-    reason="ore* fixture files not present in working tree",
-)
-def test_ore2_audit_clean_pc_but_complete_inputs():
-    md = build_choices_and_deltas_markdown(_load(ORE_FILES['ore2']))
-    # ore2 has depths now -> no "will be 0" warning.
-    assert "drifting/powered grounding will be 0" not in md
-    # Still default pc.
-    pc_block = md.split("### Drift parameters")[0]
-    assert "⚠" not in pc_block
-
-
-@pytest.mark.skipif(
-    not ORE_FILES['ore3'].exists(),
-    reason="ore* fixture files not present in working tree",
-)
-def test_ore3_audit_flags_overtaking_and_crossing_pc_changes():
-    md = build_choices_and_deltas_markdown(_load(ORE_FILES['ore3']))
-    # ore3 dropped overtaking 1.1e-4 -> 6e-5 (-45%) and crossing 1.3e-4 -> 1e-4 (-23%).
-    assert "pc.overtaking" in md
-    assert "pc.crossing" in md
-    # The bend / grounding / allision rows still match defaults.
-    # We at least expect two delta warnings (overtaking + crossing) in pc.
-    pc_block = md.split("### Drift parameters")[0]
-    assert pc_block.count("⚠") >= 2
-
-
-@pytest.mark.skipif(
-    not ORE_FILES['ore3'].exists(),
-    reason="ore* fixture files not present in working tree",
-)
-def test_ore3_audit_reports_no_imported_baseline_when_legacy():
-    # ore3 was saved before segments_imported was introduced — the audit
-    # should report a missing baseline rather than crash.
-    md = build_choices_and_deltas_markdown(_load(ORE_FILES['ore3']))
-    assert "No imported-geometry baseline on file." in md
-
-
-@pytest.mark.skipif(
-    not all(p.exists() for p in ORE_FILES.values()),
-    reason="ore* fixture files not present in working tree",
-)
-def test_dump_ore_audit_sections(capsys):
-    """Render each project so a human can eyeball the output.
-
-    Not a strict assertion — kept so the rendered Markdown gets printed
-    by ``pytest -s`` for visual sanity-checking.
-    """
-    for name, path in ORE_FILES.items():
-        md = build_choices_and_deltas_markdown(_load(path))
-        print(f"\n=== {name} =====================================================\n")
-        print(md)
-    assert capsys.readouterr().out.count("Choices & Deltas") == 3

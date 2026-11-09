@@ -204,7 +204,8 @@ details.leg[open] > summary { font-weight: 600; }
 .facts div span { color: var(--ink-2); }
 .dirgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 table.matrix td:first-child { white-space: nowrap; }
-#tip { position: fixed; z-index: 10; pointer-events: none; display: none; max-width: 320px;
+.badge[data-tip] { cursor: help; }
+#tip { position: fixed; z-index: 10; pointer-events: none; display: none; max-width: 420px; white-space: pre-line;
   background: var(--surface); color: var(--ink); border: 1px solid var(--axis); border-radius: 6px;
   padding: 6px 8px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
 input[type="search"] { font: inherit; padding: 3px 8px; border: 1px solid var(--axis); border-radius: 6px;
@@ -553,6 +554,30 @@ def _check_counts(leg: dict[str, Any], checks: list[dict[str, Any]]) -> tuple[in
     return warn, note
 
 
+_BADGE_LEVELS = (('warning', _WARN_ICON, 'Warning', 'warnings'), ('note', _NOTE_ICON, 'Note', 'notes'))
+
+
+def _check_tip(texts: list[str], label: str, plural: str) -> str:
+    """Hover text of a leg's warning / note badge: the checks themselves."""
+    if len(texts) == 1:
+        return f"{label}: {texts[0]}"
+    return f"{len(texts)} {plural}:\n" + '\n'.join(f"• {t}" for t in texts)
+
+
+def _leg_badges(leg: dict[str, Any], checks: list[dict[str, Any]], focusable: bool = True) -> list[str]:
+    """One badge per level with its count; hovering (or tabbing to) it shows
+    what the checks say.  ``focusable=False`` inside a ``<summary>``, which
+    is focusable itself and shows the first badge's text."""
+    badges = []
+    for level, icon, label, plural in _BADGE_LEVELS:
+        texts = [checks[i]['text'] for i in leg['checks'] if checks[i]['level'] == level]
+        if texts:
+            tab = ' tabindex="0"' if focusable else ''
+            badges.append(f"<span class=\"badge {level}\"{tab} data-tip=\"{_e(_check_tip(texts, label, plural))}\">"
+                          f"{icon} {len(texts)}</span>")
+    return badges
+
+
 def _leg_table(summary: dict[str, Any], decimal: str, stem: str) -> str:
     legs, checks, types = summary['legs'], summary['checks'], summary['types']
     show_calc = summary['calc_differs']
@@ -592,11 +617,7 @@ def _leg_table(summary: dict[str, Any], decimal: str, stem: str) -> str:
                              f"{fmt_ships(leg['calc'])}</td>")
         top = ''.join(f"<span class=\"tt\">{_e(short_type(types[i]))} {share * 100:.0f} %</span>"
                       for i, _q, share in leg['top_types'])
-        badges = []
-        if warn:
-            badges.append(f"<span class=\"badge warning\">{_WARN_ICON} {warn}</span>")
-        if note:
-            badges.append(f"<span class=\"badge note\">{_NOTE_ICON} {note}</span>")
+        badges = _leg_badges(leg, checks)
         cells += [
             f"<td class=\"src\">{_e(leg['source_text'])}</td>",
             f"<td>{top or '-'}</td>",
@@ -690,12 +711,7 @@ def _details(summary: dict[str, Any]) -> str:
     types, lengths, checks = summary['types'], summary['lengths'], summary['checks']
     out = []
     for leg in summary['legs']:
-        warn, note = _check_counts(leg, checks)
-        badges = ''
-        if warn:
-            badges += f" <span class=\"badge warning\">{_WARN_ICON} {warn}</span>"
-        if note:
-            badges += f" <span class=\"badge note\">{_NOTE_ICON} {note}</span>"
+        badges = ''.join(' ' + b for b in _leg_badges(leg, checks, focusable=False))
         d0, d1 = leg['dirs']
         calc = ('not in the calculation' if leg['calc'] is None else
                 f"{fmt_ships(d0['calc'] or 0.0)} / {fmt_ships(d1['calc'] or 0.0)} ships/year")

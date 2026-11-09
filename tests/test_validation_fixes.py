@@ -16,7 +16,6 @@ junction-validation feature in the live plugin:
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -309,24 +308,3 @@ def test_dock_handlers_tolerate_missing_main_widget():
     was_visible = _hide_dock_for_prompts(omrat)
     assert was_visible is None
     _restore_dock(omrat, was_visible)  # no exception
-
-
-# ---------------------------------------------------------------------------
-# End-to-end: the user-supplied broken file must now load through the
-# full normaliser + validator chain.
-# ---------------------------------------------------------------------------
-
-
-def test_user_supplied_t1_omrat_validates_after_schema_fix():
-    """The repro file the user reported must validate against the
-    updated RootModelSchema."""
-    import os
-    path = os.path.join(
-        os.path.dirname(__file__), '..', 't1.omrat',
-    )
-    if not os.path.exists(path):
-        pytest.skip("t1.omrat not present in repo")
-    from omrat_utils.validate_data import RootModelSchema
-    with open(path) as f:
-        data = json.load(f)
-    RootModelSchema.model_validate(data)

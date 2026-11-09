@@ -164,3 +164,26 @@ def test_many_legs_hide_names_by_default(data):
     page = render_traffic_report_html(build_traffic_summary(data))
     assert 'class="map nolabels"' in page
     assert 'id="map-names">' in page                       # unticked
+
+
+def test_check_badges_tell_what_they_are_about_on_hover(data):
+    """The leg table / leg details badges carry the checks' own text (shown on hover)."""
+    import html as html_mod
+    import re
+    data = _scenario(data)
+    data['segment_data']['1']['traffic_locked'] = True        # a note on leg 1 as well
+    summary = build_traffic_summary(data)
+    page = render_traffic_report_html(summary)
+    tips = [html_mod.unescape(t) for t in re.findall(r'<span class="badge \w+"[^>]*data-tip="([^"]*)"', page)]
+    checks = summary['checks']
+    for leg in summary['legs']:
+        for i in leg['checks']:
+            # once in the leg table, once in the leg's details
+            assert sum(checks[i]['text'] in t for t in tips) >= 2, checks[i]['text']
+    several = [t for t in tips if '\n• ' in t]
+    single = [t for t in tips if t.startswith(('Warning: ', 'Note: '))]
+    assert single, tips
+    if several:
+        assert re.match(r'\d+ (warnings|notes):\n• ', several[0])
+    assert 'tabindex="0" data-tip=' in page                   # keyboard users get it too
+    assert _parse(page).errors == []

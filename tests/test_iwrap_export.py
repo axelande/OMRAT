@@ -489,3 +489,96 @@ class TestAreasWithHoles:
         original, back, _ = self._round_trip(
             tmp_path, f'MULTIPOLYGON ((({self.RING}), ({self.HOLE})), (({second})))')
         assert back.area == pytest.approx(original.area, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Several OMRAT ship types in one IWRAP group (KNOWN_ISSUES item 2)
+# ---------------------------------------------------------------------------
+
+class TestGroupedShipTypes:
+    """Export: Towing, Tug, Pilot Vessel, ... all become IWRAP *Support ship*;
+    import: Container ship, Bulk carrier, ... all become OMRAT *Cargo*."""
+
+    TYPES = [
+        'Fishing', 'Towing', 'Dredging or underwater ops', 'Diving ops', 'Military ops',
+        'Sailing', 'Pleasure Craft', 'High speed craft (HSC)', 'Pilot Vessel',
+        'Search and Rescue vessel', 'Tug', 'Port Tender', 'Anti-pollution equipment',
+        'Law Enforcement', 'Spare', 'Medical Transport',
+        'Noncombatant ship according to RR Resolution No. 18',
+        'Passenger, all ships of this type', 'Cargo, all ships of this type',
+        'Tanker, all ships of this type', 'Other Type, all ships of this type',
+    ]
+    INTERVALS = [{'min': 0.0, 'max': 25.0, 'label': '0.0 - 25.0'},
+                 {'min': 25.0, 'max': 50.0, 'label': '25.0 - 50.0'}]
+
+    def _data(self):
+        n = len(self.TYPES)
+
+        def mat(fill):
+            return [[fill, fill] for _ in range(n)]
+
+        block = {'Frequency (ships/year)': mat(0.0), 'Speed (knots)': mat(0.0),
+                 'Draught (meters)': mat(0.0), 'Ship heights (meters)': mat(0.0),
+                 'Ship Beam (meters)': mat(0.0)}
+        towing, tug, pilot = (self.TYPES.index(t) for t in ('Towing', 'Tug', 'Pilot Vessel'))
+        block['Frequency (ships/year)'][towing][1] = 10.0
+        block['Frequency (ships/year)'][tug][1] = 30.0
+        block['Speed (knots)'][towing][1] = 12.0
+        block['Speed (knots)'][tug][1] = 8.0
+        block['Speed (knots)'][pilot][1] = 20.0      # no ships: must not count
+        block['Draught (meters)'][towing][1] = 4.0
+        block['Draught (meters)'][tug][1] = float('inf')  # ships, but no draught observed
+        block['Ship Beam (meters)'][towing][1] = 10.0
+        block['Ship Beam (meters)'][tug][1] = 6.0
+        data = TestGenerateIwrapXml()._minimal_data()
+        data['traffic_data'] = {'1': {'East going': block, 'West going': json.loads(json.dumps(block))}}
+        data['ship_categories'] = {'types': self.TYPES, 'length_intervals': self.INTERVALS}
+        return data
+
+    def _support_category(self, root):
+        st = next(el for el in root.iter('shiptype') if el.get('name') == 'Support ship')
+        return next(c for c in st.iter('category') if c.get('name') == '25-50')
+
+    def test_export_weights_the_group_by_ships(self):
+        cat = self._support_category(generate_iwrap_xml(self._data()))
+        assert float(cat.get('freq')) == 40
+        assert float(cat.get('speed')) == pytest.approx(9.0)    # (10*12 + 30*8) / 40, not 40/10
+        assert float(cat.get('draught')) == pytest.approx(4.0)  # the unknown draught is left out
+        assert float(cat.get('width')) == pytest.approx(7.0)    # (10*10 + 30*6) / 40
+        assert float(cat.get('height_1')) == 0                  # nothing known -> IWRAP's "not given"
+
+    def test_round_trip_keeps_ships_and_means(self, tmp_path):
+        data_path = tmp_path / 'data.omrat'
+        data_path.write_text(json.dumps(self._data()))
+        out_path = tmp_path / 'out.xml'
+        write_iwrap_xml(str(data_path), str(out_path))
+        back = parse_iwrap_xml(str(out_path))
+        types = back['ship_categories']['types']
+        col = [iv['label'] for iv in back['ship_categories']['length_intervals']].index('25-50')
+        block = back['traffic_data']['1']['East going']
+        row = types.index('Towing')  # where IWRAP's Support ship comes back
+        assert block['Frequency (ships/year)'][row][col] == pytest.approx(40.0)
+        assert block['Speed (knots)'][row][col] == pytest.approx(9.0)
+        assert block['Ship Beam (meters)'][row][col] == pytest.approx(7.0)
+
+    def test_import_adds_ship_types_that_share_an_omrat_row(self):
+        from compute.iwrap_convertion import _parse_tds_el
+        xml = (
+            '<traffic_distributions><traffic_distribution guid="g" name="td"><shiptypes>'
+            '<shiptype name="Container ship"><categories>'
+            '<category name="100-125" freq="100" speed="18" draught="9" height_1="40" width="30"/>'
+            '</categories></shiptype>'
+            '<shiptype name="General cargo ship"><categories>'
+            '<category name="100-125" freq="300" speed="10" draught="5" height_1="0" width="18"/>'
+            '</categories></shiptype>'
+            '<shiptype name="Bulk carrier"><categories>'
+            '<category name="100-125" freq="0" speed="12" draught="7" height_1="30" width="20"/>'
+            '</categories></shiptype>'
+            '</shiptypes></traffic_distribution></traffic_distributions>')
+        td_map, _, _ = _parse_tds_el(ET.fromstring(xml), {}, False)
+        cell = td_map['g']['categories'][('Cargo, all ships of this type', '100-125')]
+        assert cell['freq'] == pytest.approx(400.0)   # was 0: the empty Bulk carrier came last
+        assert cell['speed'] == pytest.approx(12.0)   # (100*18 + 300*10) / 400
+        assert cell['draught'] == pytest.approx(6.0)
+        assert cell['beam'] == pytest.approx(21.0)
+        assert cell['height'] == pytest.approx(40.0)  # only the container ships have a height

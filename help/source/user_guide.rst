@@ -1217,8 +1217,9 @@ What the page holds, top to bottom:
 * **Legs** -- one row per leg: length, ships/year per direction and in
   total (with a bar), the total *in the calculation* when that differs,
   where the traffic comes from, the three main ship types, the mean
-  speed and draught, and the number of warnings / notes.  Click a
-  header to sort, type in the box to filter.
+  speed and draught, and the number of warnings / notes.  Hover a
+  warning / note badge (here or in *Leg details*) to read what it is
+  about.  Click a header to sort, type in the box to filter.
 * **Ship types per leg** -- ships/year per ship type and leg, shaded
   darker for more ships; only ship types with ships somewhere are shown.
 * **Leg details** -- collapsed per leg: the facts, its checks, ships

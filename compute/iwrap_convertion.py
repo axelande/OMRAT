@@ -962,9 +962,25 @@ def _mat_safe(mat, r: int, c: int) -> float:
     return _sanitize_num(mat[r][c]) if mat and r < len(mat) and c < len(mat[r]) else 0.0
 
 
-def _mat_avg(mat, col: int, rows: list) -> float:
-    vals = [_mat_safe(mat, r, col) for r in rows if mat and r < len(mat) and col < len(mat[r])]
-    return round(sum(vals) / len(vals), 2) if vals else 0.0
+def _weighted_mean(pairs) -> float:
+    """Ship-weighted mean of ``(ships, value)`` pairs.
+
+    A value that is not positive is unknown (``_sanitize_num`` turns ``inf``
+    into 0, and 0 is IWRAP's "not given") and is left out; so are rows
+    without ships.  0.0 when nothing is known.
+    """
+    known = [(w, v) for w, v in pairs if w > 0 and v > 0]
+    total = sum(w for w, _ in known)
+    return sum(w * v for w, v in known) / total if total > 0 else 0.0
+
+
+def _mat_avg(mat, freq_mat, col: int, rows: list) -> float:
+    """Mean of ``mat[r][col]`` over the OMRAT ``rows`` of one IWRAP group,
+    weighted by their ships (KNOWN_ISSUES item 2: it was a plain mean over
+    every row, empty ones included, so a group of ten OMRAT rows with one
+    row of traffic exported a tenth of its speed)."""
+    pairs = [(_mat_safe(freq_mat, r, col), _mat_safe(mat, r, col)) for r in rows]
+    return round(_weighted_mean(pairs), 2)
 
 
 def _emit_shiptypes_prebuilt(shiptypes_el: ET.Element, leg_shiptypes: list):
@@ -1026,8 +1042,10 @@ def _emit_shiptypes_grouped(shiptypes_el: ET.Element, freq_mat, speed_mat, draft
                 continue
             _add_category_attr(cats_el, {
                 'name': label, 'freq': round(freq_sum, 2),
-                'speed': _mat_avg(speed_mat, c, rows), 'draught': _mat_avg(draft_mat, c, rows),
-                'height_1': _mat_avg(height_mat, c, rows), 'width': _mat_avg(beam_mat, c, rows),
+                'speed': _mat_avg(speed_mat, freq_mat, c, rows),
+                'draught': _mat_avg(draft_mat, freq_mat, c, rows),
+                'height_1': _mat_avg(height_mat, freq_mat, c, rows),
+                'width': _mat_avg(beam_mat, freq_mat, c, rows),
                 'depth': 0, 'p_ballast': 0,
             })
 
@@ -1332,6 +1350,28 @@ def _parse_category_el(cat_el, omrat_type: str, ship_code: int, length_interval:
     }
 
 
+_CATEGORY_MEAN_KEYS = ('speed', 'draught', 'height', 'beam')
+
+
+def _merge_categories(a: dict, b: dict) -> dict:
+    """One OMRAT cell from two IWRAP categories that import to it.
+
+    Several IWRAP ship types share an OMRAT row (Container ship, Bulk
+    carrier, Ro-Ro and General cargo -> Cargo; the four tankers -> Tanker).
+    Ships add up and the other values become ship-weighted means.  The
+    category used to be overwritten, so only the last IWRAP type of the
+    file kept its ships.
+    """
+    merged = dict(a)
+    merged['freq'] = a['freq'] + b['freq']
+    for key in _CATEGORY_MEAN_KEYS:
+        mean = _weighted_mean([(a['freq'], a[key]), (b['freq'], b[key])])
+        # No ships on either side (IWRAP files list empty categories): keep
+        # whichever value is known.
+        merged[key] = mean if mean > 0 else (a[key] if a[key] > 0 else b[key])
+    return merged
+
+
 def _parse_tds_el(tds_el, ship_type_codes: dict, debug: bool) -> tuple[dict, set, set]:
     td_map: dict = {}
     all_ship_types: set = set()
@@ -1356,7 +1396,9 @@ def _parse_tds_el(tds_el, ship_type_codes: dict, debug: bool) -> tuple[dict, set
                         li = cat_el.get('name', '0-25')
                         all_length_intervals.add(li)
                         cat_data = _parse_category_el(cat_el, omrat_type, ship_code, li, ship_type_codes, debug)
-                        cats_by_key[(omrat_type, li)] = cat_data
+                        key = (omrat_type, li)
+                        cats_by_key[key] = (_merge_categories(cats_by_key[key], cat_data)
+                                            if key in cats_by_key else cat_data)
                         if debug and cat_data['freq'] > 0:
                             print(f"  TD {td_name}: {omrat_type} ({li}) = {cat_data['freq']} ships/yr")
         td_map[guid] = {'name': td_name, 'categories': cats_by_key}
