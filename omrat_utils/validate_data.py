@@ -232,6 +232,29 @@ class TrafficScalingModel(BaseModel):
     follow_global: List[bool] = Field(default_factory=list)
 
 
+class SpeedRestrictionRule(BaseModel):
+    """Who a speed restriction zone applies to (first match from the top
+    wins; ``None`` = all ship types / no length bound / the zone value)."""
+    ship_type: Optional[int] = None
+    length_min: Optional[float] = None
+    length_max: Optional[float] = None
+    restricted: bool = True
+    limit_kn: Optional[float] = None
+    compliance_pct: Optional[float] = None
+
+
+class SpeedRestrictionZone(BaseModel):
+    """A polygon (EPSG:4326 WKT) where ships sail at most ``limit_kn``;
+    see ``compute/speed_restriction.py``."""
+    id: int
+    name: str = ''
+    enabled: bool = True
+    limit_kn: float
+    compliance_pct: float = 100.0
+    wkt: str
+    rules: List[SpeedRestrictionRule] = Field(default_factory=list)
+
+
 class RootModelSchema(BaseModel):
     pc: PC
     drift: Drift
@@ -252,3 +275,5 @@ class RootModelSchema(BaseModel):
     omrat_version: Optional[str] = None
     # Project the runs are grouped under in Previous runs (optional).
     project_name: Optional[str] = None
+    # Speed restriction zones (optional; absent when the project has none).
+    speed_restriction_zones: Optional[List[SpeedRestrictionZone]] = None

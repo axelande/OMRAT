@@ -621,7 +621,7 @@ def _leg_table(summary: dict[str, Any], decimal: str, stem: str) -> str:
         cells += [
             f"<td class=\"src\">{_e(leg['source_text'])}</td>",
             f"<td>{top or '-'}</td>",
-            f"<td class=\"n\" data-v=\"{leg['mean_speed'] or 0:.3f}\">{_num1(leg['mean_speed'])}</td>",
+            _speed_cell(leg),
             f"<td class=\"n\" data-v=\"{leg['mean_draught'] or 0:.3f}\">{_num1(leg['mean_draught'])}</td>",
             f"<td class=\"n\" data-v=\"{warn * 1000 + note}\">{''.join(badges) or '-'}</td>",
         ]
@@ -637,6 +637,19 @@ def _leg_table(summary: dict[str, Any], decimal: str, stem: str) -> str:
         "</div><div class=\"scroll\"><table class=\"sortable\" data-filter-rows>"
         f"<thead><tr>{''.join(head)}</tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>"
     )
+
+
+def _speed_cell(leg: dict[str, Any]) -> str:
+    """Mean speed as stored; a leg in a speed restriction zone also shows the
+    (lower) speed the calculation uses, with the zone as hover text."""
+    cell = f"<td class=\"n\" data-v=\"{leg['mean_speed'] or 0:.3f}\">{_num1(leg['mean_speed'])}"
+    zone = leg.get('speed_zone')
+    if zone:
+        tip = f"Speed restriction zone: {zone['zones']}. Mean speed along the leg in the calculation."
+        calc = _num1(zone['calc_speed'])
+        cell = (f"<td class=\"n changed\" data-v=\"{leg['mean_speed'] or 0:.3f}\" data-tip=\"{_e(tip)}\">"
+                f"{_num1(leg['mean_speed'])}<span class=\"dirlabel\">{calc} in the calculation</span>")
+    return cell + "</td>"
 
 
 def _type_table(summary: dict[str, Any], decimal: str, stem: str) -> str:
@@ -722,6 +735,11 @@ def _details(summary: dict[str, Any]) -> str:
             ('In the calculation (dir 1 / dir 2)', calc),
             ('Mean speed', _num1(leg['mean_speed'], ' kn')), ('Mean draught', _num1(leg['mean_draught'], ' m')),
         ]
+        if leg.get('speed_zone'):
+            zone = leg['speed_zone']
+            facts.append(('Speed restriction zone',
+                          f"{zone['zones']}; mean speed along the leg in the calculation "
+                          f"{_num1(zone['calc_speed'], ' kn')}"))
         facts_html = ''.join(f"<div><span>{_e(k)}:</span> {_e(v)}</div>" for k, v in facts)
         leg_checks = ''.join(
             f"<li><span class=\"badge {checks[i]['level']}\">"

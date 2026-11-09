@@ -1275,11 +1275,14 @@ class HandleQGISIface:
         the Traffic tab leg labels, the links layer and the highlight."""
         from omrat_utils.traffic_links import status_suffix
         segs = getattr(self.omrat, 'segment_data', None) or {}
+        zones = getattr(self.omrat, 'speed_zones', None)
         try:
             cb = self.omrat.main_widget.cbTrafficSelectSeg
             for i in range(cb.count()):
+                seg = str(cb.itemData(i))
                 base = cb.itemText(i).split('  [')[0]
-                cb.setItemText(i, f"{base}{status_suffix(str(cb.itemData(i)), segs)}")
+                tags = zones.leg_tags(seg) if zones is not None else []
+                cb.setItemText(i, f"{base}{status_suffix(seg, segs, tags)}")
         except Exception:  # nosec B110 B112
             pass
         self.refresh_traffic_links()

@@ -67,7 +67,7 @@ TYPE_LABELS: dict[str, str] = {
 }
 
 GROUPS: tuple[str, ...] = (
-    'routing', 'geometry', 'lateral', 'traffic', 'ships',
+    'routing', 'geometry', 'lateral', 'traffic', 'ships', 'speed_zones',
     'junctions', 'causation', 'legs', 'other',
 )
 GROUP_LABELS: dict[str, str] = {
@@ -76,6 +76,7 @@ GROUP_LABELS: dict[str, str] = {
     'lateral': 'Lateral distributions',
     'traffic': 'Traffic volume',
     'ships': 'Ship properties (speed, beam, length classes)',
+    'speed_zones': 'Speed restriction zones',
     'junctions': 'Junction transition matrices',
     'causation': 'Causation factors',
     'legs': 'Legs added / removed',
@@ -95,8 +96,10 @@ _LIMIT_BAND_DEG = 1.0
 # Top-level blocks the collision run reads.
 _MODEL_KEYS: tuple[str, ...] = (
     'segment_data', 'traffic_data', 'junctions', 'pc', 'ship_categories', 'traffic_scaling',
+    'speed_restriction_zones',
 )
-_TOP_GROUP = {'junctions': 'junctions', 'ship_categories': 'ships', 'traffic_scaling': 'traffic'}
+_TOP_GROUP = {'junctions': 'junctions', 'ship_categories': 'ships', 'traffic_scaling': 'traffic',
+              'speed_restriction_zones': 'speed_zones'}
 _PC_KEYS = {'headon': 'head-on', 'overtaking': 'overtaking', 'crossing': 'crossing',
             'merging': 'merging', 'bend': 'bend'}
 
@@ -422,16 +425,13 @@ def _collision_host():
 def run_collision_model(data: dict[str, Any]) -> dict[str, Any]:
     """Collision report for ``data`` exactly as Run model computes it.
 
-    Fills missing speeds / draughts and applies traffic scaling and the
-    suppressed-leg redirects first, like ``CalculationTask.run``.  ``data``
-    is consumed (pass a private copy).
+    Runs the traffic steps of ``CalculationTask.run`` first (gap fill,
+    scaling, suppressed-leg redirects, speed restriction zones --
+    ``compute/traffic_pipeline.py``).  ``data`` is consumed (pass a
+    private copy).
     """
-    from compute.data_preparation import apply_traffic_scaling
-    from compute.traffic_gaps import fill_traffic_gaps
-    from compute.traffic_redirect import apply_traffic_redirects
-    fill_traffic_gaps(data)
-    apply_traffic_scaling(data)
-    apply_traffic_redirects(data)
+    from compute.traffic_pipeline import prepare_traffic_for_run
+    prepare_traffic_for_run(data)
     host = _collision_host()
     host.run_ship_collision_model(data)
     return host.collision_report or {}

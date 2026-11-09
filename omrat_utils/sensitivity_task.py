@@ -79,17 +79,16 @@ def run_phases_headless(
 ) -> BaselineReports:
     """Run ``phases`` on a fresh stub-parented Calculation; return its reports.
 
-    ``data`` must already be a private copy: traffic scaling is applied in
-    place exactly like ``CalculationTask.run`` does, and so are the
-    suppressed-leg traffic redirects.  ``on_progress`` gets
+    ``data`` must already be a private copy: the traffic steps of
+    ``CalculationTask.run`` (gap fill, scaling, suppressed-leg redirects,
+    speed restriction zones -- ``compute/traffic_pipeline.py``) are applied
+    in place.  ``on_progress`` gets
     ``(phase_index, n_phases, done, total, message)`` straight from the
     models' own progress reporting (``done/total`` is 0..100 within the
     phase), so callers can show movement inside a long run.
     """
-    from compute.data_preparation import apply_traffic_scaling
     from compute.run_calculations import Calculation
-    from compute.traffic_gaps import fill_traffic_gaps
-    from compute.traffic_redirect import apply_traffic_redirects
+    from compute.traffic_pipeline import prepare_traffic_for_run
 
     cancelled = is_cancelled or (lambda: False)
     ordered = [(name, PHASE_METHODS[name]) for name in normalize_phases(phases)]
@@ -106,9 +105,7 @@ def run_phases_headless(
 
     calc = Calculation(StubParent())
     calc.set_progress_callback(_progress)
-    fill_traffic_gaps(data)
-    apply_traffic_scaling(data)
-    apply_traffic_redirects(data)
+    prepare_traffic_for_run(data)
     for idx, (name, method) in enumerate(ordered):
         if cancelled():
             break

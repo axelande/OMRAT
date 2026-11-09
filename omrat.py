@@ -57,6 +57,7 @@ from omrat_utils.handle_object import OObject  # noqa: E402
 from omrat_utils.handle_ship_cat import ShipCategories  # noqa: E402
 from omrat_utils.handle_consequence import Consequence  # noqa: E402
 from omrat_utils.handle_junctions import Junctions  # noqa: E402
+from omrat_utils.speed_restriction_zones import SpeedRestrictionZones  # noqa: E402
 from omrat_utils.gather_data import GatherData  # noqa: E402
 from omrat_widget import OMRATMainWidget  # noqa: E402
 
@@ -159,6 +160,8 @@ class OMRAT(
         self.traffic = Traffic(self, self.main_widget)
         self.distributions = Distributions(self)
         self.object = OObject(self)
+        # Speed restriction zones (Settings > Speed restriction zones...).
+        self.speed_zones = SpeedRestrictionZones(self)
         self.drift_values = self.drift_settings.drift_values
         self.causation_values = self.causation_f.data
         self.drift_corridor_layers: list[QgsVectorLayer] = []  # Track corridor layers for cleanup
@@ -445,6 +448,7 @@ class OMRAT(
     def _clear_layers(self) -> None:
         self.qgis_geoms.clear()
         self.object.clear()
+        self.speed_zones.clear()
         self._remove_drift_corridor_layers()
         self._remove_history_layers_from_project()
         if self.calc is not None:
@@ -601,6 +605,13 @@ class OMRAT(
                 wp_dlg.close()
             except RuntimeError:
                 pass
+        # The speed restriction dialog may hold a drawing layer and map highlights.
+        sr_dlg = getattr(self, '_speed_restriction_dlg', None)
+        if sr_dlg is not None:
+            try:
+                sr_dlg.close()
+            except RuntimeError:
+                pass
         # The depth simplification tool draws its zone and keeps the original depths as layers.
         ds_dlg = getattr(self, '_depth_simplify_dlg', None)
         if ds_dlg is not None:
@@ -617,6 +628,7 @@ class OMRAT(
         self.traffic.unload()
         self.ais.unload()
         self.object.unload()
+        self.speed_zones.unload()
         self.qgis_geoms.unload()
         self._remove_drift_corridor_layers()
         self._remove_history_layers_from_project()
@@ -990,6 +1002,10 @@ class OMRAT(
             )
             return
 
+        # Overlapping or invalid enabled speed restriction zones: no run.
+        if not self._speed_zones_ok_for_run(data):
+            return
+
         # Legs crossing without a shared waypoint add no crossing
         # collisions: offer to split them first (re-gather after a split).
         from omrat_utils.route_validation_ui import check_crossings_before_run
@@ -1034,6 +1050,23 @@ class OMRAT(
             'OMRAT',
             Qgis.MessageLevel.Info
         )
+
+    def _speed_zones_ok_for_run(self, data: dict) -> bool:
+        """``False`` (and the reasons shown) when enabled speed restriction
+        zones overlap or are invalid; compute would refuse them anyway."""
+        from compute.speed_restriction import blocking_problems
+        problems = blocking_problems(data)
+        if not problems:
+            return True
+        text = self.tr(
+            "The speed restriction zones cannot be used:\n\n{problems}\n\n"
+            "Fix them in Settings > Speed restriction zones... (or switch the zones off) "
+            "and run again."
+        ).format(problems='\n'.join(f'- {p}' for p in problems))
+        QgsMessageLog.logMessage(text, 'OMRAT', Qgis.MessageLevel.Critical)
+        if not self.testing:
+            QMessageBox.warning(self.main_widget, self.tr('Speed restriction zones'), text)
+        return False
 
     def _on_calculation_progress(self, completed: int, total: int, message: str) -> None:
         """Handle progress updates from the calculation task."""
@@ -1227,6 +1260,11 @@ class OMRAT(
         from omrat_utils.depth_simplify_dialog import open_depth_simplify
         open_depth_simplify(self)
 
+    def open_speed_restriction_zones(self) -> None:
+        """Open the speed restriction zones dialog (modeless)."""
+        from omrat_utils.speed_restriction_dialog import open_speed_restriction_zones
+        open_speed_restriction_zones(self)
+
     def open_waypoint_editor(self) -> None:
         """Open the waypoint editor (connect / disconnect leg ends)."""
         from omrat_utils.waypoint_editor_dialog import open_waypoint_editor
@@ -1347,6 +1385,7 @@ class OMRAT(
         sm.addAction("Drift settings", self.open_drift)
         sm.addAction("Ship Categories", self.open_ship_categories)
         sm.addAction("Causation Factors", self.open_causation_factors)
+        sm.addAction("Speed restriction zones...", self.open_speed_restriction_zones)
         sm.addAction("AIS connection settings", self.ais_settings)
         sm.addAction("Ship type mapping...", self.open_ship_type_mapping)
         sm.addAction("Database setup wizard...", self.open_db_setup_wizard)

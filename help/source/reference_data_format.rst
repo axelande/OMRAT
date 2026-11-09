@@ -42,7 +42,8 @@ An ``.omrat`` file is a single JSON object.  The top-level keys are:
 Analysis tab; Previous runs groups the project's runs under it.  It is
 left out when the field is empty, and older files without it load
 unchanged.  ``omrat_version`` records the OMRAT release that wrote the
-file.
+file.  ``speed_restriction_zones`` (optional, see below) holds the speed
+restriction zones.
 
 Some optional keys are also emitted by the plugin when present:
 ``results``, ``drifting_report``, ``collision_report``.  These are
@@ -296,6 +297,44 @@ Optional -- legacy projects pre-date this feature.  The legacy
 normaliser in :class:`omrat_utils.storage.Storage` seeds the block
 with ``global_percent = 100.0`` and ``follow_global = []`` (the
 empty list grows back to ``n_ship_types`` on first save).
+
+
+``speed_restriction_zones`` -- speed limits in areas
+====================================================
+
+.. code-block:: json
+
+   "speed_restriction_zones": [
+     {"id": 1, "name": "Anholt OWF", "enabled": true,
+      "limit_kn": 10.0, "compliance_pct": 100.0,
+      "wkt": "Polygon ((11.75 56.55, 11.90 56.55, 11.90 56.65, 11.75 56.65, 11.75 56.55))",
+      "rules": [
+        {"ship_type": 17, "length_min": null, "length_max": null,
+         "restricted": false, "limit_kn": null, "compliance_pct": null},
+        {"ship_type": null, "length_min": 100.0, "length_max": null,
+         "restricted": true, "limit_kn": 6.0, "compliance_pct": null}
+      ]}
+   ]
+
+Optional; left out when the project has no zones.  Written by
+**Settings > Speed restriction zones...** (:ref:`speed-restriction-zones`),
+read by :mod:`compute.speed_restriction`.
+
+* ``wkt`` -- polygon or multipolygon in EPSG:4326.  Enabled zones may not
+  overlap (shared edges are fine).
+* ``limit_kn`` / ``compliance_pct`` -- the zone default.
+* ``rules`` -- tried in order, the first match wins.  ``ship_type`` is the
+  row index of the traffic matrix (``null`` = all types);
+  ``length_min`` / ``length_max`` are length class boundaries (a class
+  ``(lo, hi]`` matches when ``lo >= length_min`` and ``hi <= length_max``);
+  ``restricted: false`` exempts the ships, otherwise ``limit_kn`` /
+  ``compliance_pct`` override the zone (``null`` = the zone value).
+
+Compute applies the zones on its private copy after the scaling and the
+suppressed-leg moves; ``traffic_data`` in the file always holds the
+measured speeds.  On that copy a leg in a zone gets the time-equivalent
+``Speed (knots)`` and two extra matrices, ``Speed at start point (knots)``
+and ``Speed at end point (knots)``, which are never saved.
 
 
 ``segment_data`` -- per-leg geometry and parameters

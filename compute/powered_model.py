@@ -26,6 +26,7 @@ from typing import Any, Iterator
 from compute.iwrap_defaults import IWRAP_PC_DEFAULTS
 from compute.cat1_start_zone import start_zone_fraction, start_zone_settings  # noqa: E402
 from compute.ray_sampling import ray_sampling_settings  # noqa: E402
+from compute.speed_restriction import speed_matrix, turning_point  # noqa: E402
 from geometries.get_powered_overlap import (
     SimpleProjector as _PoweredProjector,
     _build_legs_and_obstacles,
@@ -297,7 +298,7 @@ class PoweredModelMixin:
                 ai = ai_per_dir[min(dir_idx, 1)]
                 freq_arr = dir_data.get('Frequency (ships/year)', [])
                 drau_arr = dir_data.get('Draught (meters)', [])
-                spd_arr = dir_data.get('Speed (knots)', [])
+                spd_arr = speed_matrix(dir_data, turning_point(dir_idx))
                 for loa_i, freq_row in enumerate(freq_arr):
                     if not hasattr(freq_row, '__iter__'):
                         continue
@@ -380,7 +381,7 @@ class PoweredModelMixin:
                 continue
             dir_data = leg_dirs[dir_keys[dir_idx]]
             freq_arr = dir_data.get('Frequency (ships/year)', [])
-            spd_arr = dir_data.get('Speed (knots)', [])
+            spd_arr = speed_matrix(dir_data, turning_point(dir_idx))
             hgt_arr = dir_data.get('Ship heights (meters)', [])
             for loa_i, freq_row in enumerate(freq_arr):
                 if not hasattr(freq_row, '__iter__'):

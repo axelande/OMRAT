@@ -5,6 +5,7 @@ methods so they can be composed into ``CalculationRunner`` without bloating
 the main module.
 """
 
+import copy
 from typing import Any
 
 import geopandas as gpd
@@ -27,6 +28,25 @@ from ui.show_geom_res import ShowGeomRes
 # without having to edit the .ui.
 _VIZ_DIALOG_DEFAULT_SIZE = (1400, 900)
 _VIZ_DIALOG_MIN_SIZE = (900, 600)
+
+
+def _with_speed_restrictions(data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` with its speed restriction zones applied (on a copy).
+
+    The powered View casts its own rays from the run's snapshot; Cat II
+    must use the speed at the turning point like the model does
+    (``compute/speed_restriction.py``).  Without zones -- or if they cannot
+    be applied -- the data is used as it is.
+    """
+    from compute.speed_restriction import ZONES_KEY, apply_speed_restrictions
+    if not data.get(ZONES_KEY):
+        return data
+    try:
+        work = copy.deepcopy(data)
+        apply_speed_restrictions(work)
+        return work
+    except Exception:  # nosec B110 - the View falls back to the stored speeds
+        return data
 
 
 def _prepare_viz_dialog(dialog) -> None:
@@ -123,7 +143,7 @@ class VisualizationMixin:
         dialog = ShowGeomRes(self.p.main_widget)
         _prepare_viz_dialog(dialog)
         PoweredOverlapVisualizer.show_in_dialog(
-            dialog, data, mode="allision", max_draft=max_draft,
+            dialog, _with_speed_restrictions(data), mode="allision", max_draft=max_draft,
             report=self._powered_view_report('allision'),
         )
         dialog.exec()
@@ -146,7 +166,7 @@ class VisualizationMixin:
         dialog = ShowGeomRes(self.p.main_widget)
         _prepare_viz_dialog(dialog)
         PoweredOverlapVisualizer.show_in_dialog(
-            dialog, data, mode="grounding", max_draft=max_draft,
+            dialog, _with_speed_restrictions(data), mode="grounding", max_draft=max_draft,
             report=self._powered_view_report('grounding'),
         )
         dialog.exec()

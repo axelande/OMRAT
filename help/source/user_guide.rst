@@ -1671,12 +1671,13 @@ re-ranked later.  **Save report...** writes the same pair anywhere and
 Settings menu
 =============
 
-Settings are split across seven sub-dialogs accessed from the
+Settings are split across nine sub-dialogs accessed from the
 **Settings** menu: **Drift settings**, **Ship Categories**,
-**Causation Factors**, **AIS connection settings**,
-**Ship type mapping...**, **Database setup wizard...** and
-**Junction transition matrix...** (the last one is documented in
-:ref:`junctions`).
+**Causation Factors**, **Speed restriction zones...**
+(:ref:`speed-restriction-zones`), **AIS connection settings**,
+**Ship type mapping...**, **Database setup wizard...**,
+**Waypoint editor...** (:ref:`waypoint-editor`) and
+**Junction transition matrix...** (documented in :ref:`junctions`).
 
 Drift settings
 --------------
@@ -1748,6 +1749,152 @@ grounding and allision alike.  It exists because the ships' lateral
 positions right after a junction are not yet described by the new leg's
 fitted distribution; see :ref:`cat1-start-zone` for the reasoning and a
 worked example.  Turn it off to reproduce IWRAP's plain Category I.
+
+.. _speed-restriction-zones:
+
+Speed restriction zones
+-----------------------
+
+**Settings > Speed restriction zones...** sets speed limits in areas, for
+example around a wind farm.  Ships sail at most the zone's limit inside
+the zone.  A zone is a polygon with a limit (knots), an assumed
+**compliance** (default 100 %) and, optionally, rules for who it applies
+to.
+
+.. important::
+
+   Only the accident **frequencies** change.  The causation factors and
+   the oil-spill consequences do not depend on speed in OMRAT (or in
+   IWRAP), so a lower speed means more ships in the area at the same
+   time, and most frequencies go **up**:
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 30 34 36
+
+      * - Accident type
+        - Depends on speed as
+        - A lower speed gives
+      * - Head-on, crossing, merging, bend
+        - :math:`1/V` (ship density)
+        - more candidates
+      * - Overtaking
+        - :math:`1/V_{slow} - 1/V_{fast}`
+        - fewer (none when every ship sails at the limit)
+      * - Drifting grounding / allision
+        - exposure hours :math:`L/V`
+        - more
+      * - Powered, Category II
+        - :math:`\exp(-d/(a_i V))`
+        - fewer
+      * - Powered, Category I
+        - no speed term
+        - unchanged
+
+   Example: a 10 km leg at 12 kn with half of it in an 8 kn zone sails
+   the leg at a time-equivalent 9.6 kn: head-on candidates and drifting
+   exposure on the leg rise by 25 %.  A crossing at a waypoint inside the
+   zone rises by 50 % (12 / 8).  An obstacle 2 km past a turning point
+   inside the zone (:math:`a_i` = 180 s) gets 59 % less Category II.
+
+The dialog
+~~~~~~~~~~
+
+The dialog is modeless, so the map stays usable while it is open.  The
+zones are listed at the top:
+
+* **On** -- switch a zone off without removing it (keep two alternatives
+  in one project and compare the runs).
+* **Name**, **Limit (kn)**, **Compliance (%)** -- edited with one click;
+  both ``.`` and ``,`` work as the decimal mark.
+* **Applies to** -- *All ships* or the number of rules.
+* **Legs** -- how many legs the zone touches; the hover text gives the
+  share of each leg inside the zone and the mean speed per direction
+  before and after.
+
+**Draw new** digitises a polygon on the map (click the corners,
+right-click to finish).  **Load from file...** reads a polygon file
+(shapefile, GeoPackage, GeoJSON, KML) and makes one zone per polygon; it
+asks which attribute holds the limit (an attribute called *speed* /
+*limit* / *knots* is suggested) and the name.  **Zoom to** zooms to the
+selected zone, which is highlighted on the map together with the parts of
+the legs inside it.
+
+Who a zone applies to: rules
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Without rules a zone applies to every ship.  Each rule has a **ship
+type** (or all ship types), an optional **length range** and either a
+limit of its own or **exempt**.  The rules are tried from the top and
+**the first rule that matches a ship wins**; ships no rule matches get the
+zone's limit.  A blank limit / compliance cell means the zone's value.
+Use **Up** / **Down** to order them.  Example::
+
+   1  Passenger / ferry   all lengths   exempt
+   2  All ship types      >= 100 m      6 kn
+   (others)                             zone limit, 8 kn
+
+The lengths are the boundaries of the length classes in
+**Ship Categories**: the traffic is stored per class, so a ship of 30 m
+cannot be told from one of 45 m in the class 25-50 m.  If the classes
+are changed so that a rule no longer fits, the zone turns red and says
+why.
+
+**Compliance** below 100 % means that share sails at the limit and the
+rest keeps its speed; the two are mixed by the time they spend in the
+zone (:math:`1/V`).
+
+How the zones enter the calculation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+At the start of every run (after the missing speeds are filled, the
+traffic scaling and the suppressed-leg moves), each traffic cell gets:
+
+* **along the leg** the time-equivalent speed
+  :math:`1/V_{leg} = (1 - \sum f_z)/V + \sum f_z/V_z`, with :math:`f_z`
+  the share of the leg length inside zone :math:`z`.  Head-on and
+  overtaking (linear in :math:`1/V` along the leg) and the drifting
+  exposure hours are then the same as for a leg split at the zone
+  boundary.  The drifting exposure is spread evenly along the leg;
+* **at a waypoint** inside a zone the zone speed.  Crossing, merging and
+  bend collisions are counted at the waypoint, and powered Category II
+  starts at the turning point (the end a direction sails towards), so
+  they use that speed.  A waypoint on the zone boundary counts as inside.
+
+The legs themselves are not split and nothing is written back to the
+Traffic tab: it keeps showing the measured speeds, and a leg in an
+enabled zone is labelled ``[speed zone]`` there.
+
+Overlapping zones
+~~~~~~~~~~~~~~~~~
+
+Zones may share an edge but not overlap.  Drawing, loading, moving a
+vertex or switching on a zone that overlaps another enabled zone gives
+an error on the message bar, and both zones turn red in the dialog.
+**Run model** refuses to start while enabled zones overlap or are invalid
+(no polygon, a limit of 0, a rule that does not fit) and lists what to
+fix.  Zones that are switched off are not checked, so alternatives may
+overlap.
+
+On the map and in the outputs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* The layer **Speed restriction zones** is on the map whenever the
+  project has zones (hide it in the Layers panel if you like): a thin grid
+  with the limit as label, a grey dashed outline for a zone that is
+  switched off.  A restyle is saved with the project.  Move a vertex with
+  the QGIS editing tools and the zone follows.
+* The **traffic report** shows, for a leg in a zone, the mean speed in the
+  calculation next to the stored one and lists the legs in a note.
+* The **run report** gets a *Speed restriction zones* section: the zones,
+  their rules and per leg and direction the speed along the leg and at
+  both ends.
+* **Compare**: the zones are part of *Settings & inputs*, and *More
+  info (collisions)* has them as an input group of their own.
+* The **sensitivity analysis** offers *Speed limit (all enabled zones)*,
+  which moves every enabled zone's limit (and its rules' limits)
+  together.
+* The **IWRAP export** ignores the zones.
 
 Ship Categories
 ---------------

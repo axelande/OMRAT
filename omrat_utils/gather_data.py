@@ -163,7 +163,19 @@ class GatherData:
         # Write-once snapshot of imported segment endpoints.  See
         # ``omrat_utils/audit_report.py`` for how this is consumed.
         self.data['segments_imported'] = self.get_segments_imported_for_save()
+        # Speed restriction zones (compute/speed_restriction.py); the key is
+        # left out when there are none, so older files round-trip unchanged.
+        self._store_speed_zones()
         return self.data
+
+    def _store_speed_zones(self) -> None:
+        from compute.speed_restriction import ZONES_KEY
+        handler = getattr(self.p, 'speed_zones', None)
+        zones = handler.to_save() if handler is not None else []
+        if zones:
+            self.data[ZONES_KEY] = zones
+        else:
+            self.data.pop(ZONES_KEY, None)
 
     def get_segments_imported_for_save(self) -> dict[str, dict[str, str]]:
         """Snapshot endpoints captured at import / first-digitize time.
@@ -471,6 +483,17 @@ class GatherData:
                 data.get('junctions') or {}, data.get('segment_data') or {},
             )
 
+    def _populate_speed_zones(self, data: dict) -> None:
+        """Zones of the file: they replace the current ones after Clear &&
+        Load (the model is empty then) and are added on a Merge.  A file
+        without zones leaves the current ones alone, like ``project_name``."""
+        from compute.speed_restriction import ZONES_KEY
+        handler = getattr(self.p, 'speed_zones', None)
+        zones = data.get(ZONES_KEY)
+        if handler is None or not zones:
+            return
+        handler.load(zones, merge=bool(handler.zones))
+
     def _project_name(self) -> str:
         le = getattr(self.p.main_widget, 'LEProjectName', None)
         try:
@@ -495,6 +518,7 @@ class GatherData:
         self.populate_tbl(object_rows, self.p.main_widget.twObjectList)
         self._populate_objects_and_canvas(data, depth_rows, object_rows)
         self._populate_consequence_and_junctions(data)
+        self._populate_speed_zones(data)
         self._apply_layer_styles(data)
         geoms = getattr(self.p, 'qgis_geoms', None)
         if geoms is not None and hasattr(geoms, 'refresh_suppressed_styles'):

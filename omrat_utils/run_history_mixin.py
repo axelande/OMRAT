@@ -489,12 +489,19 @@ class RunHistoryMixin:
                 or getattr(calc_object, '_last_depths', None)
             ),
             skipped_parts=skipped,
+            speed_restrictions=self._speed_restriction_summary(calc_object),
         )
         md_path = out_dir / self._results_md_filename(base_filename)
         md_path.parent.mkdir(parents=True, exist_ok=True)
         with md_path.open('w', encoding='utf-8') as f:
             f.write(content)
         return md_path
+
+    @staticmethod
+    def _speed_restriction_summary(calc_object: Any) -> dict | None:
+        """The run's speed restriction summary (set by ``CalculationTask``), if any."""
+        summary = getattr(calc_object, 'speed_restriction_summary', None)
+        return summary if isinstance(summary, dict) else None
 
     @staticmethod
     def _results_md_filename(base_filename: str) -> str:

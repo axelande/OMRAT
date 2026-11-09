@@ -62,6 +62,7 @@ DEFAULT_MAX_DRAFT = 15.0  # default max ship draft (m)
 # Ray count and span live in compute/ray_sampling.py (6 sigma, 1000 rays)
 # so the report and the tangent-line markers use the same figures.
 from compute.ray_sampling import N_RAYS, RAY_SPAN_SIGMA, ray_offsets  # noqa: E402,F401
+from compute.speed_restriction import speed_matrix, turning_point  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +93,11 @@ def _project_wkt_geom(geom, proj: SimpleProjector):
     return shapely_transform(lambda x, y, z=None: proj.transform(x, y), geom)
 
 
-def _weighted_avg_speed_knots(traffic_dir: dict) -> float:
+def _weighted_avg_speed_knots(traffic_dir: dict, at: str | None = None) -> float:
+    """Ship-weighted mean speed; ``at`` = ``'start'`` / ``'end'`` takes the
+    speed at that waypoint (lower in a speed restriction zone)."""
     freq = traffic_dir.get("Frequency (ships/year)", [])
-    spd = traffic_dir.get("Speed (knots)", [])
+    spd = speed_matrix(traffic_dir, at)
     tot_f, tot_fs = 0.0, 0.0
     for row_f, row_s in zip(freq, spd):
         for f, s in zip(row_f, row_s):
@@ -600,7 +603,8 @@ def _build_leg_entry(seg_id: str, seg: dict, traffic: dict, proj: "SimpleProject
     seg_traffic = traffic.get(seg_id, {})
     dir_info: list[dict] = []
     for i, d_name in enumerate(dirs):
-        spd_kn = _weighted_avg_speed_knots(seg_traffic[d_name]) if d_name in seg_traffic else 0
+        # Cat II starts at the turning point: the speed there.
+        spd_kn = _weighted_avg_speed_knots(seg_traffic[d_name], turning_point(i)) if d_name in seg_traffic else 0
         dir_info.append({
             "name": d_name, "speed_kn": spd_kn, "speed_ms": spd_kn * 1852.0 / 3600.0,
             "ai": ai_values[min(i, 1)],

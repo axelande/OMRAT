@@ -245,6 +245,52 @@ Pure Python, no QGIS dependency.
    Keep redirects consistent after ``split_leg_at_points``.
 
 
+compute.speed_restriction
+=========================
+
+Speed restriction zones (:ref:`speed-restriction-zones`).  Pure Python
+(shapely), no QGIS dependency.
+
+**Source file:** ``compute/speed_restriction.py`` (`View on GitHub <https://github.com/axelande/OMRAT/blob/main/compute/speed_restriction.py>`__)
+
+.. function:: apply_speed_restrictions(data)
+
+   Restrict the speeds of ``data['traffic_data']`` in place (compute copy
+   only): the time-equivalent ``Speed (knots)`` along each leg in a zone
+   plus ``Speed at start point (knots)`` / ``Speed at end point (knots)``.
+   Returns ``{'zones': [...], 'legs': [...]}``.  Raises
+   ``SpeedRestrictionError`` for overlapping or invalid enabled zones.
+
+.. function:: speed_matrix(dir_data, at=None)
+
+   The speed matrix a model reads: ``at='start'`` / ``'end'`` = the speed
+   at that waypoint (crossing, merging, bend, powered Cat II), ``None`` =
+   along the leg.  Falls back to ``Speed (knots)``.
+
+.. function:: cell_limit(zone, ship_type, length_idx, bounds)
+
+   ``(limit_kn, compliance)`` for one traffic cell, ``None`` when exempt;
+   the first matching rule wins.
+
+.. function:: blocking_problems(data)
+
+   The messages that stop Run model: overlapping or invalid enabled zones.
+
+
+compute.traffic_pipeline
+========================
+
+**Source file:** ``compute/traffic_pipeline.py`` (`View on GitHub <https://github.com/axelande/OMRAT/blob/main/compute/traffic_pipeline.py>`__)
+
+.. function:: prepare_traffic_for_run(data)
+
+   The traffic steps every run takes on its private copy, in order: gap
+   fill, traffic scaling, suppressed-leg redirects, speed restriction
+   zones.  Used by ``CalculationTask.run``,
+   ``sensitivity_task.run_phases_on_stub`` and
+   ``compare_explain.run_collision_model``.
+
+
 geometries.drift
 =================
 

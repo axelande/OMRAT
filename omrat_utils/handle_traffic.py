@@ -146,9 +146,18 @@ class Traffic:
             name_item = self.dw.twRouteList.item(i, 2)
             label = name_item.text() if name_item is not None else seg_id
             if isinstance(segment_data, dict):
-                label = f"{label}{status_suffix(seg_id, segment_data)}"
+                label = f"{label}{status_suffix(seg_id, segment_data, self._speed_zone_tags(seg_id))}"
             self.dw.cbTrafficSelectSeg.addItem(label, seg_id)
         self.c_seg = self.dw.cbTrafficSelectSeg.currentData() or ''
+
+    def _speed_zone_tags(self, seg_id: str) -> list[str]:
+        """``['speed zone']`` when the leg is in an enabled speed restriction
+        zone: the table shows the stored speed, the run uses a lower one."""
+        zones = getattr(self.omrat, 'speed_zones', None)
+        try:
+            return zones.leg_tags(seg_id) if zones is not None else []
+        except Exception:  # nosec B110 - the label is cosmetic
+            return []
 
     def set_table_headings(self):
         """Sets the column and row names of the table"""

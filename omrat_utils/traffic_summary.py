@@ -10,8 +10,11 @@ returns plain dicts and lists:
   tab shows) and *in the calculation*.  The latter repeats Run model's own
   steps on a private copy: :func:`compute.traffic_scaling.apply_traffic_scaling`,
   then :func:`compute.traffic_redirect.apply_traffic_redirects` (suppressed
-  legs leave, their ships join the target legs).  Keep it in step with
-  ``CalculationTask.run``;
+  legs leave, their ships join the target legs), then
+  :func:`compute.speed_restriction.apply_speed_restrictions` (lower speeds
+  in speed restriction zones).  Keep it in step with
+  ``compute/traffic_pipeline.py`` (gap filling is left out on purpose: the
+  report shows the gaps);
 * where a leg's traffic comes from (own data, copy, suppressed, none);
 * the ship-type mix, mean speed / draught and the type x length matrix;
 * the automatic checks (:data:`CHECK_TEXT` lists them), each a
@@ -28,6 +31,9 @@ import math
 from datetime import datetime
 from typing import Any
 
+from compute.speed_restriction import (
+    ZONES_KEY, SpeedRestrictionError, apply_speed_restrictions, zone_label,
+)
 from compute.traffic_gaps import DRAUGHT_KEY, FILL_RULE, FREQ_KEY, SPEED_KEY, cell_gaps
 from compute.traffic_redirect import (
     apply_traffic_redirects, dir_key, direction_bearing, direction_label, get_redirect,
@@ -62,6 +68,8 @@ CHECK_TEXT = {
     'suppressed_lost': "Suppressed ships without a target",
     'redirect': "Problems moving suppressed traffic",
     'locked': "Locked legs (Update all distributions skips them)",
+    'speed_zone': "Legs in speed restriction zones (lower speed in the calculation)",
+    'speed_zone_error': "Speed restriction zones that stop Run model",
 }
 """Every check the report runs, for its "what was checked" list."""
 
@@ -253,17 +261,37 @@ def _direction_entry(seg: str, d: int, segs: dict[str, Any], traffic: dict[str, 
     }
 
 
-def _calculation_view(data: dict[str, Any]) -> tuple[dict, dict, dict[str, Any]]:
-    """``(scaled traffic, calculated traffic, redirect summary)`` -- Run model's
-    own pre-processing on a private copy (lateral samples left out)."""
+def _calculation_view(data: dict[str, Any]) -> tuple[dict, dict, dict[str, Any], dict[str, Any], list[str]]:
+    """``(scaled traffic, calculated traffic, redirect summary, speed zone
+    summary, speed zone problems)`` -- Run model's own pre-processing on a
+    private copy (lateral samples left out).  Zones that would stop the run
+    give no speed change and their problems instead."""
     segs = {k: {f: v for f, v in d.items() if f not in ('dist1', 'dist2')} if isinstance(d, dict) else d
             for k, d in (data.get('segment_data') or {}).items()}
     work = {'segment_data': copy.deepcopy(segs),
-            'traffic_data': copy.deepcopy(data.get('traffic_data') or {})}
+            'traffic_data': copy.deepcopy(data.get('traffic_data') or {}),
+            'ship_categories': copy.deepcopy(data.get('ship_categories') or {}),
+            ZONES_KEY: copy.deepcopy(data.get(ZONES_KEY) or [])}
     apply_traffic_scaling(work)
     scaled = copy.deepcopy(work['traffic_data'])
     summary = apply_traffic_redirects(work)
-    return scaled, {'segment_data': work['segment_data'], 'traffic_data': work['traffic_data']}, summary
+    try:
+        speed, speed_problems = apply_speed_restrictions(work), []
+    except SpeedRestrictionError as exc:
+        speed, speed_problems = {'zones': [], 'legs': []}, [p for p in str(exc).splitlines() if p]
+    calc = {'segment_data': work['segment_data'], 'traffic_data': work['traffic_data']}
+    return scaled, calc, summary, speed, speed_problems
+
+
+def _speed_zone_text(row: dict[str, Any], zones: dict[int, dict[str, Any]]) -> str:
+    """``Zone 1 "Anholt" 43 %`` (or ``... (end point only)``) for one leg."""
+    parts = [f"{zone_label(zones.get(zid, {'id': zid}))} {100.0 * share:.0f} %"
+             for zid, share in sorted((row.get('shares') or {}).items())]
+    for key, end in (('start_zone', 'start'), ('end_zone', 'end')):
+        zid = row.get(key)
+        if zid is not None and zid not in (row.get('shares') or {}):
+            parts.append(f"{zone_label(zones.get(zid, {'id': zid}))} ({end} point only)")
+    return ', '.join(parts)
 
 
 def _node_key(text: Any) -> tuple[float, float] | None:
@@ -287,8 +315,10 @@ def build_traffic_summary(
     types, lengths = _labels(data, rows, cols)
     rows, cols = max(rows, len(types)), max(cols, len(lengths))
 
-    scaled_traffic, calc, redirect_summary = _calculation_view(data)
+    scaled_traffic, calc, redirect_summary, speed_summary, speed_problems = _calculation_view(data)
     calc_segs, calc_traffic = calc['segment_data'], calc['traffic_data']
+    speed_zones = {z['id']: z for z in speed_summary.get('zones') or []}
+    speed_rows = {str(r['leg']): r for r in speed_summary.get('legs') or []}
 
     legs: list[dict[str, Any]] = []
     for seg, seg_d in segs.items():
@@ -313,6 +343,13 @@ def build_traffic_summary(
         block = traffic.get(seg) or {}
         both = [block.get(d['key']) for d in dirs if d['key'] is not None]
         suppressed = is_suppressed(segs, seg)
+        speed_zone = None
+        if seg in speed_rows and seg in calc_segs:
+            c_block = calc_traffic.get(seg) or {}
+            speed_zone = {
+                'zones': _speed_zone_text(speed_rows[seg], speed_zones),
+                'calc_speed': _combined_mean(list(c_block.values()), SPEED_KEY, range(rows), range(cols)),
+            }
         legs.append({
             'id': seg,
             'name': _name(seg, segs),
@@ -334,6 +371,7 @@ def build_traffic_summary(
             'copy_of': _copy_source(seg_d),
             'suppressed': suppressed,
             'suppressed_with': group_lead(segs, seg),
+            'speed_zone': speed_zone,
             'received_moves': [],
             'checks': [],
         })
@@ -357,6 +395,7 @@ def build_traffic_summary(
         leg['source_text'] = _source_text(leg, segs, traffic)
 
     checks = _run_checks(legs, by_id, segs, traffic, redirect_summary)
+    checks.extend(_speed_zone_checks(legs, speed_problems))
     for idx, check in enumerate(checks):
         for seg in check['legs']:
             if seg in by_id:
@@ -556,6 +595,22 @@ def _run_checks(legs: list[dict], by_id: dict[str, dict], segs: dict[str, Any], 
 
     order = {'warning': 0, 'note': 1}
     checks.sort(key=lambda c: order.get(c['level'], 2))
+    return checks
+
+
+def _speed_zone_checks(legs: list[dict], problems: list[str]) -> list[dict[str, Any]]:
+    """Legs whose speed the zones lower (note) and zones that stop the run (warning)."""
+    checks: list[dict[str, Any]] = []
+    if problems:
+        checks.append(_check('warning', 'speed_zone_error', [], (
+            "Speed restriction zones stop Run model: " + ' '.join(problems))))
+    in_zone = [leg for leg in legs if leg.get('speed_zone')]
+    if in_zone:
+        names = ', '.join(f"{leg['name']} ({leg['speed_zone']['zones']})" for leg in in_zone)
+        checks.append(_check('note', 'speed_zone', [leg['id'] for leg in in_zone], (
+            f"{len(in_zone)} leg(s) pass through speed restriction zones; the calculation uses a lower "
+            f"speed than the table shows (the time-equivalent speed along the leg, the zone speed at a "
+            f"waypoint inside a zone): {names}.")))
     return checks
 
 

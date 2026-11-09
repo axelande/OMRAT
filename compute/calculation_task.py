@@ -117,11 +117,9 @@ class CalculationTask(QgsTask):
         if not self.isCanceled():
             self._run_consequence()
 
-    def _apply_traffic_redirects(self) -> None:
-        """Move suppressed legs' traffic onto their detour legs (after
-        scaling) and drop the suppressed legs from this run's data."""
-        from compute.traffic_redirect import apply_traffic_redirects
-        summary = apply_traffic_redirects(self.data)
+    @staticmethod
+    def _log_traffic_redirects(summary: dict) -> None:
+        """Log how suppressed legs' traffic moved onto their detour legs."""
         for mv in summary['moves']:
             QgsMessageLog.logMessage(
                 f"Suppressed leg {mv['src']} (dir {mv['from_dir'] + 1}): moved {mv['ships']:.1f} ships/year "
@@ -134,22 +132,31 @@ class CalculationTask(QgsTask):
                 f"Suppressed legs left out of the calculation: {', '.join(summary['removed'])}",
                 'OMRAT', Qgis.MessageLevel.Info)
 
+    def _prepare_traffic(self) -> None:
+        """Gap fill, scaling, redirects and speed restrictions on this
+        run's copy (``compute/traffic_pipeline.py``), each step logged."""
+        from compute.speed_restriction import summary_log_lines
+        from compute.traffic_gaps import describe_fill, describe_negative_weights, negative_weights
+        from compute.traffic_pipeline import prepare_traffic_for_run
+        prepared = prepare_traffic_for_run(self.data)
+        for summary in prepared['gaps']:
+            filled = describe_fill(summary)
+            if filled:
+                QgsMessageLog.logMessage(filled, 'OMRAT', Qgis.MessageLevel.Warning)
+        negative = describe_negative_weights(negative_weights(self.data.get('segment_data')))
+        if negative:
+            QgsMessageLog.logMessage(negative, 'OMRAT', Qgis.MessageLevel.Warning)
+        self._log_traffic_redirects(prepared['redirect'])
+        for line in summary_log_lines(prepared['speed']):
+            QgsMessageLog.logMessage(line, 'OMRAT', Qgis.MessageLevel.Info)
+        # Read by the run report (``## Speed restriction zones``).
+        self.calc.speed_restriction_summary = prepared['speed']
+
     def run(self) -> bool:
         """Execute the calculation in a background thread."""
         QgsMessageLog.logMessage('Starting calculation...', 'OMRAT', Qgis.MessageLevel.Info)
         try:
-            from compute.data_preparation import apply_traffic_scaling
-            from compute.traffic_gaps import (
-                describe_fill, describe_negative_weights, fill_traffic_gaps, negative_weights)
-            for summary in fill_traffic_gaps(self.data):
-                filled = describe_fill(summary)
-                if filled:
-                    QgsMessageLog.logMessage(filled, 'OMRAT', Qgis.MessageLevel.Warning)
-            negative = describe_negative_weights(negative_weights(self.data.get('segment_data')))
-            if negative:
-                QgsMessageLog.logMessage(negative, 'OMRAT', Qgis.MessageLevel.Warning)
-            apply_traffic_scaling(self.data)
-            self._apply_traffic_redirects()
+            self._prepare_traffic()
             if hasattr(self.calc, 'begin_run'):
                 self.calc.begin_run(self.data, self.phases)
             if is_partial(self.phases):

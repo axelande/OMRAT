@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import cos, radians
-from typing import Any
+from typing import Any, Iterable
 
 from compute.traffic_redirect import (
     direction_label, get_redirect, group_lead, group_members, is_suppressed,
@@ -62,8 +62,12 @@ def _copy_source(seg: str, segment_data: dict[str, Any]) -> str | None:
     return str(src) if src not in (None, '') else None
 
 
-def status_suffix(seg: str, segment_data: dict[str, Any]) -> str:
-    """``'  [locked, copy of LEG_2_3_a]'``-style suffix, ``''`` for a plain leg."""
+def status_suffix(seg: str, segment_data: dict[str, Any], extra: Iterable[str] = ()) -> str:
+    """``'  [locked, copy of LEG_2_3_a]'``-style suffix, ``''`` for a plain leg.
+
+    ``extra`` tags go last in the same brackets (the Traffic tab adds
+    ``speed zone`` for a leg in an enabled speed restriction zone).
+    """
     seg = str(seg)
     seg_d = (segment_data or {}).get(seg)
     if not isinstance(seg_d, dict):
@@ -88,6 +92,7 @@ def status_suffix(seg: str, segment_data: dict[str, Any]) -> str:
     src = _copy_source(seg, segment_data)
     if src is not None:
         parts.append(f"copy of {leg_name(src, segment_data)}")
+    parts.extend(str(tag) for tag in extra)
     return f"  [{', '.join(parts)}]" if parts else ''
 
 

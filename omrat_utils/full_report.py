@@ -175,6 +175,7 @@ def build_full_report_markdown(
     depths_meta: Iterable[dict[str, Any]] | None = None,
     totals_summary: dict[str, float] | None = None,
     skipped_parts: Iterable[str] | None = None,
+    speed_restrictions: dict[str, Any] | None = None,
 ) -> str:
     """Compose the combined Markdown report for one OMRAT run.
 
@@ -183,7 +184,10 @@ def build_full_report_markdown(
     ``*_report`` arguments are the raw dicts captured on the calc
     object.  Everything else is metadata used for the header and the
     overall summary table.  ``skipped_parts`` names the model parts the
-    Calculation matrix left out of this run.
+    Calculation matrix left out of this run.  ``speed_restrictions`` is the
+    run's :func:`compute.speed_restriction.apply_speed_restrictions` summary
+    (``calc.speed_restriction_summary``); with enabled zones it adds a
+    *Speed restriction zones* section after the audit.
     """
     # Leg names from the route table for every per-leg table below.
     _seg_data = (data or {}).get('segment_data') if isinstance(data, dict) else None
@@ -257,6 +261,21 @@ def build_full_report_markdown(
             md.append("")
     except Exception as exc:  # never let audit break the report
         md.append(f"_Audit section unavailable: {exc}_")
+        md.append("")
+
+    # ------------------------------------------------------------------
+    # 1c. Speed restriction zones (only when the run had enabled zones).
+    # ------------------------------------------------------------------
+    try:
+        from compute.speed_restriction import summary_markdown
+        cats = (data or {}).get('ship_categories') or {}
+        zone_md = summary_markdown(speed_restrictions, cats.get('types') if isinstance(cats, dict) else None)
+        if zone_md:
+            md.append("---")
+            md.append("")
+            md.extend(zone_md)
+    except Exception as exc:  # never let the zone section break the report
+        md.append(f"_Speed restriction section unavailable: {exc}_")
         md.append("")
 
     # ------------------------------------------------------------------

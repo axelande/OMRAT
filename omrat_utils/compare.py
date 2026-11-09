@@ -325,7 +325,7 @@ def build_accident_table(
 # Top-level ``.omrat`` blocks that hold model *settings* (as opposed to
 # geometry / traffic).  Every scalar underneath is diffed.
 _SETTINGS_BLOCKS: tuple[str, ...] = (
-    "drift", "pc", "traffic_scaling", "consequence", "ship_categories",
+    "drift", "pc", "traffic_scaling", "consequence", "ship_categories", "speed_restriction_zones",
 )
 
 # Human labels for the well-known paths.  Anything not listed falls back
@@ -362,6 +362,7 @@ _BLOCK_TITLES: dict[str, str] = {
     "traffic_scaling": "Traffic scaling",
     "consequence": "Consequence",
     "ship_categories": "Ship categories",
+    "speed_restriction_zones": "Speed restriction zones",
 }
 
 
@@ -421,7 +422,8 @@ def build_settings_table(
     """Return rows ``[label, value_a, value_b]`` for settings that differ.
 
     Every scalar under the ``drift``, ``pc``, ``traffic_scaling``,
-    ``consequence`` and ``ship_categories`` blocks is compared, plus the
+    ``consequence``, ``ship_categories`` and ``speed_restriction_zones``
+    blocks is compared, plus the
     per-leg ``Width`` of ``segment_data``.  A setting present on only
     one side shows an em-dash on the other.  Equal values are hidden.
     """
@@ -431,8 +433,8 @@ def build_settings_table(
     for block in _SETTINGS_BLOCKS:
         flat_a: dict[str, Any] = {}
         flat_b: dict[str, Any] = {}
-        _flatten(snap_a.get(block), block, flat_a)
-        _flatten(snap_b.get(block), block, flat_b)
+        _flatten(_settings_value(snap_a, block), block, flat_a)
+        _flatten(_settings_value(snap_b, block), block, flat_b)
         # ``_flatten`` of a missing block yields {block: None}; drop that.
         flat_a.pop(block, None)
         flat_b.pop(block, None)
@@ -454,6 +456,18 @@ def build_settings_table(
             continue
         rows.append([f"Leg {k} width (m)", _fmt_value(wa), _fmt_value(wb)])
     return rows
+
+
+def _settings_value(snap: dict[str, Any], block: str) -> Any:
+    """The block as the settings diff compares it.  Speed restriction zones
+    are keyed by zone id with the polygon summarised (points, km2), so a
+    removed zone does not shift the others and no WKT is shown."""
+    value = snap.get(block)
+    if block != "speed_restriction_zones" or not value:
+        return value
+    from compute.speed_restriction import settings_view
+    cats = snap.get("ship_categories") or {}
+    return settings_view(value, cats.get("types") if isinstance(cats, dict) else None)
 
 
 def _path_sort_key(path: str) -> tuple:

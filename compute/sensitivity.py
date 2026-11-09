@@ -120,6 +120,8 @@ GROUP_PC = 'Causation factors'
 GROUP_TRAFFIC = 'Traffic'
 GROUP_DRIFT = 'Drift settings'
 GROUP_LEGS = 'Legs'
+GROUP_SPEED_ZONES = 'Speed restriction zones'
+_ZONES_KEY = 'speed_restriction_zones'
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +460,25 @@ def build_parameter_specs(data: Mapping[str, Any]) -> list[ParameterSpec]:
             key='legs.ai', label='Position check interval (all legs)',
             group=GROUP_LEGS, kind='leg_prefix', target=('ai1', 'ai2'),
             phases=('powered_grounding', 'powered_allision'), unit='s'))
+
+    # Speed restriction zones: the limits of every enabled zone (and its
+    # rules) move together; the speed reaches every model.
+    if _zone_limits(data):
+        specs.append(ParameterSpec(
+            key='zones.limit', label='Speed limit (all enabled zones)',
+            group=GROUP_SPEED_ZONES, kind='zone_limit', target=None,
+            phases=ALL_PHASES, unit='knots'))
     return specs
+
+
+def _enabled_zones(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    zones = data.get(_ZONES_KEY) or []
+    return [z for z in zones if isinstance(z, dict) and z.get('enabled', True)]
+
+
+def _zone_limits(data: Mapping[str, Any]) -> list[float]:
+    vals = [_f(z.get('limit_kn'), float('nan')) for z in _enabled_zones(data)]
+    return [v for v in vals if not math.isnan(v) and v > 0]
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +510,9 @@ def baseline_value(data: Mapping[str, Any], spec: ParameterSpec) -> float | None
         return None if val is None else _f(val, 0.0)
     if spec.kind == 'leg_prefix':
         vals = _leg_values(data, tuple(spec.target))
+        return (sum(vals) / len(vals)) if vals else None
+    if spec.kind == 'zone_limit':
+        vals = _zone_limits(data)
         return (sum(vals) / len(vals)) if vals else None
     return None
 
@@ -537,6 +560,12 @@ def apply_perturbation(data: Mapping[str, Any], spec: ParameterSpec, factor: flo
                     x = _f(seg[k], float('nan'))
                     if not math.isnan(x) and x > 0:
                         seg[k] = x * factor
+    elif spec.kind == 'zone_limit':
+        for zone in _enabled_zones(out):
+            zone['limit_kn'] = _f(zone.get('limit_kn'), 0.0) * factor
+            for rule in zone.get('rules') or []:
+                if isinstance(rule, dict) and rule.get('limit_kn') is not None:
+                    rule['limit_kn'] = _f(rule['limit_kn'], 0.0) * factor
     else:  # pragma: no cover - unknown kinds are programming errors
         raise ValueError(f'Unknown parameter kind {spec.kind!r}')
     return out

@@ -5,7 +5,8 @@ colour or line width changed in the QGIS Layers panel used to be lost on
 the next Load.  This module round-trips the QGIS *named style* (the QML
 XML) for each layer type through a ``layer_styles`` block:
 
-``{"legs": "<qgis ...>", "tangent": ..., "depths": ..., "structures": ...}``
+``{"legs": "<qgis ...>", "tangent": ..., "depths": ..., "structures": ...,
+"speed_zones": ...}``
 
 * **legs** -- every leg is its own layer; the first leg layer's style is
   captured and applied to all of them.
@@ -15,6 +16,8 @@ XML) for each layer type through a ``layer_styles`` block:
   style survives Load but not an interval edit.
 * **structures** -- one layer per structure; the first one's style is
   applied to all.
+* **speed_zones** -- the single *Speed restriction zones* layer
+  (``omrat_utils/speed_restriction_zones.py``).
 
 Only symbology, labeling, rendering and legend categories are exported,
 so per-layer custom properties (for example the ``segment_id`` a drawn
@@ -30,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-STYLE_KEYS: tuple[str, ...] = ('legs', 'tangent', 'depths', 'structures')
+STYLE_KEYS: tuple[str, ...] = ('legs', 'tangent', 'depths', 'structures', 'speed_zones')
 TANGENT_LAYER_NAME = 'Tangent Line'
 
 
@@ -166,6 +169,12 @@ def structure_layers(omrat: "OMRAT") -> list[Any]:
     return [lyr for lyr in layers if _in_project(lyr)]
 
 
+def speed_zone_layer(omrat: "OMRAT") -> Any | None:
+    handler = getattr(omrat, 'speed_zones', None)
+    layer = getattr(handler, 'layer', None) if handler is not None else None
+    return layer if _in_project(layer) else None
+
+
 def _layers_for(omrat: "OMRAT", key: str) -> list[Any]:
     if key == 'legs':
         return leg_layers(omrat)
@@ -177,6 +186,9 @@ def _layers_for(omrat: "OMRAT", key: str) -> list[Any]:
         return [lyr] if lyr is not None else []
     if key == 'structures':
         return structure_layers(omrat)
+    if key == 'speed_zones':
+        lyr = speed_zone_layer(omrat)
+        return [lyr] if lyr is not None else []
     return []
 
 

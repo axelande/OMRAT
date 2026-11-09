@@ -18,6 +18,7 @@ from compute.basic_equations import (
     get_bend_collision_candidates,
 )
 from compute.data_preparation import get_distribution
+from compute.speed_restriction import speed_matrix
 from geometries.junctions import (
     Junction,
     deflection_deg,
@@ -141,6 +142,19 @@ class ShipCollisionModelMixin:
         if p1 is None or p2 is None:
             return False
         return abs(p1[0] - p2[0]) < tol and abs(p1[1] - p2[1]) < tol
+
+    @classmethod
+    def _end_at(cls, seg: dict[str, Any], pt: tuple[float, float] | None) -> str | None:
+        """``'start'`` / ``'end'`` when ``pt`` is that end of the leg, else ``None``.
+
+        Picks the speed matrix at that waypoint (speed restriction zones,
+        :func:`compute.speed_restriction.speed_matrix`).
+        """
+        if cls._points_match(cls._parse_point(seg.get('Start_Point', '')), pt):
+            return 'start'
+        if cls._points_match(cls._parse_point(seg.get('End_Point', '')), pt):
+            return 'end'
+        return None
 
     # ------------------------------------------------------------------
     # Junction-matrix lookup helpers
@@ -316,11 +330,16 @@ class ShipCollisionModelMixin:
         )
 
     @staticmethod
-    def _dir_arrays(dir_data: dict[str, Any]) -> tuple[Any, Any, Any]:
-        """Extract (freq, speed, beam) numpy arrays from a direction data dict."""
+    def _dir_arrays(dir_data: dict[str, Any], speed_at: str | None = None) -> tuple[Any, Any, Any]:
+        """Extract (freq, speed, beam) numpy arrays from a direction data dict.
+
+        ``speed_at`` (``'start'`` / ``'end'``) takes the speed at that
+        waypoint instead of the one along the leg; they differ only on a
+        leg in a speed restriction zone.
+        """
         return (
             np.array(dir_data.get('Frequency (ships/year)', [])),
-            np.array(dir_data.get('Speed (knots)', [])),
+            np.array(speed_matrix(dir_data, speed_at)),
             np.array(dir_data.get('Ship Beam (meters)', [])),
         )
 
@@ -498,7 +517,7 @@ class ShipCollisionModelMixin:
         of total frequency.
         """
         avg_freq, avg_length, avg_beam, avg_speed_ms, cell_freqs = (
-            self._aggregate_bend_flows(leg_dirs, length_intervals)
+            self._aggregate_bend_flows(leg_dirs, length_intervals, speed_at='end')
         )
 
         if avg_freq <= 0 or avg_speed_ms <= 0:
@@ -534,6 +553,7 @@ class ShipCollisionModelMixin:
         self,
         leg_dirs: dict[str, Any],
         length_intervals: list[dict],
+        speed_at: str | None = None,
     ) -> tuple[float, float, float, float, dict[str, float]]:
         """Aggregate per-leg traffic into scalars plus per-cell freqs.
 
@@ -541,7 +561,8 @@ class ShipCollisionModelMixin:
         cell_freqs)``.  ``avg_speed_ms`` is traffic-weighted -- the bend
         formula is speed-dependent, so a plain arithmetic mean over
         near-empty cells would let a rare slow category drag the whole
-        leg's bend frequency up.
+        leg's bend frequency up.  ``speed_at`` = the waypoint of the bend
+        (``'end'``), whose speed a speed restriction zone may lower.
         """
         avg_freq = 0.0
         avg_length = 150.0
@@ -552,7 +573,7 @@ class ShipCollisionModelMixin:
         cell_freqs: dict[str, float] = {}
         for dir_key in leg_dirs:
             dir_data = leg_dirs.get(dir_key, {})
-            freq, speed, beam = self._dir_arrays(dir_data)
+            freq, speed, beam = self._dir_arrays(dir_data, speed_at)
             for loa_i in range(len(freq) if hasattr(freq, '__len__') else 0):
                 for type_j in range(len(freq[loa_i]) if loa_i < len(freq) and hasattr(freq[loa_i], '__len__') else 0):
                     q = float(freq[loa_i][type_j]) if loa_i < len(freq) and type_j < len(freq[loa_i]) else 0.0
@@ -748,6 +769,7 @@ class ShipCollisionModelMixin:
             by_waypoint, by_leg_pair,
             by_cell_crossing, by_cell_merging,
             leg1_key, leg2_key,
+            speed_at=(self._end_at(seg1, shared_pt), self._end_at(seg2, shared_pt)),
         )
         return kind, pair_total
 
@@ -826,21 +848,23 @@ class ShipCollisionModelMixin:
         by_cell_merging: dict[str, float] | None,
         leg1_key: str,
         leg2_key: str,
+        speed_at: tuple[str | None, str | None] = (None, None),
     ) -> float:
-        """Sum crossing contributions over all direction x ship-cell combinations."""
+        """Sum crossing contributions over all direction x ship-cell combinations.
+
+        ``speed_at`` = which end of leg 1 / leg 2 is the shared waypoint;
+        the speeds there are used (they differ from the leg speed only in
+        a speed restriction zone).
+        """
         crossing_angle = crossing_angle_rad * 180.0 / np.pi
         pair_total = 0.0
         for dir1_key in leg1_dirs:
             dir1_data = leg1_dirs.get(dir1_key, {})
-            freq1 = np.array(dir1_data.get('Frequency (ships/year)', []))
-            speed1 = np.array(dir1_data.get('Speed (knots)', []))
-            beam1_arr = np.array(dir1_data.get('Ship Beam (meters)', []))
+            freq1, speed1, beam1_arr = self._dir_arrays(dir1_data, speed_at[0])
 
             for dir2_key in leg2_dirs:
                 dir2_data = leg2_dirs.get(dir2_key, {})
-                freq2 = np.array(dir2_data.get('Frequency (ships/year)', []))
-                speed2 = np.array(dir2_data.get('Speed (knots)', []))
-                beam2_arr = np.array(dir2_data.get('Ship Beam (meters)', []))
+                freq2, speed2, beam2_arr = self._dir_arrays(dir2_data, speed_at[1])
 
                 pair_total += self._crossing_ship_cell_loop(
                     freq1, speed1, beam1_arr,
