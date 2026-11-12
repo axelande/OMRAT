@@ -37,7 +37,7 @@ def transform_geometry(geom, from_crs: CRS, to_crs: CRS):
     Returns:
         Transformed Shapely geometry
     """
-    from shapely.ops import transform
+    from geometries.shapely_compat import transform
     transformer = Transformer.from_crs(from_crs, to_crs, always_xy=True)
     return transform(transformer.transform, geom)
 

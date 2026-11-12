@@ -26,8 +26,8 @@ from numpy import isclose
 from scipy.stats import norm
 from shapely import wkt
 from shapely.geometry import LineString, Point, Polygon, box
-from shapely.ops import transform as shapely_transform
 
+from geometries.shapely_compat import transform as shapely_transform  # noqa: E402
 from compute.basic_equations import (
     get_powered_grounding_cat1,
     get_powered_grounding_cat2,

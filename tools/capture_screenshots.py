@@ -3,13 +3,22 @@
 Run this **inside a QGIS Python environment** (see bottom of file for
 invocation recipes).  The script:
 
-1. Finds or loads the OMRAT plugin.
-2. Loads ``tests/example_data/proj.omrat``.
-3. Steps through every tab of the dock widget, grabs each to PNG.
-4. Opens the four Settings sub-dialogs, grabs each, closes them.
-5. Grabs the map canvas before and after Run Model.
-6. Optionally triggers Run Model and waits for completion so the
+1. Finds the running OMRAT plugin (or loads it) and opens its window.
+2. Loads ``tests/example_data/proj.omrat`` the way File > Load does
+   (from a temporary copy), so OMRAT draws its own layers.
+3. Captures the screen with QGIS and the OMRAT window side by side.
+4. Steps through every tab of the OMRAT window, grabs each to PNG.
+5. Opens the four Settings sub-dialogs, grabs each, closes them.
+6. Grabs the map canvas before and after Run Model.
+7. Optionally triggers Run Model and waits for completion so the
    results-populated + result-layers shots are accurate.
+
+The OMRAT window is shot as the user sees it: a window of its own,
+never docked into the QGIS main window (the plugin never docks it), at
+the size that shows every tab without scroll bars.
+
+The script replaces the model open in OMRAT and every layer on the map.
+It stops when OMRAT has unsaved changes.
 
 Output files are dropped into::
 
@@ -22,9 +31,9 @@ Limitations
 -----------
 
 * The script needs the real QGIS Qt event loop, so it cannot be run
-  with ``pytest-qgis`` in headless mode -- the dock widget needs to be
+  with ``pytest-qgis`` in headless mode -- the OMRAT window needs to be
   actually visible for ``widget.grab()`` to render the children
-  correctly.
+  correctly, and the landing image is a capture of the screen.
 * Some dialogs (``QDialog.exec_()``) block the event loop.  The script
   uses ``show()`` instead so the capture can race in a single-shot
   timer.  If a future release switches any of them to ``exec_()``,
@@ -52,7 +61,9 @@ tools/capture_screenshots.py``.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -124,10 +135,19 @@ EXAMPLE = REPO / 'tests' / 'example_data' / 'proj.omrat'
 OUT_DIR = REPO / 'help' / 'source' / '_static' / 'screenshots'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Resize dock to this width before capturing tabs.  Tall enough that the
-# full contents fit without scrollbars.
-DOCK_WIDTH = 520
-DOCK_HEIGHT = 820
+# Landing image: QGIS and the OMRAT window side by side, each with a
+# drawn title bar, on a plain background (pixels at 100 % scaling).
+LANDING_GAP_PX = 12
+LANDING_TITLE_PX = 30
+LANDING_BACKGROUND = '#d5dbe3'
+LANDING_FRAME = '#8a9099'
+LANDING_TITLE_BG = '#f3f4f6'
+# The widest the OMRAT window gets in the landing image, as a share of
+# the screen width.
+MAX_SIDE_SHARE = 0.5
+# The Traffic tab shot is widened for more of the matrix, up to this
+# width (the whole matrix needs ~2100 px: too small on a docs page).
+MAX_TRAFFIC_WIDTH = 1200
 
 
 # ---------------------------------------------------------------------------
@@ -135,19 +155,42 @@ DOCK_HEIGHT = 820
 # ---------------------------------------------------------------------------
 
 
+def _running_plugin():
+    """The OMRAT instance QGIS loaded, whatever key it is registered under.
+
+    QGIS keys a plugin by its folder name: ``Omrat`` for an install from
+    the plugin repository, the checkout's name for a development link.
+    Looking up only ``'OMRAT'`` missed the installed plugin and built a
+    second instance next to it -- a second toolbar icon, and a window
+    whose menu bar and buttons were never wired.
+    """
+    for plugin in plugins.values():
+        if type(plugin).__name__ == 'OMRAT' and hasattr(plugin, 'main_widget'):
+            return plugin
+    return None
+
+
 def find_or_load_plugin():
-    """Return the live OMRAT plugin instance, loading it if needed."""
-    name = 'OMRAT'
-    if name in plugins:
-        return plugins[name]
+    """Return the OMRAT plugin with its window open, loading it if needed."""
+    plugin = _running_plugin()
+    if plugin is None:
+        # Not enabled in this QGIS: load it from this repo.
+        sys.path.insert(0, str(REPO))
+        from omrat import OMRAT as OmratPlugin
 
-    # Fall back to loading it manually from this repo.
-    sys.path.insert(0, str(REPO))
-    from omrat import OMRAT as OmratPlugin
-
-    plugin = OmratPlugin(iface)
-    plugin.initGui()
-    plugins[name] = plugin
+        plugin = OmratPlugin(iface)
+        plugin.initGui()
+        plugins['OMRAT'] = plugin
+    module = sys.modules.get(type(plugin).__module__)
+    source = Path(getattr(module, '__file__', '') or '.').resolve().parent
+    print(f'  OMRAT code: {source}')
+    if source != REPO.resolve():
+        print(f'  NOTE: that is not {REPO} -- deploy the plugin first if the '
+              f'two differ, the screenshots show the code QGIS runs')
+    # The toolbar icon's handler: opens the window, and on the first open
+    # wires its buttons and builds the menu bar.
+    plugin.run()
+    _process(300)
     return plugin
 
 
@@ -268,13 +311,103 @@ def grab_canvas(name: str) -> None:
 
 
 def grab_mainwindow(name: str) -> None:
-    """Grab the full QGIS main window (dock + canvas + toolbar)."""
+    """Grab the full QGIS main window (canvas + panels + toolbars)."""
     mw: QtWidgets.QWidget = iface.mainWindow()
     mw.raise_()
     _process(200)
     path = OUT_DIR / f'{name}.png'
     mw.grab().save(str(path), 'PNG')
     print(f'  wrote {path.name}')
+
+
+def _window_image(widget: QtWidgets.QWidget) -> QtGui.QImage:
+    """``widget.grab()`` as an image in device pixels."""
+    _process(100)
+    image = widget.grab().toImage()
+    image.setDevicePixelRatio(1.0)
+    return image
+
+
+def _with_title_bar(image: QtGui.QImage, title: str, scale: float) -> QtGui.QImage:
+    """``image`` in a 1 px frame under a plain title bar with ``title``."""
+    bar = round(LANDING_TITLE_PX * scale)
+    out = QtGui.QImage(image.width() + 2, image.height() + bar + 2,
+                       QtGui.QImage.Format.Format_ARGB32)
+    out.fill(QtGui.QColor(LANDING_FRAME))
+    painter = QtGui.QPainter(out)
+    try:
+        painter.fillRect(1, 1, image.width(), bar, QtGui.QColor(LANDING_TITLE_BG))
+        font = painter.font()
+        font.setPixelSize(round(13 * scale))
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor('#202124'))
+        pad = round(10 * scale)
+        painter.drawText(
+            QtCore.QRect(1 + pad, 1, image.width() - 2 * pad, bar),
+            int(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter),
+            title,
+        )
+        painter.drawImage(1, 1 + bar, image)
+    finally:
+        painter.end()
+    return out
+
+
+def grab_desktop(plugin, name: str) -> None:
+    """QGIS with the OMRAT window beside it: the docs landing image.
+
+    Composed from the two windows' own ``grab()`` -- QGIS on the left, the
+    OMRAT window on the right, each under a drawn title bar -- never a
+    capture of the screen: that picks up whatever else is on it (another
+    application in front, the wrong monitor), and the image goes into the
+    public docs.  QGIS is resized so the pair is one screen wide and gets
+    its own size and state back afterwards.
+    """
+    mw: QtWidgets.QWidget = iface.mainWindow()
+    dock = plugin.main_widget
+    screen = mw.screen() or QtWidgets.QApplication.primaryScreen()
+    avail = screen.availableGeometry()
+    saved = mw.saveGeometry()
+    was_maximized = mw.isMaximized()
+    try:
+        show_omrat_window(plugin)  # every tab name, no scroll bars
+        dock_w = min(dock.width(), int(avail.width() * MAX_SIDE_SHARE))
+        height = dock.height()
+        _resize_window(dock, QtCore.QSize(dock_w, height))
+        mw.showNormal()
+        _process(400)
+        mw.resize(max(400, avail.width() - dock.width() - 3 * LANDING_GAP_PX - 4), height)
+        _process(600)
+        iface.mapCanvas().zoomToFullExtent()
+        iface.mapCanvas().refreshAllLayers()
+        _process(1500)
+
+        left_raw, right_raw = _window_image(mw), _window_image(dock)
+        scale = left_raw.width() / max(1, mw.width())  # device pixels per pixel
+        left = _with_title_bar(left_raw, mw.windowTitle() or 'QGIS', scale)
+        right = _with_title_bar(right_raw, dock.windowTitle() or 'OMRAT', scale)
+        gap = round(LANDING_GAP_PX * scale)
+        image = QtGui.QImage(left.width() + right.width() + 3 * gap,
+                             max(left.height(), right.height()) + 2 * gap,
+                             QtGui.QImage.Format.Format_ARGB32)
+        image.fill(QtGui.QColor(LANDING_BACKGROUND))
+        painter = QtGui.QPainter(image)
+        try:
+            painter.drawImage(gap, gap, left)
+            painter.drawImage(2 * gap + left.width(), gap, right)
+        finally:
+            painter.end()
+        path = OUT_DIR / f'{name}.png'
+        if image.save(str(path), 'PNG'):
+            print(f'  wrote {path.name} ({image.width()}x{image.height()})')
+        else:
+            print(f'  FAILED to write {path}')
+    finally:
+        mw.restoreGeometry(saved)
+        if was_maximized:
+            mw.showMaximized()
+        _process(400)
+        show_omrat_window(plugin)
 
 
 def grab_toolbar(name: str) -> None:
@@ -297,342 +430,172 @@ def grab_toolbar(name: str) -> None:
 # Workflow
 # ---------------------------------------------------------------------------
 
-def reorder_layers_for_screenshots() -> None:
-    """Reorder layers so depth polygons render beneath everything else.
+def _clean_slate(plugin) -> None:
+    """An empty OMRAT model and an empty map.
 
-    OMRAT's load path can leave depth polygons at the top of the layer
-    panel, which means they paint *over* the route legs and the
-    structure polygons on the canvas.  For the screenshots we want the
-    visible stacking from bottom to top to be:
-
-    * depth / bathymetry polygons (back, often filling the canvas);
-    * structure / object polygons;
-    * everything else (anchor zones, AIS density, ...);
-    * route / leg / segment lines (always on top, visible).
-
-    Only the top-level layer nodes in the project layer tree are
-    reordered; nested groups are left alone.  Categorisation is by
-    case-insensitive substring match on the layer name.
+    OMRAT's own ``clear_model`` first (its layers, tables and data), then
+    whatever else is on the map.  Removing OMRAT's leg layers behind its
+    back takes the legs out of the model too -- that is how the route
+    table of the earlier screenshots ended up empty.
     """
+    plugin.clear_model()
     project = QgsProject.instance()
-    root = project.layerTreeRoot()
-
-    def priority(layer) -> int:
-        name = (layer.name() or '').lower()
-        if 'depth' in name or 'bathy' in name:
-            return 0  # bottom of the panel = rendered first = behind
-        if 'route' in name or 'leg' in name or 'segment' in name:
-            return 3  # top of the panel = rendered last = on top
-        if 'object' in name or 'structure' in name:
-            return 2
-        return 1
-
-    # Snapshot top-level layer nodes (skip group nodes).
-    nodes = [
-        c for c in root.children()
-        if hasattr(c, 'layer') and c.layer() is not None
-    ]
-    nodes.sort(key=lambda n: priority(n.layer()), reverse=True)
-
-    # Re-insert each node in priority order.  ``addChildNode`` appends
-    # to the end of the children list, so the first one we add becomes
-    # the *top* of the panel (which is what we want for high-priority
-    # layers).
-    for node in nodes:
-        clone = node.clone()
-        root.removeChildNode(node)
-        root.addChildNode(clone)
-
-    iface.mapCanvas().refreshAllLayers()
-
-
-def _build_example_canvas_layers() -> list:
-    """Build memory layers from the example ``.omrat`` JSON.
-
-    OMRAT's ``Storage.load_from_path`` only populates the dock-widget
-    tables; it does **not** add anything to the QGIS canvas.  The
-    "loaded example" screenshot would otherwise be blank, so this
-    helper reads the JSON file directly and creates simple memory
-    layers (route lines, depth polygons, structure polygons) styled in
-    the same palette the docs caption refers to.
-
-    Returns the list of created layers so the caller can clean them up
-    after capturing.
-    """
-    import json
-    from qgis.core import (
-        QgsCoordinateReferenceSystem, QgsFeature, QgsGeometry, QgsProject,
-        QgsVectorLayer,
-    )
-
-    with open(EXAMPLE) as f:
-        data = json.load(f)
-
-    crs = QgsCoordinateReferenceSystem('EPSG:4326')
-    project = QgsProject.instance()
-
-    # Start from a clean project so result polygons / debug layers
-    # left over from previous OMRAT runs don't bleed into the
-    # ``ui_loaded_example`` shot.  The script later re-adds run
-    # results explicitly when ``OMRAT_RUN_MODEL=1``.
-    try:
-        existing_ids = list(project.mapLayers().keys())
-        if existing_ids:
-            project.removeMapLayers(existing_ids)
-            print(f'  removed {len(existing_ids)} pre-existing layer(s) '
-                  f'for a clean baseline')
-    except Exception as exc:
-        print(f'  WARN: could not clear pre-existing layers: {exc}')
-
-    created: list = []
-
-    def _new(layer_type: str, name: str):
-        lyr = QgsVectorLayer(f'{layer_type}?crs=EPSG:4326', name, 'memory')
-        lyr.setCrs(crs)
-        return lyr
-
-    # --- Depths --------------------------------------------------------- #
-    depth_lyr = _new('MultiPolygon', 'Depths')
-    feats = []
-    for row in data.get('depths', []) or []:
-        try:
-            _did, _val, wkt = row
-        except Exception:
-            continue
-        geom = QgsGeometry.fromWkt(str(wkt))
-        if geom is None or geom.isEmpty():
-            continue
-        f = QgsFeature()
-        f.setGeometry(geom)
-        feats.append(f)
-    if feats:
-        depth_lyr.dataProvider().addFeatures(feats)
-        depth_lyr.updateExtents()
-        try:
-            sym = depth_lyr.renderer().symbol()
-            sym.setColor(QtGui.QColor('#9ec5d6'))
-            sym.symbolLayer(0).setStrokeColor(QtGui.QColor('#5d8aa0'))
-        except Exception:
-            pass
-        project.addMapLayer(depth_lyr)
-        created.append(depth_lyr)
-
-    # --- Structures ----------------------------------------------------- #
-    obj_lyr = _new('Polygon', 'Structures')
-    feats = []
-    for row in data.get('objects', []) or []:
-        try:
-            _oid, _h, wkt = row
-        except Exception:
-            continue
-        geom = QgsGeometry.fromWkt(str(wkt))
-        if geom is None or geom.isEmpty():
-            continue
-        f = QgsFeature()
-        f.setGeometry(geom)
-        feats.append(f)
-    if feats:
-        obj_lyr.dataProvider().addFeatures(feats)
-        obj_lyr.updateExtents()
-        try:
-            sym = obj_lyr.renderer().symbol()
-            sym.setColor(QtGui.QColor('#e8a046'))
-            sym.symbolLayer(0).setStrokeColor(QtGui.QColor('#b06b1c'))
-        except Exception:
-            pass
-        project.addMapLayer(obj_lyr)
-        created.append(obj_lyr)
-
-    # --- Route legs ----------------------------------------------------- #
-    route_lyr = _new('LineString', 'Route legs')
-    feats = []
-
-    def _xy(p):
-        """Accept ``"lon lat"`` strings, ``[lon, lat]`` lists, or
-        ``{'x': lon, 'y': lat}`` dicts -- the ``.omrat`` schema has
-        used all three at various points."""
-        if p is None:
-            return None
-        if isinstance(p, str):
-            parts = p.replace(',', ' ').split()
-            if len(parts) < 2:
-                return None
-            return float(parts[0]), float(parts[1])
-        if isinstance(p, dict):
-            return float(p.get('x', p.get('lon', 0))), \
-                   float(p.get('y', p.get('lat', 0)))
-        try:
-            return float(p[0]), float(p[1])
-        except Exception:
-            return None
-
-    for seg in (data.get('segment_data', {}) or {}).values():
-        sp = seg.get('Start_Point') or seg.get('Start Point')
-        ep = seg.get('End_Point') or seg.get('End Point')
-        sxy = _xy(sp)
-        exy = _xy(ep)
-        if sxy is None or exy is None:
-            continue
-        sx, sy = sxy
-        ex, ey = exy
-        wkt = f'LineString({sx} {sy}, {ex} {ey})'
-        geom = QgsGeometry.fromWkt(wkt)
-        if geom is None or geom.isEmpty():
-            continue
-        f = QgsFeature()
-        f.setGeometry(geom)
-        feats.append(f)
-    if feats:
-        route_lyr.dataProvider().addFeatures(feats)
-        route_lyr.updateExtents()
-        try:
-            sym = route_lyr.renderer().symbol()
-            sym.setColor(QtGui.QColor('#1f4eaa'))
-            sym.setWidth(0.8)
-        except Exception:
-            pass
-        project.addMapLayer(route_lyr)
-        created.append(route_lyr)
-
-    return created
-
-
-# Strong references to the example memory layers so the Python
-# wrappers aren't garbage-collected.  ``QgsProject.addMapLayer``
-# transfers C++ ownership, but if the Python wrapper goes out of
-# scope sip can still tear down the layer behind QGIS's back -- the
-# project ends up with 0 map layers a few seconds later.
-_PERSISTED_EXAMPLE_LAYERS: list = []
+    left = list(project.mapLayers().keys())
+    if left:
+        project.removeMapLayers(left)
+        print(f'  removed {len(left)} other layer(s) for a clean map')
+    _process(200)
 
 
 def load_example(plugin) -> None:
-    print(f'Loading {EXAMPLE} ...')
-    from omrat_utils.storage import Storage
-    store = Storage(plugin)
-    store.load_from_path(str(EXAMPLE))
+    """Load the example project the way File > Load does.
+
+    OMRAT then draws its own layers (legs, tangent lines with the lateral
+    distributions, depth areas, structures) in its own styles.  A
+    temporary copy is loaded: the loaded file becomes the project path,
+    and a later File > Save in this QGIS session must not overwrite the
+    tracked example.
+    """
+    _clean_slate(plugin)
+    copy = Path(tempfile.mkdtemp(prefix='omrat_screenshots_')) / EXAMPLE.name
+    shutil.copy2(EXAMPLE, copy)
+    print(f'Loading {EXAMPLE.name} (copy in {copy.parent}) ...')
+    # The Storage class of the plugin's own code (installed or this repo).
+    module = sys.modules.get(type(plugin).__module__)
+    storage_cls = getattr(module, 'Storage', None)
+    if storage_cls is None:
+        from omrat_utils.storage import Storage as storage_cls
+    storage_cls(plugin).load_from_path(str(copy))
+    show_runs = getattr(plugin, 'show_current_project_runs', None)
+    if callable(show_runs):
+        show_runs()
     _process(500)
-
-    # ``Storage.load_from_path`` populates the dock tables but does NOT
-    # add layers to the canvas, so the canvas would be blank for the
-    # "loaded example" screenshot.  Build a small set of memory layers
-    # from the JSON itself so the canvas has something to render.
-    print('  building memory layers for the canvas...')
-    layers = _build_example_canvas_layers()
-    # Keep a strong Python reference so GC doesn't drop the wrappers
-    # and take the C++ layers with them mid-script.
-    _PERSISTED_EXAMPLE_LAYERS.extend(layers)
-    _process(300)
-    print(f'  {len(layers)} memory layer(s) added to the project')
-
-    # NOTE: deliberately NOT calling ``reorder_layers_for_screenshots``
-    # here.  Its ``removeChildNode`` + ``addChildNode(clone())`` dance
-    # was dropping the just-added memory layers from the project (the
-    # cloned layer-tree node held a stale handle that QGIS's GC then
-    # invalidated).  ``QgsProject.addMapLayer`` already inserts new
-    # layers at the top of the layer panel, so creating in the order
-    # depths -> structures -> route gives the correct stacking
-    # (route on top, depths at the back) without any reordering.
+    print(f'  {plugin.main_widget.twRouteList.rowCount()} leg(s) in the route '
+          f'table, {_layer_count()} layer(s) on the map')
 
     iface.mapCanvas().zoomToFullExtent()
     iface.mapCanvas().refreshAllLayers()
     _process(500)
 
 
-def configure_dock(plugin) -> QtWidgets.QDockWidget:
-    """Make the OMRAT dock visibly attached to the QGIS main window.
+def _preferred_size(dock) -> QtCore.QSize:
+    """Every tab without scroll bars, menu bar included."""
+    preferred = getattr(dock, 'preferred_size', None)
+    return preferred() if callable(preferred) else dock.sizeHint()
 
-    The plugin's own ``run()`` only calls ``main_widget.show()`` -- it
-    never registers the dock with the QGIS main window via
-    :py:meth:`QgisInterface.addDockWidget`, so when the plugin starts
-    the dock is a floating top-level window.  ``iface.mainWindow()``
-    therefore wouldn't include it in a screenshot.
 
-    Here we explicitly dock it on the right side and force
-    ``floating=False`` so the landing image and tab grabs both
-    show the dock as part of the main window.
+def _resize_window(dock, size: QtCore.QSize) -> None:
+    """Resize the OMRAT window; it may run past the bottom of the screen.
+
+    ``grab()`` renders the part off the screen too, so a window a few
+    pixels taller than the screen (1007 px of contents under a title bar,
+    1032 px on a 1080 screen with the taskbar) still gets its shots
+    without scroll bars.  The title bar stays on the screen;
+    ``fit_omrat_window`` puts the whole window back on it at the end.
+    """
+    dock.resize(size)
+    _process(250)
+    screen, handle = dock.screen(), dock.windowHandle()
+    if screen is not None and handle is not None:
+        avail = screen.availableGeometry()
+        m = handle.frameMargins()
+        geo = dock.geometry()  # the client area
+        right_most = avail.left() + avail.width() - m.right() - geo.width()
+        left = max(avail.left() + m.left(), min(geo.left(), right_most))
+        if geo.bottom() + m.bottom() > avail.bottom():
+            top = avail.top() + m.top()
+        else:
+            top = max(geo.top(), avail.top() + m.top())
+        if (left, top) != (geo.left(), geo.top()):
+            # setGeometry() places the client area; move() uses the frame.
+            dock.setGeometry(left, top, geo.width(), geo.height())
+            _process(150)
+    if dock.width() < size.width() or dock.height() < size.height():
+        print(f'  NOTE: the OMRAT window is {dock.width()}x{dock.height()}, '
+              f'not {size.width()}x{size.height()}: the shots may get scroll bars')
+
+
+def show_omrat_window(plugin) -> QtWidgets.QDockWidget:
+    """Show OMRAT the way the user sees it: a window of its own.
+
+    The plugin never docks its window (``OMRATMainWidget`` is a parentless
+    top-level window).  Earlier versions of this script docked it into the
+    QGIS main window at 520 x 820: every tab shot was cut off on the
+    right, had scroll bars and lacked the File / Settings menu bar, and
+    the window stayed docked after the script.  A window docked by such a
+    run is taken out again here.
+
+    Size: ``preferred_size`` (every tab without scroll bars), widened
+    until the tab bar shows every tab name instead of scroll arrows.
     """
     dock = plugin.main_widget
-    mw = iface.mainWindow()
-    # If it's already a child of the main window (re-run case), skip
-    # ``addDockWidget`` so QGIS doesn't relocate it on every call.
-    already_docked = (
-        dock.parentWidget() is mw
-        or dock in mw.findChildren(QtWidgets.QDockWidget)
-    )
-    if not already_docked:
+    if dock.parentWidget() is not None:
         try:
-            area = _qt_enum(QtCore.Qt, 'RightDockWidgetArea',
-                            'DockWidgetArea.RightDockWidgetArea')
-            iface.addDockWidget(area, dock)
+            iface.removeDockWidget(dock)
         except Exception as exc:
-            print(f'  WARN: could not addDockWidget: {exc}')
-
-    dock.setFloating(False)
-    dock.resize(DOCK_WIDTH, DOCK_HEIGHT)
-    dock.show()
+            print(f'  WARN: could not undock the OMRAT window: {exc}')
+        dock.setParent(None)
+    ensure_frame = getattr(dock, 'ensure_window_frame', None)
+    if callable(ensure_frame):
+        ensure_frame()  # title bar and border, as the toolbar icon does
+    dock.showNormal()
     dock.raise_()
-    _process(300)
+    dock.activateWindow()
+    _process(200)
+    size = _preferred_size(dock)
+    _resize_window(dock, size)
+    tab_bar = dock.tabWidget.tabBar()
+    missing = tab_bar.sizeHint().width() - tab_bar.width()
+    if missing > 0:
+        _resize_window(dock, QtCore.QSize(size.width() + missing + 4, size.height()))
     return dock
 
 
-def _qt_enum(klass, *paths):
-    """Fetch a Qt enum value by trying each path in turn.
+def fit_omrat_window(plugin) -> None:
+    """Leave the OMRAT window wholly on the screen, as the plugin keeps it."""
+    fit = getattr(plugin.main_widget, '_fit_on_screen', None)
+    if callable(fit):
+        fit()
+        _process(150)
 
-    Qt 5 (PyQt5) exposes most enums flat on the class
-    (``Qt.RightDockWidgetArea``); Qt 6 (PyQt6) requires the scoped
-    form (``Qt.DockWidgetArea.RightDockWidgetArea``).  This helper
-    keeps the script working across both.
-    """
-    for p in paths:
-        obj = klass
-        try:
-            for part in p.split('.'):
-                obj = getattr(obj, part)
-            return obj
-        except AttributeError:
-            continue
-    raise AttributeError(
-        f"{klass.__name__} has none of: {', '.join(paths)}"
-    )
+
+def _widen_for_table(dock, table: QtWidgets.QTableWidget, max_width: int) -> None:
+    """Widen the window for more of ``table``'s columns, up to ``max_width``."""
+    extra = table.horizontalHeader().length() - table.viewport().width()
+    if extra > 0:
+        width = min(dock.width() + extra + 4, max(max_width, dock.width()))
+        _resize_window(dock, QtCore.QSize(width, dock.height()))
 
 
 def capture_tabs(plugin) -> None:
-    """Grab each tab of the dock widget."""
-    dock = configure_dock(plugin)
+    """Grab each tab of the OMRAT window."""
+    dock = show_omrat_window(plugin)
     tabs: QtWidgets.QTabWidget = dock.tabWidget
 
-    # ``traffic_width`` widens the dock just for the Traffic-tab shot --
-    # the new Scaling-controls group box on the left of the matrix needs
-    # ~260 extra px, so without the override the matrix gets a scrollbar
-    # and the screenshot looks clipped.  Other tabs stay at DOCK_WIDTH.
     tab_map = [
-        # (tab index, output filename, extra delay ms, width override or None)
-        (0, 'ui_tab_route', 0, None),
-        (1, 'ui_tab_traffic', 0, DOCK_WIDTH + 260),
-        (2, 'ui_tab_depths', 0, None),
-        (3, 'ui_tab_objects', 0, None),
-        (4, 'ui_tab_results', 0, None),          # Run Analysis tab = Results
-        (5, 'ui_tab_drift_analysis', 0, None),
+        # (tab index, output filename, extra delay ms)
+        (0, 'ui_tab_route', 0),
+        (1, 'ui_tab_traffic', 0),
+        (2, 'ui_tab_depths', 0),
+        (3, 'ui_tab_objects', 0),
+        (4, 'ui_tab_results', 0),          # Run Analysis tab = Results
+        (5, 'ui_tab_drift_analysis', 0),
     ]
 
     # Distributions aren't a separate tab -- they live inside Route_tab.
     # We alias the Route shot to ui_tab_distributions so docs that point
     # at that filename still resolve to a meaningful screenshot.
-    for idx, name, extra, width_override in tab_map:
+    normal_size = dock.size()
+    for idx, name, extra in tab_map:
         tabs.setCurrentIndex(idx)
-        if width_override is not None and width_override != dock.width():
-            dock.resize(width_override, DOCK_HEIGHT)
-            _process(150)
-        elif width_override is None and dock.width() != DOCK_WIDTH:
-            dock.resize(DOCK_WIDTH, DOCK_HEIGHT)
-            _process(150)
         _process(250 + extra)
+        traffic = getattr(dock, 'twTrafficData', None)
+        if name == 'ui_tab_traffic' and traffic is not None:
+            # More of the matrix next to the Traffic scaling group.
+            _widen_for_table(dock, traffic, MAX_TRAFFIC_WIDTH)
         grab_widget(dock, name)
-    # Restore the default width so subsequent capture passes
-    # (settings dialogs etc.) start from a known state.
-    if dock.width() != DOCK_WIDTH:
-        dock.resize(DOCK_WIDTH, DOCK_HEIGHT)
-        _process(150)
+        if dock.size() != normal_size:
+            _resize_window(dock, normal_size)
 
     tabs.setCurrentIndex(0)
     _process(200)
@@ -640,8 +603,8 @@ def capture_tabs(plugin) -> None:
 
     # Annotated copy of the Routes tab -- the author can later decorate
     # it with arrows / numbered callouts.  ``ui_dock_overview`` is
-    # produced separately in ``main`` from a *full main-window* shot so
-    # the docs landing image shows dock + canvas together.
+    # produced separately in ``main`` from a capture of the screen so
+    # the docs landing image shows QGIS and the OMRAT window together.
     tabs.setCurrentIndex(0)
     _process(200)
     grab_widget(dock, 'ui_dock_tabs_annotated')
@@ -785,10 +748,8 @@ def capture_canvas_and_results(plugin, run_model: bool = False) -> None:
     else:
         # Dry screenshots: populate a convincing fake result set so the
         # "after run" slots aren't blank.  Writes go straight to
-        # ``TWAccidentResults`` because the legacy ``LEP*`` line-edit
-        # shims are only created by ``_setup_accident_results_table``
-        # inside ``OMRAT.run()`` -- and ``run()`` is the toolbar-icon
-        # handler, which this batch script bypasses.
+        # ``TWAccidentResults``: the table shows saved runs only, and the
+        # hidden ``LEP*`` line-edits are never displayed.
         #
         # Synthetic numbers per row, in the same order as
         # ``AccidentResultsMixin._ACCIDENT_ROWS``.  A real run can
@@ -967,24 +928,12 @@ def capture_quickstart(plugin) -> None:
         else:
             print(f'  FAILED to write {path}')
 
-    # Wipe any layers / segment data left from earlier captures so the
+    # Wipe the model and layers left from earlier captures so the
     # "blank slate" shots are actually blank.
     project = QgsProject.instance()
-    try:
-        existing = list(project.mapLayers().keys())
-        if existing:
-            project.removeMapLayers(existing)
-    except Exception:
-        pass
-    try:
-        plugin.segment_data.clear()
-        plugin.main_widget.twRouteList.setRowCount(0)
-        plugin.main_widget.twDepthList.setRowCount(0)
-        plugin.main_widget.twObjectList.setRowCount(0)
-    except Exception:
-        pass
+    _clean_slate(plugin)
 
-    dock = configure_dock(plugin)
+    dock = show_omrat_window(plugin)
     tabs = dock.tabWidget
 
     # 1. Empty Routes tab
@@ -1070,6 +1019,11 @@ def capture_quickstart(plugin) -> None:
         print(f'  WARN: could not capture drift-settings: {exc}')
         traceback.print_exc()
 
+    # The synthetic leg has no layer and half its fields: do not leave it
+    # behind as the open model (closing OMRAT would offer to save it).
+    _clean_slate(plugin)
+    plugin.mark_project_saved()
+
 
 def main(run_model: bool = False, drift_analysis: bool = False,
          quickstart: bool = False) -> None:
@@ -1090,19 +1044,23 @@ def main(run_model: bool = False, drift_analysis: bool = False,
     hide_python_console()
 
     plugin = find_or_load_plugin()
+    unsaved = getattr(plugin, 'has_unsaved_changes', None)
+    if callable(unsaved) and unsaved():
+        print('STOPPED: OMRAT has unsaved changes.  The capture replaces the '
+              'open model with the example project -- save it or close '
+              'OMRAT first.')
+        return
     load_example(plugin)
     print(f'  [trace] after load_example: {_layer_count()} layers')
 
-    # Landing image for the docs: full QGIS window with the OMRAT dock
-    # visible alongside the loaded example canvas.  Captured *before*
-    # the tab walk because ``capture_tabs`` cycles through tabs, hides
-    # the canvas behind dialogs, and resizes the dock.
-    print('Landing shot (main window with dock + canvas)...')
-    dock = configure_dock(plugin)
+    # Landing image for the docs: QGIS with the loaded example and the
+    # OMRAT window beside it.  Captured *before* the tab walk because
+    # ``capture_tabs`` cycles through tabs and resizes the window.
+    print('Landing shot (QGIS + OMRAT window, screen capture)...')
+    dock = show_omrat_window(plugin)
     dock.tabWidget.setCurrentIndex(0)  # Routes tab
-    iface.mapCanvas().zoomToFullExtent()
-    _process(500)
-    grab_mainwindow('ui_dock_overview')
+    _process(300)
+    grab_desktop(plugin, 'ui_dock_overview')
 
     # Grab the canvas-only ``ui_loaded_example`` here, while the canvas
     # is still in its "freshly loaded with input layers" state.  Doing
@@ -1131,6 +1089,7 @@ def main(run_model: bool = False, drift_analysis: bool = False,
         print('Quick-start (from-scratch walkthrough)...')
         capture_quickstart(plugin)
 
+    fit_omrat_window(plugin)
     print(f'Done.  {len(list(OUT_DIR.glob("*.png")))} PNGs in {OUT_DIR}.')
 
 

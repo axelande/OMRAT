@@ -292,7 +292,8 @@ def _area_km2(*wkt_texts: str) -> float | None:
     """Area of the union of the polygons (so duplicates are not counted twice)."""
     try:
         from shapely import wkt as _wkt
-        from shapely.ops import transform, unary_union
+        from shapely.ops import unary_union
+        from geometries.shapely_compat import transform
         geom = unary_union([_wkt.loads(w) for w in wkt_texts])
         if geom.is_empty:
             return 0.0

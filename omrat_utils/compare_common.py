@@ -117,7 +117,7 @@ def leg_traffic(traffic_data: Mapping[str, Any] | None, seg_id: Any) -> float:
 def local_projector(lat0: float) -> Callable[..., tuple[float, float]]:
     """Equirectangular lon/lat -> metres around latitude ``lat0``.
 
-    Usable with ``shapely.ops.transform``.  Accurate to well under 1 %
+    Usable with ``geometries.shapely_compat.transform``.  Accurate to well under 1 %
     over the extent of an OMRAT model.
     """
     phi = math.radians(lat0)

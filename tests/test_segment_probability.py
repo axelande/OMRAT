@@ -646,7 +646,7 @@ class TestSegmentIndexConsistency:
         transformation to each vertex, preserving their order. We verify this
         by checking that the exterior ring coordinates transform consistently.
         """
-        from shapely.ops import transform
+        from geometries.shapely_compat import transform
 
         # Create a rectangle in "WGS84" coordinates (simplified)
         original = Polygon([(10, 50), (11, 50), (11, 51), (10, 51)])

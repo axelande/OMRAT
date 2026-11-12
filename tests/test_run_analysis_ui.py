@@ -258,6 +258,10 @@ class TestCopyToExcel:
         omrat._baseline_runs = None
         id_base = history.save_run('base', totals=_totals(1.0))
         id_other = history.save_run('other', totals=_totals(2.0))
+        # Drawn under a '.' locale, copied under ',': the separator is the
+        # one at copy time, whatever the machine's locale (CI runs in C, a
+        # Swedish desktop hid that it was baked in when drawing).
+        monkeypatch.setattr(omrat, '_decimal_point', lambda: '.')
         omrat.refresh_previous_runs_table()
         _tick_baseline(omrat, id_base)
         _select(omrat, id_other)

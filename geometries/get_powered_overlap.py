@@ -47,7 +47,7 @@ from matplotlib.patches import Patch, Rectangle
 from matplotlib.transforms import blended_transform_factory
 from scipy.stats import norm
 from shapely.geometry import LineString, Polygon
-from shapely.ops import transform as shapely_transform
+from geometries.shapely_compat import transform as shapely_transform
 import shapely.wkt as sw
 
 from compute.cat1_start_zone import start_zone_fraction

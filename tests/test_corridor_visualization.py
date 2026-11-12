@@ -32,7 +32,7 @@ import pytest
 import numpy as np
 from pyproj import CRS, Transformer
 from shapely.geometry import Polygon, MultiPolygon, LineString, box
-from shapely.ops import transform as shapely_transform, unary_union
+from shapely.ops import unary_union
 from shapely.validation import make_valid
 from shapely import wkt as shapely_wkt
 

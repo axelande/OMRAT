@@ -1178,7 +1178,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         list[LineString]
     ]:
         from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject
-        from shapely.ops import transform
+        from geometries.shapely_compat import transform
         from compute.data_preparation import _is_qgis_available
 
         lines, distributions, weights, line_names = prepare_traffic_lists(data)

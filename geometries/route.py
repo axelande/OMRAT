@@ -2,10 +2,12 @@ import math
 from scipy import stats
 from shapely.geometry import LineString, Polygon, Point
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform, split
+from shapely.ops import split
 from pyproj import CRS, Transformer
 from pyproj.aoi import AreaOfInterest
 from pyproj.database import query_utm_crs_info
+
+from geometries.shapely_compat import transform
 
 
 def get_best_utm(l_obj: list[BaseGeometry]) -> CRS:

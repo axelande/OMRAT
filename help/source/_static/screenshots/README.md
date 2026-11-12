@@ -45,16 +45,23 @@ python-qgis tools/capture_screenshots.py
 qgis --nologo --code tools/capture_screenshots.py
 ```
 
-The script starts with dry shots (no real Run Model + no Drift
-Analysis, since both are slow).  If you want the "after run" screens
-to show real computed numbers instead of synthetic placeholders, edit
-the last line of `tools/capture_screenshots.py`:
+The script replaces the model open in OMRAT, and every layer on the
+map, with the example project; it stops when OMRAT has unsaved
+changes.  It loads a temporary copy of `proj.omrat`, so a later
+**File > Save** cannot overwrite the tracked file.
+
+Drift Analysis and the quick-start set run by default; Run Model does
+not (slow).  Set environment variables in the console before `exec()`
+to change that, for example:
 
 ```python
-main(run_model=True, drift_analysis=True)
+import os
+os.environ['OMRAT_RUN_MODEL'] = '1'    # real "after run" screens + ui_result_layers.png
+os.environ['OMRAT_DRIFT'] = '0'        # skip ui_drift_corridor.png
+os.environ['OMRAT_QUICKSTART'] = '0'   # skip quickstart/qs_*.png
 ```
 
-and re-run.  A full run can take several minutes on proj.omrat.
+A full run can take several minutes on proj.omrat.
 
 ## Filename checklist
 
@@ -75,14 +82,12 @@ script writes all of them except `ui_drift_corridor.png` when
 
 ### User guide (tab-by-tab)
 
-- [ ] `ui_dock_tabs_annotated.png`  *(the script writes the dock;
-  add callouts in an image editor afterwards)*
+- [ ] `ui_dock_tabs_annotated.png`  *(the script writes the OMRAT
+  window; add callouts in an image editor afterwards)*
 - [ ] `ui_tab_route.png`
-- [ ] `ui_tab_traffic.png` *(re-capture after the 0.12 release added
-  the **Traffic scaling** group box -- old shot pre-dates the
-  collapsible scaling panel + the **Scaling (%)** variable entry.
-  The capture script widens the dock for this one shot so the panel
-  and the matrix both fit.)*
+- [ ] `ui_tab_traffic.png` *(the capture script widens the window for
+  this one shot, up to `MAX_TRAFFIC_WIDTH` = 1200 px, so more of the
+  matrix shows next to the **Traffic scaling** group.)*
 - [ ] `ui_tab_depths.png`
 - [ ] `ui_tab_objects.png`
 - [ ] `ui_tab_distributions.png`  *(same content as Route tab; the
@@ -115,9 +120,17 @@ script writes all of them except `ui_drift_corridor.png` when
 
 ## Tips
 
-- The script grabs the dock widget at 520 x 820 to get full tab
-  content without scrollbars.  Adjust `DOCK_WIDTH` / `DOCK_HEIGHT` in
-  the script if your project needs more room.
+- The OMRAT window is shot the way users see it: a window of its own,
+  never docked into the QGIS main window.  Its size is the plugin's
+  `preferred_size()` (every tab without scroll bars), widened until
+  the tab bar shows every tab name.  The window may run a few pixels
+  past the bottom of the screen while the shots are taken (`grab()`
+  renders that part too) and is put back on the screen at the end.
+- `ui_dock_overview.png` is composed from the two windows' own
+  renders (QGIS left, OMRAT right, each under a drawn title bar), not
+  captured from the screen: a screen capture picks up whatever else is
+  on it, and these images are public.  QGIS is resized for the shot
+  and gets its size back afterwards.
 - `ui_dock_tabs_annotated.png` is a base shot you can open in an
   image editor and decorate with callouts (menu bar, tab row, status
   bar).  The script doesn't try to do the annotation itself.

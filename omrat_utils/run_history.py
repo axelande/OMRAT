@@ -23,6 +23,7 @@ lives in :mod:`omrat_utils.run_persistence`.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -30,7 +31,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -252,10 +253,23 @@ class RunHistory:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """``with self._connect() as conn:`` -- commit on success, roll back
+        on an error, and always close.
+
+        ``sqlite3.Connection`` as a context manager only commits / rolls
+        back; it never closes.  Every call left a connection for the
+        garbage collector until 2026-11-12 (Python 3.13+ warns: "unclosed
+        database"), which on Windows can also keep the history file locked.
+        """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _ensure_schema(self) -> None:
         """Create ``omrat_runs`` / ``omrat_run_info`` if absent.

@@ -243,10 +243,11 @@ class TestCatastropheCompare:
         omrat._baseline_runs = None
         id_base = _save_run_with_sidecar(history, tmp_path, 'base', _result(1.0))
         id_other = _save_run_with_sidecar(history, tmp_path, 'other', _result(2.0))
+        monkeypatch.setattr(omrat, '_decimal_point', lambda: '.')   # drawn under '.'
         omrat.refresh_previous_runs_table()
         _tick_baseline(omrat, id_base)
         _select(omrat, id_other)
-        monkeypatch.setattr(omrat, '_decimal_point', lambda: ',')
+        monkeypatch.setattr(omrat, '_decimal_point', lambda: ',')   # copied under ','
         tw = omrat.main_widget.TWCatastropheResults
         lines = omrat._result_table_tsv(tw, whole=True).split('\n')
         assert lines[0].split('\t') == FIXED + ['base (baseline)', 'other', 'Change (%)']

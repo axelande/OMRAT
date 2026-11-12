@@ -41,12 +41,13 @@ from shapely import get_num_coordinates
 from shapely import wkt as shapely_wkt
 from shapely.geometry import LineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform, unary_union
+from shapely.ops import unary_union
 from shapely.validation import make_valid
 
 from compute.drift_corridor_geometry import _create_drift_corridor
 from compute.drift_reach import REACH_QUANTILE, drift_reach_m
 from geometries.route_validation import leg_length_m
+from geometries.shapely_compat import transform
 
 NM_M = 1852.0
 REPAIR_QUANTILES = (REACH_QUANTILE, 0.999, 0.9999)

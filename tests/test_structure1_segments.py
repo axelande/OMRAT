@@ -53,9 +53,10 @@ import pytest
 import numpy as np
 from pyproj import CRS, Transformer
 from shapely.geometry import Polygon, LineString, Point
-from shapely.ops import transform as shapely_transform
 from scipy.stats import norm
 import geopandas as gpd
+
+from geometries.shapely_compat import transform as shapely_transform  # noqa: E402
 
 from compute.run_calculations import (
     _extract_obstacle_segments,

@@ -62,7 +62,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 from shapely import wkt as shapely_wkt
 from shapely.geometry import LineString, Point
-from shapely.ops import transform as shapely_transform
+from geometries.shapely_compat import transform as shapely_transform
 
 from geometries.route_validation import parse_wkt_point
 

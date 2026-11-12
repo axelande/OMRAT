@@ -425,12 +425,11 @@ class AccidentResultsMixin:
         if tw is None:
             return
         self._reset_catastrophe_table_to_base()
-        decimal_point = self._decimal_point()
         tw.setRowCount(len(rows))
         for r, (name, qty) in enumerate(rows):
             tw.setItem(r, 0, QTableWidgetItem(name))
             qty_item = QTableWidgetItem(f'{qty:.2f}' if qty is not None else '')
-            qty_item.setData(_copy_role(), copy_number(qty, decimal_point))
+            qty_item.setData(_copy_role(), copy_number(qty))
             tw.setItem(r, 1, qty_item)
         columns = build_compare_columns(baseline, runs, len(rows), self._result_display_mode())
         self._insert_run_columns(tw, columns, first_col=2, bold_from=None, missing=DASH)
@@ -438,10 +437,10 @@ class AccidentResultsMixin:
     def _insert_run_columns(self, tw, columns, *, first_col: int, bold_from: int | None,
                             missing: str) -> None:
         """Insert ``columns`` (``CompareColumn``) at ``first_col``; each cell
-        keeps its clipboard number under :func:`_copy_role`."""
+        keeps its clipboard number under :func:`_copy_role`, with a ``.``
+        decimal point (the locale's is applied when copying)."""
         from qgis.PyQt.QtWidgets import QTableWidgetItem
         mode = self._result_display_mode()
-        decimal_point = self._decimal_point()
         role = _copy_role()
         align = _qt_enum(Qt, 'AlignRight', 'AlignmentFlag.AlignRight') | _qt_enum(
             Qt, 'AlignVCenter', 'AlignmentFlag.AlignVCenter')
@@ -453,10 +452,10 @@ class AccidentResultsMixin:
             tw.setHorizontalHeaderItem(col, header)
             for row, v in enumerate(column.cells):
                 if column.kind == CHANGE:
-                    text, copy = change_text(v), copy_number(v, decimal_point)
+                    text, copy = change_text(v), copy_number(v)
                 else:
                     text = value_text(v, mode, has_data=column.has_data, missing=missing)
-                    copy = value_copy_text(v, mode, decimal_point) if column.has_data else ''
+                    copy = value_copy_text(v, mode) if column.has_data else ''
                 item = QTableWidgetItem(text)
                 item.setData(role, copy)
                 item.setTextAlignment(align)
@@ -557,7 +556,12 @@ class AccidentResultsMixin:
     def _result_table_tsv(self, tw, *, whole: bool = False) -> str:
         """Tab-separated cells for Excel: numbers as plain numbers with the
         locale's decimal point (each cell's copy role), labels as text.
-        The View column (cell widgets) is left out."""
+        The View column (cell widgets) is left out.
+
+        The decimal point is applied here, when copying: the copy role
+        holds ``.``.  It was baked in when the table was drawn until
+        2026-11-12, so the copy followed the locale of that moment.
+        """
         skip = {
             c for c in range(tw.columnCount())
             if any(tw.cellWidget(r, c) is not None for r in range(tw.rowCount()))
@@ -574,6 +578,7 @@ class AccidentResultsMixin:
         if not cols or not (rows or whole):
             return ''
         role = _copy_role()
+        decimal_point = self._decimal_point()
         lines: list[list[str]] = []
         if whole:
             lines.append([
@@ -588,7 +593,10 @@ class AccidentResultsMixin:
                     cells.append('')
                     continue
                 copy = item.data(role)
-                cells.append(str(copy) if copy is not None else item.text())
+                if copy is None:
+                    cells.append(item.text())
+                else:
+                    cells.append(str(copy).replace('.', decimal_point))
             lines.append(cells)
         return to_tsv(lines)
 

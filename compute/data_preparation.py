@@ -11,7 +11,7 @@ from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsP
 from scipy.stats import norm, uniform
 import shapely.wkt as sw
 from shapely.errors import GEOSException
-from shapely.ops import transform
+from geometries.shapely_compat import transform
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 

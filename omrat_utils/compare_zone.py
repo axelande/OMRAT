@@ -52,7 +52,8 @@ def zone_from_structures(
     A structure present in both runs counts once.
     """
     from shapely import wkt as _wkt
-    from shapely.ops import transform, unary_union
+    from shapely.ops import unary_union
+    from geometries.shapely_compat import transform
     geoms = []
     for text in dict.fromkeys(_structure_wkts(snap_a) + _structure_wkts(snap_b)):
         try:
@@ -77,7 +78,7 @@ def zone_values(
 ) -> dict[str, float | None]:
     """The zone figures of one run; collision values are ``None`` without a collision sidecar."""
     from shapely.geometry import LineString, Point
-    from shapely.ops import transform
+    from geometries.shapely_compat import transform
 
     snap = snap or {}
     outputs = outputs or {}
