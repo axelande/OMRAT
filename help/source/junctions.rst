@@ -20,7 +20,7 @@ OMRAT models this with a per-junction **transition matrix**
    T[L_{\text{in}}][L_{\text{out}}] = \text{share of traffic continuing from } L_{\text{in}} \text{ to } L_{\text{out}}
 
 where each row sums to 1.0.  Rows are populated from one of three
-sources, in order of preference:
+sources (a user-edited matrix always wins, then AIS, then geometry):
 
 #. **AIS-derived** -- when a database connection is configured, OMRAT
    counts matched transits through the junction (see
@@ -29,11 +29,20 @@ sources, in order of preference:
 #. **Geometry-derived** -- when AIS is unavailable, a fallback
    heuristic scores out-legs by their deflection angle from the
    inbound bearing (``exp(-deflection / 30 deg)``) and normalises.
-   Straight continuations get the highest share, hairpins the lowest.
+   Straight continuations get the highest share, hairpins the lowest;
+   a junction with only two legs sends 100 % on to the other leg.
+   The bearings are measured in the model's map projection, like the
+   angles in the collision model.
 #. **User-edited** -- entered or tweaked via
    **Settings > Junction transition matrix...**, marked
    ``source="user"``, and preserved across subsequent
    *Update all distributions* runs.
+
+Legs whose traffic was copied from one another (:ref:`copy-traffic`)
+are treated as one route: where they meet, the AIS and geometric
+matrices give them a 100 % continuation row instead of the count or the
+heuristic.  User-edited rows still win.  Releasing the copy (unticking
+**AIS lock**) removes that row again.
 
 
 .. _junction-ais-counts:
@@ -69,43 +78,85 @@ Segments without a ``route_id`` are paired per MMSI instead, and then
 the two crossings must be at most 2 h apart.  A row with no matched
 transit keeps its geometric default.
 
+**Update all distributions** always re-counts the junctions.  The
+per-leg **Update AIS** button skips the junction pass when every
+junction already holds an AIS (or user) matrix for the current legs.  An
+AIS matrix survives file load and a rebuild of the registry as long as
+the same legs meet at the junction; a width, tangent or vertex edit that
+moves a leg's passage line resets the junctions at that leg to geometry,
+so the next update counts them again.
+
 
 How a transition matrix changes the calculation
 ================================================
 
-Two ship-collision sub-models become matrix-aware:
+The matrix decides how much traffic each route through the junction
+carries, which is what the crossing, merging and bend collisions count.
 
 Bend collisions
 ---------------
 
-Today, bend collision frequency on a leg is computed from a single
-``bend_angle`` field plus the leg's total traffic.  When a junction
-exists at the leg's end and has a populated matrix, the model instead
-iterates over each ``(this_leg -> other_leg)`` matrix row, computing
-the deflection angle between inbound and outbound bearings and
-weighting traffic by the matrix share.  Pure-continuation pairs
-(no deflection) drop out, and split-flow junctions naturally produce
-multiple bend contributions.
-
-If a leg has no junction at its end, or the junction has no matrix,
-the legacy single-bend path is used (no behaviour change).
+A bend is the pair of reverse routes through one turn, *A -> B* and
+*B -> A*: a ship that does not change course meets the ships coming the
+other way on the next leg.  Each route carries its in-leg's arriving
+traffic times its matrix share, so a junction where most traffic goes
+straight on has small bends.  The formula is the crossing formula at 180
+degrees minus the turn; see :ref:`collisions`.
 
 Crossing / merging collisions
 ------------------------------
 
-For each leg pair sharing a junction, the contribution to crossing /
-merging frequency is multiplied by a junction-aware **conflict factor**:
+Crossing and merging are counted per pair of **routes** through the
+junction.  A route is *in-leg -> out-leg*: the traffic of the in-leg's
+direction that arrives at the junction, at its speed there, times the
+matrix share :math:`T[\mathrm{in}][\mathrm{out}]` (a leg never routes to
+itself).  A junction without a stored matrix uses the geometric default.
+Each pair of routes counts once:
 
-.. math::
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
 
-   f = 1 - T[L_1][L_2] \cdot T[L_2][L_1]
+   * - The two routes
+     - Encounter
+   * - start on the same leg
+     - none at the junction -- they sail in one lane (overtaking on the
+       leg already counts them)
+   * - leave on the same leg
+     - **merging** (merging causation factor)
+   * - use four different legs and their paths cross around the junction
+     - **crossing** (crossing causation factor)
+   * - are the two reverse routes of one turn (*A -> B* and *B -> A*)
+     - **bend** (bend causation factor), see above
+   * - anything else (one leaves on the leg the other arrives on)
+     - none -- that is head-on on that leg, already counted there
 
-Reasoning: when 100% of leg 1 continues onto leg 2 *and* 100% of leg 2
-continues onto leg 1, the only encounter at the junction is a
-head-on/overtaking exchange that the per-leg models already capture --
-the crossing/merging adjustment is 0.  Any divergence (some traffic
-going elsewhere) re-introduces a junction-level conflict, hence the
-multiplicative complement.  Defaults to 1.0 when no matrix is set.
+The angle in Pedersen's formula is the angle between the two arrival
+courses, measured in the model's map projection (see
+:ref:`angle-limit-at-waypoints`); courses within the angle limit (**Settings > Causation factors**,
+default 10 degrees) of parallel or opposite give no encounter, because the
+formula divides by :math:`|\sin\theta|`.
+
+The speeds are those at the junction (they differ from the speed along
+the leg only in a speed restriction zone), and the causation factor is
+reduced for passenger ships and fast ferries as on a leg.
+
+So at a plain two-leg bend nothing crosses or merges (only the bend
+counts), at a three-leg junction routes can merge and form bends but not
+cross, and at an X with all traffic going straight through the four
+crossing route pairs are counted once each.
+
+.. note:: Changed 2026-11-09
+
+   Before, every pair of legs at a junction was taken with all four
+   direction combinations, weighted only by a conflict factor
+   :math:`1 - T[L_1][L_2] \cdot T[L_2][L_1]` and classified by the acute
+   angle between the legs (30 degrees or less = merging).  One X crossing
+   was counted in four leg pairs, flows that both leave the junction were
+   counted, and consecutive legs of one route "merged" with themselves.
+   On the Kattegat benchmark model crossing fell from 0.61 to 0.068 and
+   merging from 0.34 to 0.072 per year (together with the ship-length fix
+   in :ref:`collisions`).
 
 
 Validating routes before computing
@@ -249,3 +300,7 @@ Behind the scenes
   (pure-Python trip pairing and normaliser) plus
   ``omrat_utils/handle_ais.py:fetch_passages_for_leg`` /
   ``compute_junction_transitions`` (database query and COG direction).
+* Use in the calculation: ``compute/ship_collision_model.py``
+  (``_calc_crossing_collisions``: routes and route pairs per junction),
+  ``compute/encounter_angle.py`` (angle limit) and
+  ``geometries/model_projection.py`` (bearings).

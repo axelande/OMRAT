@@ -65,6 +65,43 @@ def _prepare_viz_dialog(dialog) -> None:
         pass
 
 
+def add_draught_bin_picker(dialog, bins: list[float], show) -> None:
+    """Row above the powered grounding figure: which depth bin it shows.
+
+    ``run_powered_grounding_model`` casts the rays once per depth bin (a ship
+    grounds on every depth class not deeper than its draught, + squat;
+    ``grounding_draught_bins``).  The figure shows one bin at a time, the
+    deepest by default; picking another calls ``show(max_draft)``, which rebuilds
+    the figure.  The table's frequencies are the model's, over every bin.
+    """
+    from qgis.PyQt.QtWidgets import QComboBox, QHBoxLayout, QLabel
+
+    row = QHBoxLayout()
+    label = QLabel()
+    row.addWidget(label)
+    combo = None
+    if not bins:
+        label.setText("No ship in the traffic draws enough water to ground on any depth area.")
+    else:
+        label.setText("Obstacles: depth areas down to")
+        combo = QComboBox()
+        for b in bins:
+            combo.addItem(f"{b:g} m", b)
+        combo.setCurrentIndex(len(bins) - 1)
+        combo.setToolTip(
+            "The model casts the rays once per depth bin: a ship grounds on every depth area "
+            "not deeper than its draught (+ squat when ticked).  The figure shows one bin; "
+            "the frequencies in the table are the model's, summed over every bin."
+        )
+        combo.currentIndexChanged.connect(lambda i: show(float(combo.itemData(i))))
+        row.addWidget(combo)
+    row.addStretch(1)
+    layout = dialog.layout()
+    if layout is not None:
+        layout.insertLayout(0, row)
+    dialog.draught_bin_combo = combo
+
+
 class VisualizationMixin:
     """Mixin providing interactive visualisation dialogs.
 
@@ -158,17 +195,21 @@ class VisualizationMixin:
         """
         if not data.get('traffic_data') or not data.get('segment_data'):
             return
-        try:
-            max_draft = float(data.get('max_draft', 15.0))
-        except (TypeError, ValueError):
-            max_draft = 15.0
+        from compute.powered_model import grounding_draught_bins
 
+        view_data = _with_speed_restrictions(data)
+        bins = grounding_draught_bins(view_data)
+        report = self._powered_view_report('grounding')
         dialog = ShowGeomRes(self.p.main_widget)
         _prepare_viz_dialog(dialog)
-        PoweredOverlapVisualizer.show_in_dialog(
-            dialog, _with_speed_restrictions(data), mode="grounding", max_draft=max_draft,
-            report=self._powered_view_report('grounding'),
-        )
+
+        def _show(max_draft: float) -> None:
+            PoweredOverlapVisualizer.show_in_dialog(
+                dialog, view_data, mode="grounding", max_draft=max_draft, report=report,
+            )
+
+        add_draught_bin_picker(dialog, bins, _show)
+        _show(bins[-1] if bins else -1.0)
         dialog.exec()
 
     def run_drift_grounding_visualization(self, data: dict[str, Any]) -> None:
@@ -185,10 +226,12 @@ class VisualizationMixin:
         depths = data.get('depths') or []
         if not depths:
             return
-        try:
-            max_draft = float(data.get('max_draft', 15.0))
-        except (TypeError, ValueError):
-            max_draft = 15.0
+        # Every depth class some ship of the traffic grounds on (draught,
+        # + squat when the drifting Squat box is ticked), not a fixed 15 m.
+        from compute.powered_model import grounding_draught_bins
+        from compute.squat import KEY_DRIFTING
+        bins = grounding_draught_bins(data, squat_key=KEY_DRIFTING)
+        max_draft = bins[-1] if bins else -1.0
 
         lines, distributions, weights, line_names = prepare_traffic_lists(data)
 

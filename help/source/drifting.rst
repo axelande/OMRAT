@@ -65,7 +65,8 @@ directions, all obstacles, all legs and all ship categories:
              r_{p,d}\cdot \mathrm{base}_{i,k}\cdot
              h_{X,\mathrm{eff},d}\cdot P_{NR,d}(d_X)
 
-with :math:`\sum_{d=1}^{8} r_{p,d} = 1`.  For a uniform wind rose
+with :math:`\sum_{d=1}^{8} r_{p,d} = 1` (the model divides each
+wind-rose value by the sum of the rose).  For a uniform wind rose
 (used in the worked examples) :math:`r_{p,d} = 0.125`.  Anchoring
 events are summed separately since they represent saved — not lost —
 ships.
@@ -99,7 +100,9 @@ combine.
      - Length of leg :math:`i`
      - metres
    * - :math:`V_k`
-     - Service speed of ship category :math:`k`
+     - Service speed of ship category :math:`k` (the run's speed: a gap
+       is filled, and in a speed restriction zone it is the
+       time-equivalent speed along the leg)
      - knots
    * - :math:`1852`
      - Metres per nautical mile
@@ -108,7 +111,9 @@ combine.
      - Transits per year of category :math:`k` on leg :math:`i`
      - 1/year
    * - :math:`\lambda_{bo}`
-     - Blackout rate while at sea
+     - Blackout rate while at sea, per ship type (default 1.0; 0.1 for
+       passenger ships, ro-ro / ro-pax, cruise ships and high speed
+       craft / fast ferries)
      - 1/year
    * - :math:`\lambda_{bo,\mathrm{hour}}`
      - Blackouts per hour =
@@ -146,7 +151,10 @@ combine.
        less than :math:`a_d\cdot T_{\mathrm{ship}}`)
      - dimensionless
    * - :math:`T_{\mathrm{ship}}`
-     - Ship draught
+     - Ship draught.  Grounding uses draught + squat when **Add squat to
+       the draught in drifting grounding** is ticked (Causation factors,
+       ``pc['squat_drifting']``, default on); anchoring always uses the
+       static draught
      - metres
    * - :math:`S_X`
      - Quad-sweep shadow polygon of obstacle :math:`X` along the
@@ -169,27 +177,28 @@ Two buttons in the OMRAT QGIS plugin trigger different code paths.
      - Entry point
      - What it does
    * - **Run analysis**
-     - :code:`run_drift_analysis()` in ``omrat_utils/drift_analysis_mixin.py:59`` →
+     - :code:`run_drift_analysis()` in ``omrat_utils/drift_analysis_mixin.py`` →
        ``DriftCorridorTask``
      - Builds the **drift corridor polygons** (per leg, per direction)
        and draws them as QGIS vector layers.  Uses the quad-sweep
        shadow algorithm and the corridor-clipping code in
        ``geometries/drift/``.  **No probabilities are computed.**
    * - **Run model**
-     - :code:`run_calculation()` in ``omrat.py:599`` →
+     - :code:`run_calculation()` in ``omrat.py`` →
        ``CalculationTask`` → :code:`run_drifting_model()` in
-       ``compute/drifting_model.py:2096``
+       ``compute/drifting_model.py``
      - Computes the actual drifting risk — :math:`P(\mathrm{ground})`,
        :math:`P(\mathrm{allision})`, :math:`P(\mathrm{anchor})` — for
        every (leg, direction, obstacle, ship-category).  This is the
        path described in the rest of this chapter.
 
-The quad-sweep algorithm described in :ref:`drifting-shadow-algorithm`
-is **only used by "run analysis"** (for drawing the corridors); the
-probability calculation uses the shadow-coverage formulation described
-per level below, which operates directly on the obstacle polygons and
-their quad-sweep shadows as a geometric subtraction rather than a
-corridor-clipping step.
+Both paths use the quad-sweep shadow described in
+:ref:`drifting-shadow-algorithm`.  "Run analysis" subtracts the shadows
+from the corridor polygon to draw it (**corridor clipping is only used
+there**); the probability calculation uses the shadow-coverage
+formulation described per level below, which subtracts the shadows of
+closer obstacles from the obstacles behind them rather than clipping a
+corridor.
 
 
 .. _drifting-parameters:
@@ -295,10 +304,21 @@ from ships of this category*.  Every grounding, allision and anchoring
 probability below is multiplied by this factor and the wind-rose
 probability.
 
+In the plugin the exposure is computed per traffic cell in
+``DriftingModelMixin._process_leg_cells`` (``compute/drifting_model.py``):
+:math:`L_i` is the leg's ``line_length``, :math:`V_k` and :math:`f_{i,k}`
+are the traffic after the run's traffic steps (missing speeds filled,
+``Scaling (%)``, moved traffic of suppressed legs, and speed restriction
+zones, where a leg partly inside a zone gets the time-equivalent speed
+along the leg and so more hours on it), :math:`\lambda_{bo}` is the rate
+of the cell's ship type, and the year is 365.25 days (8 766 h), as in
+the worked examples and the collision formulas.
+
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:72`` -- `get_drifting_prob()
-   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L72>`__
+   ``compute/basic_equations.py:78`` -- `get_drifting_prob()
+   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L78>`__
+   (legacy scalar helper; Run model does not call it)
 
 
 .. _drifting-repair:
@@ -335,10 +355,18 @@ this evaluates to
 i.e. about 11.8% of blackouts are still unresolved three hours after
 the event.
 
+The lognormal is the default; with **User defined** the drift settings
+take any CDF expression in the time ``x`` (hours) instead, for example a
+normal or Weibull CDF, and :math:`P_{NR}` then uses that CDF in the same
+way.  The
+same distribution sets the model's reach: the distance drifted by the
+time 99 % of the ships are repaired, capped at 10 times the longest leg
+(``compute/drift_reach.py``).
+
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:199`` -- `get_not_repaired()
-   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L199>`__
+   ``compute/basic_equations.py:205`` -- `get_not_repaired()
+   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L205>`__
 
 
 .. _drifting-hole:
@@ -361,8 +389,12 @@ deterministic (no Monte Carlo noise):
                         \phi\!\left(\frac{y}{\sigma}\right) dy\, ds
 
 where :math:`R(s)` is the union of y-intervals at slice position
-:math:`s` where the drift ray hits :math:`X`, and :math:`W=5\sigma` is
-the lateral integration range.
+:math:`s` where the drift ray (as long as the reach distance) hits
+:math:`X`, and :math:`W = 10\sigma` is the lateral integration range
+(:math:`\pm 5\sigma`).  With the full lateral mixture (up to three
+normals and a uniform part) :math:`\phi` is the weighted sum of the
+component densities and :math:`\sigma` the weight-averaged standard
+deviation of the components.
 
 Numerical value in the examples: for the 8-vertex 12 m target polygon
 with drift direction NW, :math:`h_{\mathrm{target}} = 2.4915\times 10^{-2}`.
@@ -372,11 +404,34 @@ with drift direction NW, :math:`h_{\mathrm{target}} = 2.4915\times 10^{-2}`.
    ``geometries/analytical_probability.py`` --
    `compute_probability_analytical()
    <https://github.com/axelande/OMRAT/blob/main/geometries/analytical_probability.py>`__.
-   The analytical path is the default
-   (``data['use_analytical']=True`` in ``run_drifting_model``); a Monte
-   Carlo fallback exists in
-   ``geometries/calculate_probability_holes.py`` but is only used when
-   the user explicitly disables the analytical integrator.
+   The analytical path is the only one ``run_drifting_model`` uses; the
+   Monte Carlo estimator in
+   ``geometries/calculate_probability_holes.py`` is kept as an
+   independent cross-check for tests and examples and cannot be
+   selected (a ``use_analytical`` key in a project file is ignored).
+
+**How Run model uses the hole.**  The worked examples below split
+:math:`h_X` over the obstacle's front-facing edges in proportion to their
+length.  The plugin gives each facing edge :math:`e` the share
+:math:`w_e / W_{\mathrm{leg}}` instead, IWRAP style (ships spread evenly
+along the leg): :math:`w_e` is the edge's width across the drift
+direction that lies within the leg's own width across the drift and is
+not covered by a closer edge of the same obstacle, and
+:math:`W_{\mathrm{leg}}` is the leg's width across the drift.  The
+analytical holes set the attenuation by closer obstacles and anchoring,
+:math:`h_{X,\mathrm{eff}} / h_X`, so per edge
+
+.. math::
+
+   P_e \;=\; \mathrm{base}\cdot r_p\cdot
+             \frac{w_e}{W_{\mathrm{leg}}}\cdot
+             \frac{h_{X,\mathrm{eff}}}{h_X}\cdot P_{NR}(d_e)
+
+Anchoring keeps :math:`a_p\cdot h_{\mathrm{anchor,eff}}` (split over the
+edges by width).  When no facing edge is found the obstacle-level
+formula :eq:`eq-drift-per-direction` is used with the obstacle's nearest
+distance.  The function-by-function walk-through is in
+:ref:`code-flow-drifting`.
 
 
 .. _drifting-distance:
@@ -389,16 +444,22 @@ The distance :math:`d_X` that goes into :math:`P_{NR}(d_X)` is the
 measures it by casting a **reverse ray** from each vertex of the
 obstacle back along the drift direction and intersecting with the
 reference line.  The per-edge distance is the average of its two vertex
-distances (``edge_average_distance_m`` in ``drifting/engine.py``).
+distances (``edge_average_distance_m`` in ``drifting/engine.py``; Run
+model does the same with the vectorised
+``directional_distances_to_points`` in
+``geometries/drift_overlap_geometry.py``).
 
-Two reference lines are supported:
+Two reference lines are supported (**Settings > Drift settings > Start
+drifting from**, ``drift['start_from']``):
 
-- **Leg centreline** (``use_leg_offset = False``, default):
-  distance is measured from the charted leg line itself.
-- **Mean-offset line** (``use_leg_offset = True``): distance is
-  measured from a parallel line offset by :math:`\mathrm{mean\_offset\_m}`
-  from the leg.  This is the correct choice when the traffic in a
-  direction is systematically biased to one side of the charted leg.
+- **Leg centreline** (``leg_center``, default; ``use_leg_offset = False``
+  in the engine functions): distance is measured from the charted leg
+  line itself.
+- **Mean-offset line** (``distribution_center``;
+  ``use_leg_offset = True``): distance is measured from a parallel line
+  offset by :math:`\mathrm{mean\_offset\_m}` from the leg.  This is the
+  correct choice when the traffic in a direction is systematically
+  biased to one side of the charted leg.  See :ref:`drifting-level1b`.
 
 For the target polygon (NW drift, leg centreline), the three
 front-facing edges give
@@ -549,16 +610,31 @@ distance → ship more likely to still be drifting).  Combined over the
 two traffic directions this produces a more realistic risk than
 treating both directions as centred on the charted leg.
 
-To enable this mode set ``use_leg_offset_for_distance = True`` in the
-:code:`DriftConfig` and provide a non-zero
-:code:`LegState.mean_offset_m` per direction.
+In the plugin the mode is **Settings > Drift settings > Start drifting
+from: Distribution center** (``drift['start_from'] =
+'distribution_center'``, ``compute/drift_start.py``).  The offset of each
+direction is the weighted mean of its lateral distribution (normals and
+uniform part); the edge distances, the obstacle order and the plain
+:math:`P_{NR}` distance are all measured from the offset line.  An object
+that lies between the leg and the offset line keeps its distance from the
+leg.  (The setting was saved but not used before 2026-11-10.)  The debug
+scripts set ``use_leg_offset_for_distance = True`` in the
+:code:`DriftConfig` and a non-zero :code:`LegState.mean_offset_m` per
+direction instead.
+
+Each direction's lateral distribution is placed on its own side of the
+leg: the drift model draws direction 2 as the reversed line and mirrors
+the stored offsets onto it (the stored axis is the drawn direction's,
+positive to the left).  Before 2026-11-10 direction 2 was read on the
+reversed line's axis without mirroring, so it sailed on the wrong side
+of the leg.
 
 .. container:: source-code-ref
 
    ``drifting/engine.py:223`` -- `directional_distance_to_point_from_offset_leg(use_leg_offset=True)
    <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L223>`__ |
-   ``drifting/engine.py:50`` -- `DriftConfig.use_leg_offset_for_distance
-   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L50>`__
+   ``drifting/engine.py:47`` -- `DriftConfig.use_leg_offset_for_distance
+   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L47>`__
 
 
 .. _drifting-level2:
@@ -768,6 +844,17 @@ The blocker itself may also be a grounding or allision hazard; the
 script reports its contribution separately using its own hole, distance
 and (for grounding/allision) :math:`P_{NR}`.
 
+In the plugin both structures and grounding areas act as blockers
+(sorted by distance, closest first), and each blocker is first clipped
+to the drift corridor **ahead of the leg** (the part of the corridor on
+the drift side of the leg centreline) before its shadow is swept: water
+behind the leg is never crossed by drifting ships and shields nothing.
+The shadow of closer obstacles is counted once, in
+:math:`h_{\mathrm{target,eff}}`; the per-edge split only decides which
+edges of the target are still hit.  (Before 2026-10-20 a merged depth
+polygon reaching behind the leg shielded structures in front of it, and
+grounding areas did not shield anything.)
+
 
 .. _drifting-level4:
 
@@ -813,6 +900,19 @@ The grounding and anchoring contributions are
 
 When :math:`a_p \to 1`, the anchor behaves like a pure blocker (the
 Level 3 full-coverage case).  When :math:`a_p = 0` it has no effect.
+
+In the plugin the anchoring area of a ship is the union of all depth
+areas shallower than :math:`a_d\cdot T_{\mathrm{ship}}` (static draught,
+no squat), so it contains the ship's grounding area.  The reduction
+:math:`a_p\cdot h(\mathrm{target}\cap S_A)` uses the anchor's swept
+shadow together with the anchor polygon itself, so a grounding area
+nested inside its anchoring area is reduced by :math:`a_p`.  A leg that
+lies (partly) inside anchorable water anchors from distance 0, with the
+share of the leg inside the area as :math:`h_{\mathrm{anchor}}`, and
+everything inside the area is reduced by :math:`a_p` (since 2026-11-09;
+before, such a leg got no anchoring because a drift path only met the
+area where it crossed one of its edges).  Anchoring never blocks rays
+outright: it does not shadow the edges of obstacles behind it.
 
 Parameters specific to this example:
 
@@ -1079,15 +1179,16 @@ Shadow Algorithm (Quad-Sweep)
    The quad-sweep algorithm described in this section is the same
    geometric operation used everywhere else in the chapter (for
    example, :math:`S_B` in :eq:`eq-shadow-cover` and :math:`S_s`,
-   :math:`S_a` in Level 5).  It is also the only place a shadow
-   polygon is explicitly **drawn**: in the ``run analysis`` code path
-   that produces the QGIS drift-corridor layers.  During the
-   probability calculation (``run model``) the shadow polygons are
-   built on the fly per obstacle and used directly as a
+   :math:`S_a` in Level 5).  A shadow polygon is only explicitly
+   **drawn** in the ``run analysis`` code path that produces the QGIS
+   drift-corridor layers.  During the probability calculation
+   (``run model``) the shadow polygons are built per leg, drift
+   direction and obstacle, from the part of the obstacle inside the
+   drift corridor ahead of the leg, and used directly as a
    :code:`shapely.Polygon.difference` / :code:`Polygon.intersection`
    argument — the result is the effective-hole equation already shown
-   per level.  There is no corridor-clipping or MultiPolygon
-   reachability filter on the probability path.
+   per level.  The corridor itself is not clipped on the probability
+   path.
 
 OMRAT computes shadow polygons by sweeping each obstacle along the
 drift direction and joining the original polygon to its translated
@@ -1131,8 +1232,8 @@ Reproducing this operation manually in the worked examples:
 
    ``geometries/drift/shadow.py:18`` -- `create_obstacle_shadow()
    <https://github.com/axelande/OMRAT/blob/main/geometries/drift/shadow.py#L18>`__
-   *(visualisation path only; used by ``run analysis`` to produce the
-   corridor layers)*
+   (used on both paths: by ``_build_blocker_shadow`` in ``run model``
+   and by ``clip_corridor_at_obstacles`` in ``run analysis``)
 
 
 .. _drifting-corridor-viz:
@@ -1146,26 +1247,28 @@ calculation.  They are a convenience for the user to see, for each leg
 and each of the 8 compass directions, the reachable area after all
 obstacles have been clipped out.
 
-Base surface width:
+The corridors have the probability model's size, so they show the water
+the model looks at:
 
-.. math::
+* **Half-width** per leg: the model's lateral spread, 5 times the
+  weight-averaged standard deviation of the leg's lateral mixture
+  (2 500 m without one), the wider of the leg's two travel directions.
+* **Length**: the model's reach, the drift distance by which 99 % of the
+  ships are repaired (the drift settings' repair time and drift speed),
+  capped at 10 times the longest leg (see :ref:`drifting-repair`).
 
-   \text{width} = 2\cdot Z_{0.995}\cdot \sigma \approx 2\cdot 2.576\cdot \sigma
-
-Maximum drift distance:
-
-.. math::
-
-   d_{\mathrm{max}} = F^{-1}_{\mathrm{lognorm}}(0.999)
-                      \cdot 3600\cdot V_{\mathrm{drift}}
-
-clamped to :math:`[10\,000, 50\,000]\,\mathrm{m}` for numerical
-stability.
+Depth areas count with the class value the model uses (an interval's
+shallower end).  Until November 2026 the corridors used the 99.9 %
+lognormal quantile of the default repair time, the width of the leg
+shown on the Distributions tab for every leg, and the deeper end of each
+depth class.
 
 The visualisation corridor is the convex hull of the base surface and
 its translation by :math:`d_{\mathrm{max}}\hat v`, clipped by every
 obstacle's quad-sweep shadow (:ref:`drifting-shadow-algorithm`) and
-filtered for reachability.  **This clipping happens only on the
+split into an anchorable part (from where the drift path enters the
+anchoring depth area, and everything behind it) and a deep part.
+**This clipping happens only on the
 visualisation path** — during ``run model`` the probability
 calculation uses the shadow polygons directly (via
 shadow-coverage subtraction, per-level equations above).
@@ -1188,30 +1291,37 @@ Pipeline and Source Code Pointers
 .. container:: source-code-ref pipeline
 
    **Probability pipeline (``run model``):**
-   ``omrat.py:599 run_calculation()`` →
-   ``CalculationTask`` →
-   ``compute/drifting_model.py:2096 run_drifting_model()`` →
+   ``omrat.py: run_calculation()`` →
+   ``CalculationTask`` (traffic steps in
+   ``compute/traffic_pipeline.py: prepare_traffic_for_run()``) →
+   ``compute/drifting_model.py: run_drifting_model()`` →
    `analytical hole
    <https://github.com/axelande/OMRAT/blob/main/geometries/analytical_probability.py>`__ +
-   `edge distance
-   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L288>`__ +
-   `P_NR
-   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L30>`__ +
+   edge distance (`edge_average_distance_m()
+   <https://github.com/axelande/OMRAT/blob/main/drifting/engine.py#L297>`__) +
+   :math:`P_{NR}` (`get_not_repaired()
+   <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L205>`__) +
    shadow-coverage subtraction per Levels 3–5.
 
    **Visualisation pipeline (``run analysis``):**
-   ``omrat_utils/drift_analysis_mixin.py:59 run_drift_analysis()`` →
+   ``omrat_utils/drift_analysis_mixin.py: run_drift_analysis()`` →
    ``DriftCorridorTask`` →
    `DriftCorridorGenerator
-   <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L25>`__ →
-   `quad-sweep shadow
-   <https://github.com/axelande/OMRAT/blob/main/geometries/drift/shadow.py#L18>`__ +
-   `corridor clipping
-   <https://github.com/axelande/OMRAT/blob/main/geometries/drift/clipping.py#L16>`__.
+   <https://github.com/axelande/OMRAT/blob/main/geometries/drift/generator.py#L107>`__ →
+   quad-sweep shadow (`create_obstacle_shadow()
+   <https://github.com/axelande/OMRAT/blob/main/geometries/drift/shadow.py#L18>`__) +
+   corridor clipping (`clip_corridor_at_obstacles()
+   <https://github.com/axelande/OMRAT/blob/main/geometries/drift/clipping.py#L16>`__).
 
-The worked-example scripts in ``drifting/debug/`` import the same
-functions OMRAT uses during ``run model``, so the numbers printed
-above match the results the QGIS plugin produces for the same inputs.
+The worked-example scripts in ``drifting/debug/`` import the hole and
+:math:`P_{NR}` functions OMRAT uses during ``run model``
+(``compute_probability_analytical``, ``get_not_repaired``) and measure
+distances with the ``drifting/engine.py`` equivalents of its reverse-ray
+distance, so those intermediate values match.  The plugin's totals for the same
+inputs differ somewhat, because it splits an obstacle over its edges by
+width across the drift (see :ref:`drifting-hole`),
+applies the per-ship-type blackout rates and squat, and clips blockers
+to the corridor ahead of the leg.
 
 
 Summary
@@ -1224,7 +1334,8 @@ Summary
   :math:`P_{\mathrm{anchor}} = \mathrm{base}\cdot r_p\cdot a_p\cdot h_{\mathrm{anchor}}`.
 - :math:`h_{\mathrm{eff}}` is the analytical hole of the obstacle
   *minus* everything that is geometrically or probabilistically blocked
-  upstream.  Blocking polygons (Level 3) remove the rays they
+  upstream (in Run model it scales the per-edge shares, see
+  :ref:`drifting-hole`).  Blocking polygons (Level 3) remove the rays they
   intercept; anchoring zones (Levels 4–5) reduce those rays by the
   factor :math:`a_p`.  No multiplicative "remaining" factor is applied
   across obstacles — the correct formulation is the shadow-coverage

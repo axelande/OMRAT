@@ -9,23 +9,32 @@ Prerequisites
 
 OMRAT requires:
 
-- **QGIS 3.30+** (``qgisMinimumVersion=3.30`` in ``metadata.txt``).
-  The plugin is Qt 6 compatible (``supportsQt6=True``).
+- **QGIS 3.30 or newer, QGIS 4 included** (``qgisMinimumVersion=3.30``
+  and ``qgisMaximumVersion=4.9`` in ``metadata.txt``).  The code is
+  checked for Qt 6 / QGIS 4 compatibility before every release.
 - **Python 3.9+** (bundled with QGIS).
 - A handful of scientific Python packages listed in ``requirements.txt``
-  (NumPy, SciPy, Shapely, GeoPandas, Matplotlib, Pydantic, pyproj,
-  Requests, Pandas).  If you install OMRAT via the QGIS Plugin Manager
-  the **qpip** plugin dependency installs these automatically — see
-  below.
+  (NumPy, Pandas, SciPy, Shapely, GeoPandas, Matplotlib, Pydantic,
+  Requests, defusedxml; pyproj comes with GeoPandas).  If you install
+  OMRAT via the QGIS Plugin Manager the **qpip** plugin dependency
+  installs these automatically — see below.
+- **psycopg2** -- the PostgreSQL driver.  OMRAT imports it at start-up,
+  so it must be present even if you never use an AIS database.  It
+  ships with the standard QGIS installers; on Linux install your
+  distribution's ``python3-psycopg2`` package if it is missing.
 
 Optional:
 
-- **psycopg2** -- for PostgreSQL/AIS database connectivity (only needed
-  if you import traffic from a remote AIS database).
 - **aissegments** and **aisdb** -- needed for the in-plugin AIS
   ingestion pipeline (Database setup wizard).  Listed in
   ``requirements.txt`` and installed automatically by qpip; see
-  :ref:`database-setup` for the full ingestion workflow.
+  :ref:`database-setup` for the full ingestion workflow.  ``aisdb`` is
+  only listed for Python older than 3.13 (it has no wheels for newer
+  versions); without it the NMEA and aisdb-CSV inputs cannot be read,
+  the generic CSV and Parquet inputs still can.
+- **pyarrow** -- only for ingesting ``.parquet`` AIS files; its version
+  must match the Arrow library bundled with QGIS (see
+  :ref:`database-setup`).
 
 
 Installing the Plugin (recommended)
@@ -70,8 +79,10 @@ From Source (developers)
 2. Copy or symlink the OMRAT folder into your QGIS plugin directory:
 
    - **Linux**: ``~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/``
-   - **Windows**: ``%APPDATA%\\QGIS\\QGIS3\\profiles\\default\\python\\plugins\\``
+   - **Windows**: ``%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\``
    - **macOS**: ``~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/``
+
+   QGIS 4 keeps its profiles in a ``QGIS4`` folder instead of ``QGIS3``.
 
 3. Restart QGIS and enable the plugin from the Plugin Manager.  qpip
    will still be offered on first launch and handle the dependency
@@ -79,9 +90,9 @@ From Source (developers)
 
 4. For running the test suite outside QGIS, see
    :ref:`installation-manual-deps` -- the dev-only packages
-   (``pytest``, ``pytest-cov``, ``pytest-qgis``) are in
-   ``requirements.txt`` but are **not** needed to run the plugin
-   itself.
+   (``pytest``, ``pytest-cov``, ``pytest-qgis``, ``flake8``,
+   ``bandit``, ...) are in ``requirements_dev.txt`` and are **not**
+   needed to run the plugin itself.
 
 
 .. _installation-manual-deps:
@@ -94,23 +105,24 @@ install, restrictive network).
 
 On Windows with OSGeo4W::
 
-    C:\\OSGeo4W\\bin\\python3.exe -m pip install -r requirements.txt
+    C:\OSGeo4W\bin\python3.exe -m pip install -r requirements.txt
 
 On Linux/macOS with the system QGIS Python::
 
     python3 -m pip install --user -r requirements.txt
 
-You can also install just the runtime packages (skip the ``pytest*``
-entries) if you don't plan to run the test suite.
+``requirements.txt`` holds only the runtime packages.  To run the test
+suite, install ``requirements_dev.txt`` the same way.
 
 
 Verifying the Installation
 ==========================
 
-After installation, you should see the OMRAT icon in the QGIS toolbar.
-Click it to open the plugin dock widget.  The widget should display
-tabs for: Route, Traffic, Depths, Objects, Distributions, Results, and
-Drift Analysis.
+After installation, you should see the OMRAT icon on its own **OMRAT**
+toolbar in QGIS.  Click it to open the OMRAT window (a separate window
+next to the QGIS main window).  It should have the menus File,
+Settings, Consequence and Help, and the tabs Routes, Traffic Data,
+Depths, Objects, Run Analysis, Drift Analysis and Compare.
 
 If the plugin fails to load:
 

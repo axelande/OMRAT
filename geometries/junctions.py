@@ -39,9 +39,10 @@ under the standalone interpreter.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import atan2, degrees, exp
+from math import exp
 from typing import Any, Iterable
 
+from geometries.model_projection import model_projector_or_none, projected_bearing
 from geometries.route_validation import parse_wkt_point
 
 
@@ -150,16 +151,17 @@ def _points_equal(
 def _outward_bearing(
     junction_pt: tuple[float, float],
     other_pt: tuple[float, float],
+    projector: Any = None,
 ) -> float:
     """Compass bearing (deg, 0=N, CW) from ``junction_pt`` to ``other_pt``.
 
-    Uses planar arctan in the lon/lat plane — adequate at the scale of
-    the deflection-angle heuristic, which is itself only used for
-    rough defaults that the user can override.
+    Measured in ``projector`` (the model's ``ModelProjector``, the one the
+    collision model takes its waypoint angles from; ``None`` = centred on
+    the junction).  It was ``atan2(dlon, dlat)`` on raw degrees until
+    2026-11-12, which bent every deflection angle away from east-west at
+    high latitude (KNOWN_ISSUES 36).
     """
-    dx = other_pt[0] - junction_pt[0]
-    dy = other_pt[1] - junction_pt[1]
-    return degrees(atan2(dx, dy)) % 360.0
+    return projected_bearing(junction_pt, other_pt, projector)
 
 
 def _angular_diff_deg(a: float, b: float) -> float:
@@ -245,9 +247,9 @@ def build_junctions(
 
 
 def _leg_outward_bearing(
-    junction: Junction, leg_id: str, segment_data: dict[str, Any],
+    junction: Junction, leg_id: str, segment_data: dict[str, Any], projector: Any = None,
 ) -> float | None:
-    """Bearing from the junction toward ``leg_id``'s far endpoint."""
+    """Bearing from the junction toward ``leg_id``'s far endpoint (in ``projector``)."""
     seg = (segment_data or {}).get(leg_id)
     if not isinstance(seg, dict):
         return None
@@ -258,9 +260,9 @@ def _leg_outward_bearing(
     side = junction.legs.get(leg_id)
     if side == 'start':
         # Junction is at this leg's start, so far end = End_Point.
-        return _outward_bearing(junction.point, ep)
+        return _outward_bearing(junction.point, ep, projector)
     elif side == 'end':
-        return _outward_bearing(junction.point, sp)
+        return _outward_bearing(junction.point, sp, projector)
     return None
 
 
@@ -323,9 +325,10 @@ def compute_geometric_transition_matrix(
     one partner at the junction sends 100 % to it; with several partners
     the deflection heuristic runs over the partners only.
     """
+    projector = model_projector_or_none(segment_data)
     bearings: dict[str, float] = {}
     for leg_id in junction.legs:
-        b = _leg_outward_bearing(junction, leg_id, segment_data)
+        b = _leg_outward_bearing(junction, leg_id, segment_data, projector)
         if b is not None:
             bearings[leg_id] = b
     matrix: dict[str, dict[str, float]] = {}

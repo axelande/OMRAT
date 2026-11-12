@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+import math
 import os
 from typing import Any, TYPE_CHECKING
 
@@ -259,8 +260,18 @@ class GatherData:
             id_ = row[0]
             depths = row[1]
             polygon = row[2]
-            # Support values like "48-...": take the first part as depth
-            depth_val = depths.split('-')[0] if isinstance(depths, str) else str(depths)
+            # An interval ("48-51", GEBCO) is stored as its class value, the
+            # shallower end (``depth_simplify.depth_value``).  ``split('-')[0]``
+            # turned a negative depth such as "-5" into ''.
+            depth_val = str(depths)
+            if isinstance(depths, str):
+                try:
+                    float(depths)
+                except ValueError:
+                    from geometries.depth_simplify import depth_value
+                    v = depth_value(depths)
+                    if not math.isnan(v):
+                        depth_val = f"{v:g}"
             # Store as list [id, depth, polygon] per schema
             self.data['depths'].append([str(id_), str(depth_val), str(polygon)])
         for row in object_rows:

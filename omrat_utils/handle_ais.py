@@ -16,7 +16,7 @@ from compute.junction_transitions import (
     DEFAULT_TIME_WINDOW_S, Crossing, match_summary, transition_counts_from_crossings,
 )
 from geometries.tangent_position import TANGENT_POS_KEY, normalize_tangent_pos
-from omrat_utils.ais_binning import add_observations, length_bin
+from omrat_utils.ais_binning import add_observations, is_sar_aircraft, length_bin
 from omrat_utils.copy_traffic import describe_targets, split_locked
 from omrat_utils.ship_type_map import (
     ShipTypeMapConfig, get_type, resolve_ship_type, statics_have_imo,
@@ -39,7 +39,9 @@ _AIS_SELECT_TEMPLATE = (
     "FROM {tbl} ss "
     "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
     "JOIN {schema}.statics_{year} si on si.rowid=st.static_id "
-    "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
+    "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326)) "
+    # == ais_binning.SAR_AIRCRAFT_SQL (tests/test_ais_sar_aircraft.py pins it)
+    "AND (ss.mmsi IS NULL OR ss.mmsi::text NOT LIKE '111______')"
 )
 
 
@@ -214,7 +216,12 @@ class AIS:
 
     def run(self):
         self.acw.show()
-        self.acw.accepted.connect(self.update_ais_settings)
+        # Connect OK once: ``run`` is called on every open of the same dialog,
+        # and each extra connection made one OK save the settings and open a
+        # database connection once more per earlier open.
+        if not getattr(self, '_accept_wired', False):
+            self._accept_wired = True
+            self.acw.accepted.connect(self.update_ais_settings)
         self.acw.exec()
 
     def set_start_ais_settings(self):
@@ -790,7 +797,9 @@ class AIS:
             "extract(epoch from date1) as t, ss.cog "
             "FROM {tbl} ss "
             "JOIN {schema}.states_{year} st on st.rowid=ss.state_id "
-            "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326))"
+            "WHERE ST_intersects(segment, ST_geomfromtext(%(pl)s, 4326)) "
+            # == ais_binning.SAR_AIRCRAFT_SQL (tests/test_ais_sar_aircraft.py pins it)
+            "AND (ss.mmsi IS NULL OR ss.mmsi::text NOT LIKE '111______')"
         )
         sql = " UNION ".join(  # nosec B608
             select_template.format(tbl=tbl, schema=schema, year=year)
@@ -809,7 +818,7 @@ class AIS:
             return []
         out: list[tuple[str, int | None, float, float]] = []
         for mmsi, route_id, t, cog in rows:
-            if mmsi is None or t is None or cog is None:
+            if mmsi is None or t is None or cog is None or is_sar_aircraft(mmsi):
                 continue
             out.append((str(mmsi), None if route_id is None else int(route_id), float(t), float(cog)))
         return out

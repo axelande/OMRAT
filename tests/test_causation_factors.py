@@ -113,6 +113,9 @@ class TestSetValuesAndCommitChanges:
             'grounding': 0.77, 'allision': 0.88,
             'grounding_cat1': 0.777, 'allision_cat1': 0.888,
             'cat1_skip_start': True, 'cat1_skip_start_pct': 10.0,
+            'passenger_reduction': 20.0, 'fast_ferry_reduction': 20.0,
+            'squat_drifting': True, 'squat_powered': True,
+            'min_encounter_angle_deg': 10.0,
         }
 
     def test_roundtrip_set_then_commit_preserves_data(self, cf):
@@ -128,8 +131,40 @@ class TestSetValuesAndCommitChanges:
         cf.commit_changes()
         # The dialog adds the Category I start-zone keys with their defaults
         # (on, 10 %) to a project that predates them; the factors are untouched.
-        expected = dict(original, cat1_skip_start=True, cat1_skip_start_pct=10.0)
+        # So does the passenger ship / fast ferry reduction (default 20, IWRAP's),
+        # the two squat boxes (default on) and the smallest route angle (10 degrees).
+        expected = dict(original, cat1_skip_start=True, cat1_skip_start_pct=10.0,
+                        passenger_reduction=20.0, fast_ferry_reduction=20.0,
+                        squat_drifting=True, squat_powered=True,
+                        min_encounter_angle_deg=10.0)
         assert cf.data == expected
+
+    def test_squat_boxes_round_trip(self, cf):
+        cf.data = dict(cf.data, squat_drifting=False, squat_powered=True)
+        cf.set_values()
+        assert not cf.cfw.cbSquatDrifting.isChecked()
+        assert cf.cfw.cbSquatPowered.isChecked()
+        cf.cfw.cbSquatPowered.setChecked(False)
+        cf.commit_changes()
+        assert cf.data['squat_drifting'] is False and cf.data['squat_powered'] is False
+
+    def test_min_encounter_angle_round_trip(self, cf):
+        cf.data = dict(cf.data, min_encounter_angle_deg=5.7)
+        cf.set_values()
+        assert cf.cfw.sbMinEncounterAngle.value() == pytest.approx(5.7)
+        cf.cfw.sbMinEncounterAngle.setValue(12.0)
+        cf.commit_changes()
+        assert cf.data['min_encounter_angle_deg'] == pytest.approx(12.0)
+
+    def test_passenger_reduction_round_trip(self, cf):
+        cf.data = dict(cf.data, passenger_reduction=20.0, fast_ferry_reduction=10.0)
+        cf.set_values()
+        assert cf.cfw.sbPassengerReduction.value() == pytest.approx(20.0)
+        assert cf.cfw.sbFastFerryReduction.value() == pytest.approx(10.0)
+        cf.cfw.sbPassengerReduction.setValue(5.0)
+        cf.commit_changes()
+        assert cf.data['passenger_reduction'] == pytest.approx(5.0)
+        assert cf.data['fast_ferry_reduction'] == pytest.approx(10.0)
 
 
 class TestCat1StartZoneWidgets:

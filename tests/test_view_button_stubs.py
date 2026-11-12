@@ -57,7 +57,7 @@ class TestViewSlotDispatch:
 
 
 class TestViewButtonsWiredUp:
-    """Each row's "View" button (column 2 of TWAccidentResults) must fire
+    """Each row's "View" button (last column of TWAccidentResults) must fire
     its slot.  The legacy ``pbView*`` widgets on ``main_widget`` are
     hollow stubs kept only so old code that calls ``LEPDriftAllision``
     etc. still resolves; the live, wired-up buttons live inside the
@@ -73,7 +73,7 @@ class TestViewButtonsWiredUp:
             if spec[0] == label
         )
         tw = omrat.main_widget.TWAccidentResults
-        button = tw.cellWidget(row, 2)
+        button = tw.cellWidget(row, tw.columnCount() - 1)   # View is the last column
         assert button is not None, (
             f"Row {row} ({label!r}) has no cellWidget — the View button "
             f"was never created."

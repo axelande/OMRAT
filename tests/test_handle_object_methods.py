@@ -201,8 +201,8 @@ class TestSelectFile:
 class TestSimpleDepthFlow:
     def test_add_then_store_populates_table(self, obj):
         from qgis.core import QgsFeature, QgsGeometry
-        # First click: button text 'Add manual' -> creates layer + flips to 'Save'.
-        obj.p.main_widget.pbAddSimpleDepth.setText('Add manual')
+        # First click: button text 'Add manually' -> creates layer + flips to 'Save'.
+        obj.p.main_widget.pbAddSimpleDepth.setText('Add manually')
         obj.add_simple_depth()
         assert obj.area is not None
         assert obj.p.main_widget.pbAddSimpleDepth.text() == 'Save'
@@ -214,7 +214,7 @@ class TestSimpleDepthFlow:
         obj.area.updateExtents()
         # Second click: 'Save' branch -> store_depth -> populates table.
         obj.add_simple_depth()
-        assert obj.p.main_widget.pbAddSimpleDepth.text() == 'Add manual'
+        assert obj.p.main_widget.pbAddSimpleDepth.text() == 'Add manually'
         # twDepthList has 1 row after store_depth.
         assert obj.p.main_widget.twDepthList.rowCount() >= 1
 
@@ -226,7 +226,7 @@ class TestSimpleDepthFlow:
 class TestSimpleObjectFlow:
     def test_add_then_store_populates_table(self, obj):
         from qgis.core import QgsFeature, QgsGeometry
-        obj.p.main_widget.pbAddSimpleObject.setText('Add manual')
+        obj.p.main_widget.pbAddSimpleObject.setText('Add manually')
         obj.add_simple_object()
         assert obj.area is not None
         assert obj.p.main_widget.pbAddSimpleObject.text() == 'Save'
@@ -236,7 +236,7 @@ class TestSimpleObjectFlow:
         prov.addFeature(feat)
         obj.area.updateExtents()
         obj.add_simple_object()
-        assert obj.p.main_widget.pbAddSimpleObject.text() == 'Add manual'
+        assert obj.p.main_widget.pbAddSimpleObject.text() == 'Add manually'
         assert obj.p.main_widget.twObjectList.rowCount() >= 1
 
 
@@ -341,63 +341,127 @@ class TestLoadShortCircuits:
 
 
 # ---------------------------------------------------------------------------
-# _load_layer / _populate_table
+# load_objects / load_depths from a file
 # ---------------------------------------------------------------------------
 
-class TestPopulateTable:
-    def test_populates_with_attribute(self, obj):
-        from qgis.core import (
-            QgsVectorLayer, QgsField, QgsFeature, QgsGeometry
-        )
-        from qgis.PyQt.QtCore import QVariant
-        layer = QgsVectorLayer("Polygon?crs=EPSG:4326", "x", "memory")
-        prov = layer.dataProvider()
-        prov.addAttributes([QgsField("depth", QVariant.Double)])
-        layer.updateFields()
-        feat = QgsFeature(layer.fields())
-        feat.setGeometry(QgsGeometry.fromWkt('POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))'))
-        feat.setAttribute('depth', 7.5)
-        prov.addFeature(feat)
+SQUARE = [[0.0, 0.0], [0.01, 0.0], [0.01, 0.01], [0.0, 0.01], [0.0, 0.0]]
 
-        tbl = obj.p.main_widget.twDepthList
-        tbl.setRowCount(0)
-        tbl.setColumnCount(3)
-        obj._populate_table(layer, tbl, 'depth')
-        assert tbl.rowCount() == 1
-        assert tbl.item(0, 1).text() == '7.5'
 
-    def test_reprojects_non_wgs84_shapefile_to_4326(self, obj):
-        # Regression: a shapefile in UTM (here EPSG:32640) used to land
-        # in twObjectList with projected metres, which then blew up the
-        # calculation's forward-transform check.  _populate_table must
-        # reproject to EPSG:4326 before writing WKT into the table.
-        from qgis.core import QgsVectorLayer, QgsFeature, QgsGeometry
-        layer = QgsVectorLayer("Polygon?crs=EPSG:32640", "utm_objs", "memory")
-        prov = layer.dataProvider()
-        feat = QgsFeature(layer.fields())
-        # Roughly the UTM coords from the reported bug -- a small square.
-        feat.setGeometry(QgsGeometry.fromWkt(
-            'POLYGON((604000 6199000, 604500 6199000, '
-            '604500 6199500, 604000 6199500, 604000 6199000))'
-        ))
-        prov.addFeature(feat)
+def _geojson(path, features, crs=None):
+    """Write a polygon GeoJSON (GDAL honours the legacy ``crs`` member)."""
+    import json
+    doc = {'type': 'FeatureCollection', 'features': [
+        {'type': 'Feature', 'properties': props,
+         'geometry': {'type': 'Polygon', 'coordinates': [ring]}}
+        for props, ring in features]}
+    if crs:
+        doc['crs'] = {'type': 'name', 'properties': {'name': crs}}
+    path.write_text(json.dumps(doc), encoding='utf-8')
+    return str(path)
 
-        tbl = obj.p.main_widget.twObjectList
-        tbl.setRowCount(0)
-        tbl.setColumnCount(3)
-        obj._populate_table(layer, tbl, 'object')
-        assert tbl.rowCount() == 1
-        wkt = tbl.item(0, 2).text()
-        # Pluck any number from the WKT and check they're in lon/lat range.
+
+def _shifted(dx):
+    return [[x + dx, y] for x, y in SQUARE]
+
+
+class TestLoadFromFile:
+    def test_structure_height_from_height_field_any_case(self, obj, tmp_path, monkeypatch):
+        path = _geojson(tmp_path / 's.geojson', [({'Height': 25.0}, SQUARE), ({'Height': 12.5}, _shifted(0.02))])
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_objects()
+        rows = obj.object_rows()
+        assert [(r[0], float(r[1])) for r in rows] == [('1', 25.0), ('2', 12.5)]
+        # one layer per structure, as on project load, so rows map to layers
+        assert [lyr.name() for lyr in obj.loaded_object_areas] == ['Structure - 25.0m', 'Structure - 12.5m']
+
+    def test_legacy_object_field_still_read(self, obj, tmp_path, monkeypatch):
+        path = _geojson(tmp_path / 's.geojson', [({'object': 8.0}, SQUARE)])
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_objects()
+        assert float(obj.object_rows()[0][1]) == 8.0
+
+    def test_removing_a_loaded_row_removes_its_own_layer(self, obj, tmp_path, monkeypatch):
+        from qgis.core import QgsProject
+        path = _geojson(tmp_path / 's.geojson', [({'height': 1.0}, SQUARE), ({'height': 2.0}, _shifted(0.02))])
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_objects()
+        first_id, second_id = (lyr.id() for lyr in obj.loaded_object_areas)
+        obj.p.main_widget.twObjectList.selectRow(0)
+        obj.remove_object()
+        assert QgsProject.instance().mapLayer(first_id) is None
+        assert QgsProject.instance().mapLayer(second_id) is not None
+        assert [lyr.id() for lyr in obj.loaded_object_areas] == [second_id]
+        assert [float(r[1]) for r in obj.object_rows()] == [2.0]
+
+    def test_reprojects_non_wgs84_file_to_4326(self, obj, tmp_path, monkeypatch):
+        # Regression: a file in UTM landed in twObjectList with projected
+        # metres, which then blew up the calculation's forward-transform check.
         import re
+        ring = [[604000, 6199000], [604500, 6199000], [604500, 6199500], [604000, 6199500], [604000, 6199000]]
+        path = _geojson(tmp_path / 'utm.geojson', [({'height': 5.0}, ring)], crs='urn:ogc:def:crs:EPSG::32640')
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_objects()
+        wkt = obj.object_rows()[0][2]
         nums = [float(n) for n in re.findall(r'-?\d+\.\d+|-?\d+', wkt)]
         assert nums, f'no coordinates parsed from {wkt!r}'
-        assert all(-180.0 <= n <= 180.0 for n in nums), (
-            f'WKT still in projected CRS: {wkt!r}'
-        )
+        assert all(-180.0 <= n <= 180.0 for n in nums), f'WKT still in projected CRS: {wkt!r}'
+
+    def test_depth_field_any_case(self, obj, tmp_path, monkeypatch):
+        path = _geojson(tmp_path / 'd.geojson', [({'DEPTH': 7.5}, SQUARE)])
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_depths()
+        assert float(obj.depth_rows()[0][1]) == 7.5
 
 
-class TestLoadLayer:
-    def test_invalid_returns_none(self, obj):
-        result = obj._load_layer('/nonexistent/path.shp', 'NoLayer', [])
-        assert result is None
+class TestManualAddAfterLoad:
+    """Add manually used its own counter, which no load advanced: after a
+    load of two rows the first manual entry cut the table down to one row."""
+
+    @staticmethod
+    def _draw(obj, kind):
+        from qgis.core import QgsFeature, QgsGeometry
+        w = obj.p.main_widget
+        button, click = ((w.pbAddSimpleObject, obj.add_simple_object) if kind == 'object'
+                         else (w.pbAddSimpleDepth, obj.add_simple_depth))
+        button.setText('Add manually')
+        click()
+        feat = QgsFeature(obj.area.fields())
+        feat.setGeometry(QgsGeometry.fromWkt('POLYGON((5 5, 6 5, 6 6, 5 6, 5 5))'))
+        obj.area.dataProvider().addFeature(feat)
+        click()
+        assert button.text() == 'Add manually'
+
+    def test_structure_is_appended(self, obj, tmp_path, monkeypatch):
+        path = _geojson(tmp_path / 's.geojson', [({'height': 25.0}, SQUARE), ({'height': 12.5}, _shifted(0.02))])
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_objects()
+        self._draw(obj, 'object')
+        rows = obj.object_rows()
+        assert [r[0] for r in rows] == ['1', '2', '3']
+        assert [float(r[1]) for r in rows[:2]] == [25.0, 12.5]
+        assert 'POLYGON' in rows[2][2].upper()
+        # the drawn structure gets the same one-feature layer as a loaded one
+        assert [lyr.name() for lyr in obj.loaded_object_areas][-1] == 'Structure - 10.0m'
+        assert len(obj.loaded_object_areas) == 3
+
+    def test_depth_is_appended(self, obj, tmp_path, monkeypatch):
+        path = _geojson(tmp_path / 'd.geojson', [({'depth': 3.0}, SQUARE), ({'depth': 6.0}, _shifted(0.02))])
+        monkeypatch.setattr(obj, '_select_file', lambda title: path)
+        obj.load_depths()
+        self._draw(obj, 'depth')
+        rows = obj.depth_rows()
+        assert [r[0] for r in rows] == ['1', '2', '3']
+        assert [float(r[1]) for r in rows[:2]] == [3.0, 6.0]
+
+
+class TestDepthClassOnTheMap:
+    """The depth layer shows a class by the value compute uses: an
+    interval's shallower end (it showed the deeper end before 2026-11-12)."""
+
+    @pytest.mark.parametrize('value, expected', [('10-20', 10.0), ('-5', -5.0), ('7.5', 7.5)])
+    def test_project_load_colours_by_the_shallower_end(self, obj, value, expected):
+        obj.area_type = 'depth'
+        obj.load_area(f'Depth - {value}m', 'POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))', row=0,
+                      value=value, value_field='Depth', defer_style=True)
+        depths = [f['depth'] for f in obj.depth_layer.getFeatures()]
+        assert depths == [expected]

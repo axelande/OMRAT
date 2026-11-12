@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.ship_collision_model import ShipCollisionModelMixin as M
+from compute.ship_collision_model import ShipCollisionModelMixin as M  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -127,50 +127,3 @@ class TestPointsMatch:
     def test_custom_tolerance(self):
         assert M._points_match((0, 0), (0.5, 0), tol=1.0)
         assert not M._points_match((0, 0), (0.5, 0), tol=0.1)
-
-
-# ---------------------------------------------------------------------------
-# _get_weighted_mu_sigma
-# ---------------------------------------------------------------------------
-
-class TestGetWeightedMuSigma:
-    def _seg(self, **overrides):
-        base = {
-            'mean1_1': 0.0, 'std1_1': 100.0, 'weight1_1': 1.0,
-            'mean1_2': 0.0, 'std1_2': 0.0, 'weight1_2': 0.0,
-            'mean1_3': 0.0, 'std1_3': 0.0, 'weight1_3': 0.0,
-            'mean2_1': 0.0, 'std2_1': 100.0, 'weight2_1': 1.0,
-            'mean2_2': 0.0, 'std2_2': 0.0, 'weight2_2': 0.0,
-            'mean2_3': 0.0, 'std2_3': 0.0, 'weight2_3': 0.0,
-            'u_min1': 0.0, 'u_max1': 0.0, 'u_p1': 0.0,
-            'u_min2': 0.0, 'u_max2': 0.0, 'u_p2': 0.0,
-        }
-        base.update(overrides)
-        return base
-
-    def test_single_gaussian(self):
-        mu, sigma = M._get_weighted_mu_sigma(self._seg(), direction=0)
-        assert mu == pytest.approx(0.0, abs=1e-9)
-        assert sigma == pytest.approx(100.0, abs=1e-6)
-
-    def test_zero_weights_raises(self):
-        seg = self._seg(weight1_1=0.0)
-        with pytest.raises(ValueError):
-            M._get_weighted_mu_sigma(seg, direction=0)
-
-    def test_tiny_sigma_raises(self):
-        """Bugs that feed a near-zero sigma should fail loudly."""
-        seg = self._seg(std1_1=0.1, weight1_1=1.0)
-        with pytest.raises(ValueError, match='sigma too small'):
-            M._get_weighted_mu_sigma(seg, direction=0)
-
-    def test_two_component_mixture_gives_mixture_variance(self):
-        import numpy as np
-        seg = self._seg(
-            mean1_1=0.0, std1_1=50.0, weight1_1=1.0,
-            mean1_2=200.0, std1_2=50.0, weight1_2=1.0,
-        )
-        mu, sigma = M._get_weighted_mu_sigma(seg, direction=0)
-        assert mu == pytest.approx(100.0, abs=1e-6)  # midway
-        # Total variance = 50^2 + (100)^2 = 12500
-        assert sigma == pytest.approx(np.sqrt(12500.0), rel=1e-6)

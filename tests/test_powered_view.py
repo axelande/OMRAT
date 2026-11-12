@@ -31,8 +31,8 @@ from compute.powered_breakdown import (  # noqa: E402
 )
 from compute.powered_model import PoweredModelMixin  # noqa: E402
 from geometries.get_powered_overlap import (  # noqa: E402
-    INSET_FRAC, PoweredOverlapVisualizer, SimpleProjector, _build_legs_and_obstacles, _parse_point,
-    _run_all_computations, _side_sign, local_view,
+    INSET_FRAC, PoweredOverlapVisualizer, _build_legs_and_obstacles,
+    _run_all_computations, _side_sign, local_view, model_projector,
 )
 
 # Leg "1" runs east along lat 55.2.  ``s_in`` straddles the leg's
@@ -71,8 +71,7 @@ def _data(**pc) -> dict:
 
 
 def _view_inputs(data: dict, mode: str = 'allision'):
-    seg = data['segment_data'][next(iter(data['segment_data']))]
-    proj = SimpleProjector(*_parse_point(seg['Start_Point']))
+    proj = model_projector(data['segment_data'])   # the model's projection (KNOWN_ISSUES 27)
     legs, obs, dg, dgd, og = _build_legs_and_obstacles(data, proj, mode, 15.0)
     comps = _run_all_computations(legs, obs, cat1_start_zone_frac=start_zone_fraction(data.get('pc')))
     return legs, obs, dg, dgd, og, comps
@@ -386,3 +385,64 @@ class TestResizeRefit:
         viz._schedule_refit()
         viz._schedule_refit()
         assert calls == ['stop', 'start', 'stop', 'start']
+
+
+# ---------------------------------------------------------------------------
+# Grounding View: the model's depth bins instead of a fixed 15 m
+# ---------------------------------------------------------------------------
+
+_SQ = 'POLYGON((14.30 55.30, 14.31 55.30, 14.31 55.31, 14.30 55.31, 14.30 55.30))'
+
+
+def _grounding_data(squat: bool) -> dict:
+    data = _data(squat_powered=squat)
+    shallow, deep = _cell(freq=50.0, speed=12.0), _cell(freq=80.0, speed=12.0)
+    shallow['Draught (meters)'][18][1] = 5.0
+    deep['Draught (meters)'][18][1] = 11.5
+    data['traffic_data'] = {'1': {'East going': shallow, 'West going': deep}}
+    data['ship_categories'] = {'types': [f'type {i}' for i in range(18)] + ['Cargo, all ships of this type',
+                                                                          'Tanker', 'Other'],
+                               'length_intervals': [{'min': 0, 'max': 25}, {'min': 25, 'max': 50}]}
+    data['depths'] = [[str(i), str(d), _SQ] for i, d in enumerate((3.0, 8.0, 12.0, 20.0), 1)]
+    return data
+
+
+class TestGroundingDraughtBins:
+    def test_bins_follow_the_traffic_draughts(self, qgis_iface):
+        from compute.powered_model import grounding_draught_bins
+        # 5 m -> deepest class not deeper: 3 m; 11.5 m -> 8 m
+        assert grounding_draught_bins(_grounding_data(squat=False)) == [3.0, 8.0]
+
+    def test_squat_moves_a_ship_into_a_deeper_bin(self, qgis_iface):
+        from compute.powered_model import grounding_draught_bins
+        # 11.5 m + Barras squat at 12 kn (> 0.5 m) reaches the 12 m class
+        assert grounding_draught_bins(_grounding_data(squat=True)) == [3.0, 12.0]
+
+    def test_bins_are_what_the_model_casts(self, qgis_iface):
+        from compute.powered_model import _depth_bin_key, grounding_draught_bins
+        data = _grounding_data(squat=False)
+        host = PoweredModelMixin
+        depths = host._build_unique_depths(data['depths'])
+        model_bins = {_depth_bin_key(d, depths) for d in host._collect_draught_set(data['traffic_data'])}
+        assert set(grounding_draught_bins(data)) == {b for b in model_bins if b is not None}
+
+    def test_picker_shows_the_deepest_and_switches_bins(self, qgis_iface):
+        from compute.visualization import add_draught_bin_picker
+        from ui.show_geom_res import ShowGeomRes
+        dialog = ShowGeomRes()
+        shown: list[float] = []
+        add_draught_bin_picker(dialog, [3.0, 8.0], shown.append)
+        combo = dialog.draught_bin_combo
+        assert [combo.itemText(i) for i in range(combo.count())] == ['3 m', '8 m']
+        assert combo.currentIndex() == 1
+        combo.setCurrentIndex(0)
+        assert shown == [3.0]
+        dialog.deleteLater()
+
+    def test_no_bin_says_so(self, qgis_iface):
+        from compute.visualization import add_draught_bin_picker
+        from ui.show_geom_res import ShowGeomRes
+        dialog = ShowGeomRes()
+        add_draught_bin_picker(dialog, [], lambda _d: None)
+        assert dialog.draught_bin_combo is None
+        dialog.deleteLater()

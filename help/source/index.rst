@@ -4,10 +4,6 @@
 OMRAT -- Open Maritime Risk Analysis Tool
 =============================================
 
-.. image:: _static/screenshots/ui_dock_overview.png
-   :width: 100%
-   :alt: The OMRAT plugin dock opened next to a QGIS map canvas
-
 **OMRAT** is a QGIS plugin that calculates how often ships in a waterway
 are expected to run aground, collide with structures, or collide with
 each other.  It implements the IWRAP methodology (Friis-Hansen 2008,
@@ -21,19 +17,21 @@ year** for each of the main accident types:
 * **Drifting grounding / allision / anchoring** -- ships that lose
   propulsion and drift into shallow water, a structure, or anchor
   successfully.
-* **Powered grounding / allision** -- ships under power that fail to
-  turn at a bend and continue straight into an obstacle.
+* **Powered grounding / allision** -- ships under power that sail into
+  an obstacle lying in their lane (Category I), or fail to turn at a
+  bend and continue straight into one (Category II).
 * **Ship-ship collisions** -- head-on, overtaking, crossing, merging
   and bend collisions.
 
 
-Three ways to read this documentation
-======================================
+Where to start
+==============
 
 Pick the path that fits what you're trying to do.
 
 .. list-table::
-   :widths: 20 80
+   :widths: 45 55
+   :width: 100%
    :header-rows: 1
 
    * - I want to...
@@ -55,6 +53,15 @@ Pick the path that fits what you're trying to do.
    * - look up a specific field in the ``.omrat`` JSON file or the
        ``data`` dict passed to the calculation
      - :ref:`reference-data-format`
+   * - compare OMRAT's results with IWRAP's
+     - :ref:`iwrap-differences`
+
+.. figure:: _static/screenshots/ui_dock_overview.png
+   :width: 100%
+   :alt: The OMRAT plugin window opened next to a QGIS map canvas
+
+   The OMRAT window (right) next to the QGIS map canvas with a route,
+   structures and depth areas.
 
 
 The two-track philosophy
@@ -106,6 +113,7 @@ Contents
    powered
    junctions
    consequence
+   iwrap_differences
 
 .. toctree::
    :maxdepth: 2

@@ -5,7 +5,6 @@ Tests the four collision calculation functions from compute/basic_equations.py:
 - get_head_on_collision_candidates
 - get_overtaking_collision_candidates
 - get_crossing_collision_candidates
-- get_bend_collision_candidates
 
 Based on Hansen 2008 (IWRAP Theory) and PLAN.md specifications.
 """
@@ -15,8 +14,7 @@ from numpy import pi, sqrt, cos, isclose
 from compute.basic_equations import (
     get_head_on_collision_candidates,
     get_overtaking_collision_candidates,
-    get_crossing_collision_candidates,
-    get_bend_collision_candidates
+    get_crossing_collision_candidates
 )
 
 
@@ -630,187 +628,6 @@ class TestCrossingCollisions:
         assert result == 0.0
 
 
-class TestBendCollisions:
-    """Tests for bend collision candidate calculations at waypoints."""
-
-    def test_bend_probability_at_waypoint(self):
-        """Test bend collision at route change."""
-        result = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,  # 1% don't turn
-            L=100.0,
-            B=20.0,
-            theta=pi/4,  # 45 degree bend
-            V=6.0,
-        )
-        assert result > 0
-
-    def test_bend_zero_probability(self):
-        """No bend collision if all ships turn."""
-        result = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.0,  # Everyone turns
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        assert result == 0.0
-
-    def test_bend_zero_angle(self):
-        """No bend collision if there is no bend (straight route)."""
-        result = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=0.0,  # No bend
-            V=6.0,
-        )
-        assert result == 0.0
-
-    def test_bend_near_zero_angle(self):
-        """Very small bend angle should give very small result."""
-        result = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=1e-11,  # Tiny angle
-            V=6.0,
-        )
-        assert result == 0.0
-
-    def test_bend_traffic_scaling(self):
-        """Bend collision should scale with traffic squared (Q^2 approximately)."""
-        # Because both Q_no_turn and Q_turn depend on Q
-        result_q100 = get_bend_collision_candidates(
-            Q=100,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        result_q200 = get_bend_collision_candidates(
-            Q=200,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        # Should scale as Q^2 because N_G involves Q_no_turn * Q_turn
-        # Q_no_turn = Q * P_no_turn, Q_turn = Q * (1 - P_no_turn)
-        # Product = Q^2 * P_no_turn * (1 - P_no_turn)
-        assert isclose(result_q200 / result_q100, 4.0, rtol=1e-10)
-
-    def test_bend_probability_scaling(self):
-        """Higher no-turn probability should increase collision candidates."""
-        result_low_p = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,  # 1%
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        result_high_p = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.05,  # 5%
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        # Higher P_no_turn should give more collisions
-        # Ratio should be approximately (0.05 * 0.95) / (0.01 * 0.99) = 4.79...
-        assert result_high_p > result_low_p
-
-    def test_bend_ship_size_effect(self):
-        """Larger ships should have higher bend collision probability."""
-        result_small = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=50.0,
-            B=10.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        result_large = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=200.0,
-            B=40.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        assert result_large > result_small
-
-    def test_bend_angle_effect(self):
-        """Different bend angles should affect collision probability."""
-        result_45deg = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=pi/4,  # 45 degrees
-            V=6.0,
-        )
-        result_90deg = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=pi/2,  # 90 degrees
-            V=6.0,
-        )
-        # Both should be positive
-        assert result_45deg > 0
-        assert result_90deg > 0
-
-    def test_bend_causation_factor(self):
-        """Test that causation factor reduces actual collisions."""
-        N_g = get_bend_collision_candidates(
-            Q=2000,
-            P_no_turn=0.01,
-            L=150.0,
-            B=25.0,
-            theta=pi/3,  # 60 degree bend
-            V=6.0,
-        )
-        Pc = 1.3e-4  # Bend causation factor (IALA default)
-        N_collision = N_g * Pc
-        assert N_collision < N_g
-        assert N_collision > 0
-
-    def test_bend_at_180_degrees(self):
-        """Test bend at 180 degrees (U-turn)."""
-        result = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=pi,  # 180 degree turn
-            V=6.0,
-        )
-        # At 180 degrees, sin(theta) = 0, so crossing formula returns 0
-        assert result == 0.0
-
-    def test_bend_full_no_turn_probability(self):
-        """Test when no one turns (P_no_turn = 1.0)."""
-        result = get_bend_collision_candidates(
-            Q=1000,
-            P_no_turn=1.0,  # No one turns
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        # Q_turn = 0, so product Q_no_turn * Q_turn = 0
-        assert result == 0.0
-
-
 class TestCausationFactors:
     """Tests for causation factor defaults and application."""
 
@@ -890,22 +707,6 @@ class TestCausationFactors:
         assert N_actual < N_g * 1e-3
         assert N_actual > 0
 
-    def test_bend_causation_reduces_geometric(self):
-        """Bend causation factor properly reduces geometric candidates."""
-        N_g = get_bend_collision_candidates(
-            Q=2000,
-            P_no_turn=0.01,
-            L=150.0,
-            B=25.0,
-            theta=pi/4,
-            V=6.0,
-        )
-        Pc_bend = 1.3e-4
-        N_actual = N_g * Pc_bend
-
-        assert N_actual < N_g * 1e-3
-        assert N_actual > 0
-
 
 class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
@@ -951,18 +752,6 @@ class TestEdgeCases:
             L1=100.0, L2=100.0,
             B1=20.0, B2=20.0,
             theta=pi/2
-        )
-        assert result == 0.0
-
-    def test_bend_zero_traffic(self):
-        """Zero traffic should give zero bend collisions."""
-        result = get_bend_collision_candidates(
-            Q=0,
-            P_no_turn=0.01,
-            L=100.0,
-            B=20.0,
-            theta=pi/4,
-            V=6.0,
         )
         assert result == 0.0
 
@@ -1094,21 +883,6 @@ class TestRealisticScenarios:
             L1=200.0, L2=150.0,  # Large ships
             B1=32.0, B2=25.0,
             theta=pi/3  # 60 degree crossing
-        )
-        Pc = 1.3e-4
-        annual_collisions = result * Pc
-        assert annual_collisions >= 0
-
-    def test_waypoint_bend(self):
-        """Test bend collision at a common waypoint."""
-        # Traffic rounding a headland
-        result = get_bend_collision_candidates(
-            Q=3000,  # Heavy traffic
-            P_no_turn=0.005,  # 0.5% fail to turn (good visibility)
-            L=180.0,  # Average ship length
-            B=28.0,
-            theta=pi/6,  # 30 degree course change
-            V=6.5,       # ~12.6 knots
         )
         Pc = 1.3e-4
         annual_collisions = result * Pc
@@ -1260,31 +1034,6 @@ class TestMathematicalProperties:
         slow = get_crossing_collision_candidates(V1=6.0, V2=6.0, **kw)
         fast = get_crossing_collision_candidates(V1=12.0, V2=12.0, **kw)
         assert isclose(fast / slow, 0.5, rtol=1e-12)
-
-    def test_bend_scales_inversely_with_speed(self):
-        """The bend inherits the crossing formula, so it inherits 1/V.
-
-        Passing a placeholder speed (as the implementation did before
-        v0.14.0) makes this ratio 1.0 instead of 0.5.
-        """
-        kw = dict(Q=5000.0, P_no_turn=0.01, L=150.0, B=25.0, theta=pi / 4)
-        slow = get_bend_collision_candidates(V=6.0, **kw)
-        fast = get_bend_collision_candidates(V=12.0, **kw)
-        assert isclose(fast / slow, 0.5, rtol=1e-12)
-
-    def test_bend_equals_crossing_of_its_two_substreams(self):
-        """A bend is the crossing encounter between the traffic that
-        turned and the traffic that did not, at the same speed."""
-        Q, p, L, B, V = 5000.0, 0.01, 150.0, 25.0, 6.0
-        theta = pi / 3
-        bend = get_bend_collision_candidates(
-            Q=Q, P_no_turn=p, L=L, B=B, theta=theta, V=V,
-        )
-        crossing = get_crossing_collision_candidates(
-            Q1=Q * p, Q2=Q * (1 - p), V1=V, V2=V,
-            L1=L, L2=L, B1=B, B2=B, theta=theta,
-        )
-        assert isclose(bend, crossing, rtol=1e-12)
 
     def test_overtaking_mu_subtraction(self):
         """Verify overtaking uses subtraction for lateral distance (same direction)."""

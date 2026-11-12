@@ -13,7 +13,13 @@ stale -- some by several hundred lines.
 
 The symbol name is treated as authoritative: the script looks up where
 ``def``/``class <name>`` actually lives and rewrites both the inline
-number and the ``#Lnnn`` anchor.
+number and the ``#Lnnn`` anchor.  Every other GitHub line link is checked
+too: its symbol is the ``name()`` (or bare ``ClassName``) in the link text,
+or for api.rst's ``**Line:** nnn | Source`` links the ``.. function::`` /
+``.. class::`` / ``.. method::`` directive above it.  A line link that
+names nothing is reported -- name the function in its text.
+
+``tools/run_all_checks.py`` runs ``--check`` as its ``docs`` step.
 
 Usage
 -----
@@ -58,6 +64,20 @@ REF = re.compile(
     r'(?P<mid>\s*--\s*`)(?P<sym>[A-Za-z_][\w.]*)(?P<call>\([^)]*\))?'
     r'(?P<gap>\s*<[^>]*?)#L(?P<urlline>\d+)(?P<tail>>`__)'
 )
+
+# Any other GitHub line link: `text <.../blob/main/path.py#Lnnn>`__.  The
+# symbol comes from the link text (``name()`` or a bare ``ClassName``) or,
+# for api.rst's ``**Line:** nnn | `Source <...>`__``, from the nearest
+# ``.. function::`` / ``.. class::`` / ``.. method::`` directive above it.
+LINK = re.compile(
+    r'`(?P<text>[^`<]*?)\s*<https://github\.com/axelande/OMRAT/blob/main/'
+    r'(?P<path>[\w./_-]+\.py)#L(?P<line>\d+)>`__'
+)
+DIRECTIVE = re.compile(
+    r'^\s*\.\. (?:py:)?(?:function|class|method)::\s+([A-Za-z_]\w*)', re.M,
+)
+CALL_IN_TEXT = re.compile(r'([A-Za-z_]\w*)\(')
+BARE_NAME = re.compile(r'^[A-Za-z_]\w*$')
 
 # Whole-file citations: ``path/to/file.py`` with no line number.  The
 # ``/`` is required so bare module names in prose (``storage.py``) are
@@ -125,12 +145,74 @@ def anchored_at(relpath: str, lineno: int, identifier: str) -> bool:
     return any(word.search(lines[i - 1]) for i in range(lo, hi + 1))
 
 
+def _link_symbol(text: str, doc: str, start: int) -> str | None:
+    """The function / class a non-``REF`` line link points at, or None."""
+    calls = CALL_IN_TEXT.findall(text)
+    if calls:
+        return calls[-1]
+    label = ' '.join(text.split())
+    if BARE_NAME.match(label) and label != 'Source':
+        return label
+    if label == 'Source':
+        directives = list(DIRECTIVE.finditer(doc, 0, start))
+        if directives:
+            return directives[-1].group(1)
+    return None
+
+
+def _fix_other_links(text: str, name: str, manual: list, counts: dict[str, int]) -> str:
+    """Check / rewrite the GitHub line links ``REF`` does not cover.
+
+    Every link must name its target (see ``LINK``); one that does not is
+    reported, because nothing could tell when it goes stale.
+    """
+    covered = [m.span() for m in REF.finditer(text)]
+    out: list[str] = []
+    last = 0
+    for m in LINK.finditer(text):
+        if any(lo <= m.start() < hi for lo, hi in covered):
+            continue
+        relpath, old = m.group('path'), int(m.group('line'))
+        symbol = _link_symbol(m.group('text'), text, m.start())
+        table = symbol_lines(relpath)
+        if table is None:
+            manual.append((name, relpath, str(old), symbol or '?', 'file missing'))
+            continue
+        if symbol is None:
+            manual.append((name, relpath, str(old), ' '.join(m.group('text').split())[:40],
+                           'no function / class named in the link text'))
+            continue
+        hits = table.get(symbol)
+        if not hits:
+            if anchored_at(relpath, old, symbol):
+                counts['ok'] = counts.get('ok', 0) + 1
+            else:
+                manual.append((name, relpath, str(old), symbol, 'not found at or near the cited line'))
+            continue
+        new = min(hits, key=lambda d: abs(d - old))
+        if new == old:
+            counts['ok'] = counts.get('ok', 0) + 1
+            continue
+        counts['rewritten'] = counts.get('rewritten', 0) + 1
+        # The link and an api.rst "**Line:** nnn" just before it on its line.
+        line_start = text.rfind('\n', 0, m.start()) + 1
+        lo = max(line_start, last)
+        out.append(text[last:lo])
+        prefix = re.sub(r'\*\*Line:\*\* %d\b' % old, '**Line:** %d' % new, text[lo:m.start()])
+        out.append(prefix)
+        out.append(m.group(0).replace('#L%d>' % old, '#L%d>' % new))
+        last = m.end()
+    out.append(text[last:])
+    return ''.join(out)
+
+
 def process(check_only: bool) -> int:
     rewritten = 0
     already_ok = 0
     manual: list[tuple[str, str, str, str, str]] = []
     missing_files: set[tuple[str, str]] = set()
 
+    counts: dict[str, int] = {}
     for rst in sorted(glob.glob(os.path.join(DOCS_DIR, '*.rst'))):
         text = io.open(rst, encoding='utf-8').read()
         name = os.path.basename(rst)
@@ -175,6 +257,9 @@ def process(check_only: bool) -> int:
             )
 
         new_text = REF.sub(repl, text)
+        new_text = _fix_other_links(new_text, name, manual, counts)
+        rewritten += counts.pop('rewritten', 0)
+        already_ok += counts.pop('ok', 0)
 
         # Whole-file citations: only the path is checkable.
         for m in FILE_ONLY.finditer(new_text):

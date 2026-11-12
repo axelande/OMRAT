@@ -93,7 +93,6 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # Route tab
         self.twRouteList: QtWidgets.QTableWidget
         self.pbAddRoute: QtWidgets.QPushButton
-        self.pbLoadRoute: QtWidgets.QPushButton
         self.pbRemoveRoute: QtWidgets.QPushButton
         self.pbStopRoute: QtWidgets.QPushButton
         self.sbRouteId: QtWidgets.QSpinBox
@@ -258,7 +257,9 @@ class OMRATMainWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # twTrafficData is a spreadsheet-like matrix (cell ranges, copy /
         # paste with Excel): ``Traffic._wire_table`` gives it cell-wise
         # extended selection and the select-all corner button instead.
-        _spreadsheet = {'twTrafficData'}
+        # The result tables copy cell blocks to Excel too
+        # (``AccidentResultsMixin._configure_result_table``).
+        _spreadsheet = {'twTrafficData', 'TWAccidentResults', 'TWCatastropheResults'}
         for table in self.findChildren(QtWidgets.QTableWidget):
             table.setAlternatingRowColors(True)
             table.setShowGrid(False)

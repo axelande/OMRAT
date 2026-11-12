@@ -178,43 +178,6 @@ class TestCalcOvertakingCollisions:
 
 
 # ---------------------------------------------------------------------------
-# _calc_bend_collisions
-# ---------------------------------------------------------------------------
-
-class TestCalcBendCollisions:
-    def test_no_bend_angle_returns_zero(self, mixin):
-        """Without ``bend_angle`` set, nothing fires -> 0.0."""
-        seg = _segment_data()  # no bend_angle key
-        out = mixin._calc_bend_collisions(
-            leg_dirs=_two_dir_traffic(),
-            seg_info=seg, pc_bend=1.3e-4, length_intervals=[],
-        )
-        assert out == 0.0
-
-    def test_bend_angle_below_5_skipped(self, mixin):
-        """Bend angle <= 5° -> no bend collision (L354 guard)."""
-        seg = _segment_data()
-        seg['bend_angle'] = 3.0
-        out = mixin._calc_bend_collisions(
-            leg_dirs=_two_dir_traffic(),
-            seg_info=seg, pc_bend=1.3e-4, length_intervals=[],
-        )
-        assert out == 0.0
-
-    def test_bend_angle_above_5_calculates(self, mixin):
-        """Bend angle > 5° fires the calculation (L355-363)."""
-        seg = _segment_data()
-        seg['bend_angle'] = 30.0
-        out = mixin._calc_bend_collisions(
-            leg_dirs=_two_dir_traffic(),
-            seg_info=seg, pc_bend=1.3e-4,
-            length_intervals=[{'min': 0, 'max': 25, 'label': '0-25'},
-                              {'min': 25, 'max': 50, 'label': '25-50'}],
-        )
-        assert out > 0.0
-
-
-# ---------------------------------------------------------------------------
 # _calc_crossing_collisions
 # ---------------------------------------------------------------------------
 
@@ -233,7 +196,7 @@ class TestCalcCrossingCollisions:
             leg_keys=['1', '2'], pc_crossing=1.3e-4, pc_merging=1.3e-4,
             length_intervals=[],
         )
-        assert out == {'crossing': 0.0, 'merging': 0.0}
+        assert out == {'crossing': 0.0, 'merging': 0.0, 'bend': 0.0}
 
     def test_legs_meeting_at_waypoint_compute_crossing(self, mixin):
         """Two legs that share a waypoint and meet at an angle compute
@@ -272,7 +235,7 @@ class TestCalcCrossingCollisions:
             length_intervals=[],
         )
         # Bearings are both ~90° -> crossing_angle ~0° -> skipped.
-        assert out == {'crossing': 0.0, 'merging': 0.0}
+        assert out == {'crossing': 0.0, 'merging': 0.0, 'bend': 0.0}
 
     def test_explicit_bearing_used_when_set(self, mixin):
         """If 'bearing' is in seg_info, it's used directly instead of computed."""

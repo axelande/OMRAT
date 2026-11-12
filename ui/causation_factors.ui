@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>520</width>
-    <height>600</height>
+    <height>640</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -111,7 +111,7 @@
          <string>Merging causation factor:</string>
         </property>
         <property name="toolTip">
-         <string>Applied to leg pairs meeting at 30 degrees or less.  Defaults to the crossing value; IWRAP publishes no separate figure.</string>
+         <string>Applied to two routes through a waypoint that leave on the same leg.  Defaults to the crossing value; IWRAP publishes no separate figure.</string>
         </property>
        </widget>
       </item>
@@ -137,6 +137,38 @@
        </widget>
       </item>
       <item row="5" column="0">
+       <widget class="QLabel" name="labelMinEncounterAngle">
+        <property name="text">
+         <string>Smallest angle between routes at a waypoint:</string>
+        </property>
+        <property name="toolTip">
+         <string>Crossing, merging and bend at a waypoint are counted only for two routes whose arrival courses differ by at least this angle and at most 180 degrees minus it (the crossing formula divides by sin of the angle).  A turn smaller than this angle gives no bend.  Default 10 degrees: the range of validity of Friis-Hansen's crossing equations (10-170 degrees) and IWRAP's limit.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QDoubleSpinBox" name="sbMinEncounterAngle">
+        <property name="toolTip">
+         <string>Crossing, merging and bend at a waypoint are counted only for two routes whose arrival courses differ by at least this angle and at most 180 degrees minus it.  Default 10 degrees (Friis-Hansen's range of validity, IWRAP's limit).</string>
+        </property>
+        <property name="suffix">
+         <string> deg</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>45.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>10.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0">
        <widget class="QLabel" name="labelGroundingCf">
         <property name="text">
          <string>Grounding causation factor (Cat II, missed turn):</string>
@@ -146,14 +178,14 @@
         </property>
        </widget>
       </item>
-      <item row="5" column="1">
+      <item row="6" column="1">
        <widget class="QLineEdit" name="leGroundingCf">
         <property name="text">
          <string>1.6E-4</string>
         </property>
        </widget>
       </item>
-      <item row="6" column="0">
+      <item row="7" column="0">
        <widget class="QLabel" name="labelAllisionCf">
         <property name="text">
          <string>Allision causation factor (Cat II, missed turn):</string>
@@ -163,14 +195,14 @@
         </property>
        </widget>
       </item>
-      <item row="6" column="1">
+      <item row="7" column="1">
        <widget class="QLineEdit" name="leAllisionCf">
         <property name="text">
          <string>1.9E-4</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="0">
+      <item row="8" column="0">
        <widget class="QLabel" name="labelGroundingCat1Cf">
         <property name="text">
          <string>Grounding causation factor (Cat I, in lane):</string>
@@ -180,14 +212,14 @@
         </property>
        </widget>
       </item>
-      <item row="7" column="1">
+      <item row="8" column="1">
        <widget class="QLineEdit" name="leGroundingCat1Cf">
         <property name="text">
          <string>1.6E-4</string>
         </property>
        </widget>
       </item>
-      <item row="8" column="0">
+      <item row="9" column="0">
        <widget class="QLabel" name="labelAllisionCat1Cf">
         <property name="text">
          <string>Allision causation factor (Cat I, in lane):</string>
@@ -197,7 +229,7 @@
         </property>
        </widget>
       </item>
-      <item row="8" column="1">
+      <item row="9" column="1">
        <widget class="QLineEdit" name="leAllisionCat1Cf">
         <property name="text">
          <string>1.9E-4</string>
@@ -263,6 +295,106 @@
        <widget class="QLabel" name="labelCat1StartZoneHelp">
         <property name="text">
          <string>Measured from the waypoint the ships come from, per direction.  Applies to powered grounding and allision; Category II (missed turn) is unchanged.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxSquat">
+     <property name="title">
+      <string>Squat</string>
+     </property>
+     <property name="toolTip">
+      <string>Squat is added to the draught when a model decides which depth areas a ship can ground on: Barras' open-water squat S = Cb x V^2 / 100 (V in knots, S in metres) at the ship's speed on the leg, with the block coefficient Cb from the ship type.  Anchoring and the allision height clearance use the draught without squat.</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayoutSquat">
+      <item>
+       <widget class="QCheckBox" name="cbSquatDrifting">
+        <property name="text">
+         <string>Add squat to the draught in drifting grounding</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="cbSquatPowered">
+        <property name="text">
+         <string>Add squat to the draught in powered grounding</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxPassengerReduction">
+     <property name="title">
+      <string>Passenger ship and fast ferry reduction</string>
+     </property>
+     <property name="toolTip">
+      <string>IWRAP's reduction factor F.  Collisions: the causation factor is divided by the square root of F for every passenger ship or fast ferry in the encounter.  Powered grounding and allision: their frequency is divided by F.  Default 20, as in IWRAP; 1 = no reduction.  Exported to and imported from IWRAP as set.</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutPassengerReduction">
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelPassengerReduction">
+        <property name="text">
+         <string>Passenger ships</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QDoubleSpinBox" name="sbPassengerReduction">
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>20.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelFastFerryReduction">
+        <property name="text">
+         <string>Fast ferries (high speed craft)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="sbFastFerryReduction">
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>20.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QLabel" name="labelPassengerReductionHelp">
+        <property name="text">
+         <string>Default 20, as in IWRAP.  1 = no reduction.  Drifting is not affected.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>

@@ -26,23 +26,53 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qgis.core import Qgis, QgsMessageLog
-from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QCursor
+from qgis.PyQt.QtCore import QEvent, QLocale, QObject, Qt
+from qgis.PyQt.QtGui import QCursor, QKeySequence
 from qgis.PyQt.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from omrat_utils.accident_summary import (
     ACCIDENT_TOTAL_KEYS, DISPLAY_MODE_LABELS, DISPLAY_MODES, RESULT_DISPLAY_SETTING,
-    SUMMARY_ROWS, catastrophe_header, catastrophe_label, format_result,
-    normalize_display_mode, parse_probability, result_header,
-    summary_values,
+    SUMMARY_ROWS, catastrophe_label, format_result, normalize_display_mode,
+)
+from omrat_utils.result_compare import (
+    CHANGE, DASH, NO_CONSEQUENCE_NOTE, RunValues, accident_values,
+    build_compare_columns, catastrophe_rows, change_text, compare_hint,
+    copy_number, exceedance_values, value_copy_text, value_text,
 )
 from omrat_utils.run_history_mixin import _qt_enum
+from omrat_utils.table_clipboard import to_tsv
 
 if TYPE_CHECKING:
     pass
 
-# Placeholder for cells with no value (matches _format_delta_pct).
-_DASH = '\u2014'
+
+def _copy_role() -> int:
+    """Item data role holding a cell's clipboard text (a plain number)."""
+    role = _qt_enum(Qt, 'UserRole', 'ItemDataRole.UserRole')
+    return int(getattr(role, 'value', role)) + 1
+
+
+class _ResultCopyKeys(QObject):
+    """Ctrl+C (and Ctrl+Insert) on the result tables.
+
+    QGIS binds Copy to *Copy features* in its main window, and a window
+    shortcut fires before the key reaches the focused table, so the table
+    claims the key on ``ShortcutOverride`` first (as the Traffic table
+    does).
+    """
+
+    def __init__(self, copy, parent=None):
+        super().__init__(parent)
+        self._copy = copy
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        if event.type() == QEvent.Type.ShortcutOverride and event.matches(QKeySequence.StandardKey.Copy):
+            event.accept()      # deliver as a KeyPress to the table, not to QGIS
+            return True
+        if event.type() == QEvent.Type.KeyPress and event.matches(QKeySequence.StandardKey.Copy):
+            self._copy()
+            return True
+        return False
 
 
 class _ViewProgress:
@@ -162,8 +192,11 @@ class AccidentResultsMixin:
         line-edits as hidden Python attributes on ``main_widget``.
 
         Many compute / test paths still call ``LEPDriftAllision.setText``
-        etc., so we keep the same widget names available.  Edits are
-        forwarded to the new table cell via ``_on_lep_text_changed``.
+        etc., so we keep the same widget names available.  The table does
+        not show them (2026-11-09): it shows saved runs only -- the
+        baseline and the runs selected in ``TWPreviousRuns``
+        (:meth:`_show_run_comparison`).  A finished run is saved and
+        selected, so it appears there.
         """
         tw = getattr(self.main_widget, 'TWAccidentResults', None)
         if tw is None:
@@ -172,7 +205,8 @@ class AccidentResultsMixin:
         self._ensure_legacy_lep_widgets()
         self._configure_accident_table(tw)
         self._populate_accident_rows(tw)
-        self._wire_clipboard_copy_shortcut(tw)
+        self._wire_result_table_copy(tw)
+        self._setup_compare_hint()
         self._setup_catastrophe_results_table()
         self._setup_result_display_mode_combo()
 
@@ -205,10 +239,12 @@ class AccidentResultsMixin:
         return format_result(value, self._result_display_mode())
 
     def _accident_headers(self) -> list[str]:
-        return ['Accident type', result_header(self._result_display_mode()), 'View']
+        """Headers of the fixed columns; run columns go between them."""
+        return ['Accident type', 'View']
 
     def _catastrophe_headers(self) -> list[str]:
-        return ['Catastrophe level', 'Threshold (m^3)', catastrophe_header(self._result_display_mode())]
+        """Headers of the fixed columns; run columns are appended."""
+        return ['Catastrophe level', 'Threshold (m^3)']
 
     def _setup_result_display_mode_combo(self) -> None:
         """Fill ``cbResultDisplayMode`` and hook it to the tables."""
@@ -243,21 +279,11 @@ class AccidentResultsMixin:
     def _apply_result_display_mode(self) -> None:
         """Re-render both result tables in the active display mode.
 
-        The stored values (hidden ``LEP*`` widgets, the live consequence
-        result and the run history) are always annual frequencies; only
-        the cell text changes.  Comparison columns are rebuilt through
-        the previous-runs selection handler so they follow the mode too.
+        The run history always holds annual frequencies; only the cell
+        text, the copied numbers and the change (computed in the unit
+        shown) follow the mode.  The run columns are rebuilt through the
+        previous-runs selection handler.
         """
-        from qgis.PyQt import QtWidgets
-        tw = getattr(self.main_widget, 'TWAccidentResults', None)
-        if tw is not None:
-            for row, (_label, le_name, _pb, _slot) in enumerate(self._ACCIDENT_ROWS):
-                le = getattr(self.main_widget, le_name, None)
-                text = le.text() if le is not None else ''
-                tw.setItem(row, 1, QtWidgets.QTableWidgetItem(
-                    self._format_result(parse_probability(text)),
-                ))
-            self._refresh_summary_rows(tw)
         lbl = getattr(self.main_widget, 'lblCatastropheResults', None)
         if lbl is not None:
             try:
@@ -271,229 +297,300 @@ class AccidentResultsMixin:
                 return
             except Exception:  # nosec B110 B112
                 pass
-        self._reset_accident_table_to_base()
-        self._reset_catastrophe_table_to_base()
+        self._show_run_comparison(None, [])
 
     def _setup_catastrophe_results_table(self) -> None:
-        """Configure ``TWCatastropheResults`` -- the small annual-frequency
-        table that sits below ``TWAccidentResults`` on the Run Analysis
-        tab.  Headers are set here; rows get (re)populated each run from
-        ``_populate_catastrophe_results_table``.
+        """Configure ``TWCatastropheResults`` -- the small exceedance table
+        below ``TWAccidentResults`` on the Run Analysis tab.  Rows and run
+        columns come from :meth:`_show_run_comparison`.
         """
-        from qgis.PyQt import QtWidgets
-        from qgis.PyQt.QtWidgets import QHeaderView
-
-        AIV = QtWidgets.QAbstractItemView
         tw = getattr(self.main_widget, 'TWCatastropheResults', None)
         if tw is None:
             return
-        tw.setColumnCount(3)
+        tw.setColumnCount(len(self._catastrophe_headers()))
         tw.setHorizontalHeaderLabels(self._catastrophe_headers())
         tw.setRowCount(0)
+        self._configure_result_table(tw)
+        self._wire_result_table_copy(tw)
+
+    def _configure_result_table(self, tw) -> None:
+        """Read-only, cell-wise selection (copy any block to Excel), every
+        column sized to its contents.  A stretched label column was
+        squeezed to nothing once a few run columns were added."""
+        from qgis.PyQt import QtWidgets
+        from qgis.PyQt.QtWidgets import QHeaderView
+        AIV = QtWidgets.QAbstractItemView
         tw.verticalHeader().setVisible(False)
         tw.setEditTriggers(_qt_enum(
             AIV, 'NoEditTriggers', 'EditTrigger.NoEditTriggers',
         ))
         tw.setSelectionBehavior(_qt_enum(
-            AIV, 'SelectRows', 'SelectionBehavior.SelectRows',
+            AIV, 'SelectItems', 'SelectionBehavior.SelectItems',
         ))
+        tw.setSelectionMode(_qt_enum(
+            AIV, 'ExtendedSelection', 'SelectionMode.ExtendedSelection',
+        ))
+        tw.horizontalHeader().setStretchLastSection(False)
         try:
-            mode_stretch = _qt_enum(
-                QHeaderView, 'Stretch', 'ResizeMode.Stretch',
-            )
-            mode_resize = _qt_enum(
+            # The no-index form is also the mode of columns inserted later.
+            tw.horizontalHeader().setSectionResizeMode(_qt_enum(
                 QHeaderView, 'ResizeToContents', 'ResizeMode.ResizeToContents',
-            )
-            tw.horizontalHeader().setSectionResizeMode(0, mode_stretch)
-            tw.horizontalHeader().setSectionResizeMode(1, mode_resize)
-            tw.horizontalHeader().setSectionResizeMode(2, mode_resize)
+            ))
         except Exception:  # nosec B110 B112
             pass
-        self._wire_clipboard_copy_shortcut(tw)
 
     def _reset_accident_table_to_base(self) -> None:
-        """Strip per-run comparison columns from ``TWAccidentResults``.
-
-        ``_fill_result_fields_from_runs`` (in :class:`RunHistoryMixin`)
-        inserts two extra columns per selected run before the View column.
-        Selecting nothing or selecting different runs has to put the table
-        back to its 3-column base layout (Accident type / Probability /
-        View) before a fresh fill -- this method does that.
-        """
+        """Strip the run columns from ``TWAccidentResults``: back to
+        Accident type | View."""
         tw = getattr(self.main_widget, 'TWAccidentResults', None)
         if tw is None:
             return
-        # Base layout has exactly three columns; anything past that came
-        # from a previous-runs comparison fill.  Drop them right-to-left
-        # so column indices stay stable.
-        while tw.columnCount() > 3:
+        # Run columns sit between the label column and View; drop them
+        # right-to-left so the View column (cell widgets) stays put.
+        while tw.columnCount() > 2:
             tw.removeColumn(tw.columnCount() - 2)
-        # Reset headers + the View column header to the canonical labels
-        # so the comparison-fill labels don't bleed across selections.
         tw.setHorizontalHeaderLabels(self._accident_headers())
 
-    def _populate_catastrophe_results_table(self, consequence_result) -> None:
-        """Populate ``TWCatastropheResults`` from a ``consequence_result``
-        dict produced by :func:`compute.consequence.compute_catastrophe_exceedance`.
+    def _reset_catastrophe_table_to_base(self) -> None:
+        """Strip ``TWCatastropheResults`` to its two empty fixed columns."""
+        tw = getattr(self.main_widget, 'TWCatastropheResults', None)
+        if tw is None:
+            return
+        tw.setRowCount(0)
+        tw.setColumnCount(len(self._catastrophe_headers()))
+        tw.setHorizontalHeaderLabels(self._catastrophe_headers())
 
-        The result is remembered as the *live* (current model) values so
-        the table can be restored after a previous-runs comparison.
-        Rows are written in the same (ascending volume) order returned by
-        the calculation.  ``None`` or missing levels clear the table.
-        """
-        self._live_consequence_result = (
-            consequence_result if isinstance(consequence_result, dict) else None
+    # ------------------------------------------------------------------
+    # Run columns: baseline + selected runs
+    # ------------------------------------------------------------------
+    def _show_run_comparison(self, baseline_run, runs) -> None:
+        """Fill both result tables with the baseline run (``RunMeta`` or
+        ``None``) and the selected runs (``RunMeta`` list); see
+        :mod:`omrat_utils.result_compare` for the layout."""
+        from omrat_utils.run_history_mixin import load_consequence_sidecar
+
+        runs = list(runs or [])
+        others = [r for r in runs if baseline_run is None or r.run_id != baseline_run.run_id]
+
+        base_values = self._accident_run_values(baseline_run) if baseline_run is not None else None
+        self._render_accident_comparison(base_values, [self._accident_run_values(r) for r in others])
+
+        base_result = load_consequence_sidecar(baseline_run) if baseline_run is not None else None
+        results = [load_consequence_sidecar(r) for r in others]
+        rows = catastrophe_rows([base_result] + results)
+        names = [name for name, _qty in rows]
+        cat_base = None
+        if baseline_run is not None:
+            cat_base = self._catastrophe_run_values(baseline_run, base_result, names)
+        self._render_catastrophe_comparison(
+            rows, cat_base,
+            [self._catastrophe_run_values(r, res, names) for r, res in zip(others, results)],
         )
-        self._reset_catastrophe_table_to_base()
+        self._set_compare_hint(compare_hint(
+            getattr(baseline_run, 'name', None) if baseline_run is not None else None, len(others),
+        ))
 
     @staticmethod
-    def _catastrophe_levels(result) -> list[dict]:
-        """``levels`` list of a consequence-result dict (``[]`` if absent)."""
-        if not isinstance(result, dict):
-            return []
-        return [lvl for lvl in (result.get('levels', []) or []) if isinstance(lvl, dict)]
+    def _accident_run_values(run) -> RunValues:
+        try:
+            totals = run.totals_dict()
+        except Exception:  # nosec B110 B112
+            totals = {}
+        return RunValues(name=str(run.name), values=accident_values(totals), run_id=run.run_id)
 
-    def _reset_catastrophe_table_to_base(self) -> None:
-        """Put ``TWCatastropheResults`` back to its three-column layout
-        showing the live (current model) exceedance values.
+    @staticmethod
+    def _catastrophe_run_values(run, result, names) -> RunValues:
+        values = exceedance_values(result, names)
+        return RunValues(
+            name=str(run.name), values=values, run_id=run.run_id,
+            note=NO_CONSEQUENCE_NOTE if values is None else '',
+        )
 
-        ``_fill_catastrophe_table_from_runs`` appends two columns per
-        selected previous run and may add level rows the live result
-        doesn't have; both are undone here.
-        """
-        from qgis.PyQt import QtWidgets
-
-        tw = getattr(self.main_widget, 'TWCatastropheResults', None)
+    def _render_accident_comparison(self, baseline: RunValues | None, runs: list[RunValues]) -> None:
+        """Run columns of ``TWAccidentResults``, inserted before View."""
+        tw = getattr(self.main_widget, 'TWAccidentResults', None)
         if tw is None:
             return
-        while tw.columnCount() > 3:
-            tw.removeColumn(tw.columnCount() - 1)
-        tw.setHorizontalHeaderLabels(self._catastrophe_headers())
-        levels = self._catastrophe_levels(
-            getattr(self, '_live_consequence_result', None),
-        )
-        tw.setRowCount(len(levels))
-        for r, lvl in enumerate(levels):
-            try:
-                name = str(lvl.get('name', ''))
-                qty = float(lvl.get('quantity', 0.0))
-                exceed = float(lvl.get('exceedance', 0.0))
-            except Exception:  # nosec B110 B112
-                continue
-            tw.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
-            tw.setItem(r, 1, QtWidgets.QTableWidgetItem(f'{qty:.2f}'))
-            tw.setItem(r, 2, QtWidgets.QTableWidgetItem(self._format_result(exceed)))
+        self._reset_accident_table_to_base()
+        mode = self._result_display_mode()
+        n_accidents = len(self._ACCIDENT_ROWS)
+        columns = build_compare_columns(baseline, runs, n_accidents + len(SUMMARY_ROWS), mode)
+        # A blank cell = a part the run did not calculate (never zero).
+        self._insert_run_columns(tw, columns, first_col=1, bold_from=n_accidents, missing='')
 
-    def _fill_catastrophe_table_from_runs(self, runs) -> None:
-        """Add one exceedance + one delta column per selected previous run
-        to ``TWCatastropheResults`` (mirrors ``_fill_result_fields_from_runs``
-        for the accident table).
-
-        Values come from the ``.consequence.json`` sidecar written next to
-        each run's GeoPackage.  Runs recorded before that sidecar existed
-        show a dash in every cell.  Levels are matched by name; a level the
-        live result lacks gets its own row.
-        """
-        from qgis.PyQt import QtWidgets
-        from omrat_utils.run_history_mixin import load_consequence_sidecar
-
+    def _render_catastrophe_comparison(self, rows, baseline: RunValues | None, runs: list[RunValues]) -> None:
+        """Level rows + run columns of ``TWCatastropheResults``."""
+        from qgis.PyQt.QtWidgets import QTableWidgetItem
         tw = getattr(self.main_widget, 'TWCatastropheResults', None)
         if tw is None:
             return
         self._reset_catastrophe_table_to_base()
-        if not runs:
-            return
+        decimal_point = self._decimal_point()
+        tw.setRowCount(len(rows))
+        for r, (name, qty) in enumerate(rows):
+            tw.setItem(r, 0, QTableWidgetItem(name))
+            qty_item = QTableWidgetItem(f'{qty:.2f}' if qty is not None else '')
+            qty_item.setData(_copy_role(), copy_number(qty, decimal_point))
+            tw.setItem(r, 1, qty_item)
+        columns = build_compare_columns(baseline, runs, len(rows), self._result_display_mode())
+        self._insert_run_columns(tw, columns, first_col=2, bold_from=None, missing=DASH)
 
-        per_run = [(run, load_consequence_sidecar(run)) for run in runs]
-
-        # name -> row, seeded from the live rows; extra levels appended.
-        rows: dict[str, int] = {}
-        for r in range(tw.rowCount()):
-            item = tw.item(r, 0)
-            if item is not None:
-                rows[item.text()] = r
-        for _run, result in per_run:
-            for lvl in self._catastrophe_levels(result):
-                name = str(lvl.get('name', ''))
-                if name in rows:
-                    continue
-                r = tw.rowCount()
-                tw.insertRow(r)
-                tw.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
-                try:
-                    qty_text = f"{float(lvl.get('quantity', 0.0)):.2f}"
-                except Exception:  # nosec B110 B112
-                    qty_text = ''
-                tw.setItem(r, 1, QtWidgets.QTableWidgetItem(qty_text))
-                tw.setItem(r, 2, QtWidgets.QTableWidgetItem(_DASH))
-                rows[name] = r
-
-        baseline, delta_header = self._catastrophe_baseline(per_run)
-
-        for run_idx, (run, result) in enumerate(per_run):
-            run_label = getattr(run, 'name', None) or f'Run {run_idx + 1}'
-            col = tw.columnCount()
+    def _insert_run_columns(self, tw, columns, *, first_col: int, bold_from: int | None,
+                            missing: str) -> None:
+        """Insert ``columns`` (``CompareColumn``) at ``first_col``; each cell
+        keeps its clipboard number under :func:`_copy_role`."""
+        from qgis.PyQt.QtWidgets import QTableWidgetItem
+        mode = self._result_display_mode()
+        decimal_point = self._decimal_point()
+        role = _copy_role()
+        align = _qt_enum(Qt, 'AlignRight', 'AlignmentFlag.AlignRight') | _qt_enum(
+            Qt, 'AlignVCenter', 'AlignmentFlag.AlignVCenter')
+        for offset, column in enumerate(columns):
+            col = first_col + offset
             tw.insertColumn(col)
-            tw.insertColumn(col + 1)
-            header = QtWidgets.QTableWidgetItem(str(run_label))
-            if result is None:
-                header.setToolTip(
-                    'No catastrophe data was saved for this run '
-                    '(recorded before the .consequence.json sidecar existed). '
-                    'Re-run the model to record it.'
-                )
+            header = QTableWidgetItem(column.header)
+            header.setToolTip(column.tooltip)
             tw.setHorizontalHeaderItem(col, header)
-            tw.setHorizontalHeaderItem(
-                col + 1, QtWidgets.QTableWidgetItem(delta_header),
-            )
-            values = self._exceedance_by_name(result)
-            for name, r in rows.items():
-                v = values.get(name)
-                tw.setItem(
-                    r, col,
-                    QtWidgets.QTableWidgetItem(self._format_result(v) if v is not None else _DASH),
-                )
-                tw.setItem(
-                    r, col + 1,
-                    QtWidgets.QTableWidgetItem(
-                        self._format_delta_pct(v, baseline.get(name)),
-                    ),
-                )
+            for row, v in enumerate(column.cells):
+                if column.kind == CHANGE:
+                    text, copy = change_text(v), copy_number(v, decimal_point)
+                else:
+                    text = value_text(v, mode, has_data=column.has_data, missing=missing)
+                    copy = value_copy_text(v, mode, decimal_point) if column.has_data else ''
+                item = QTableWidgetItem(text)
+                item.setData(role, copy)
+                item.setTextAlignment(align)
+                if bold_from is not None and row >= bold_from:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                tw.setItem(row, col, item)
 
-    @classmethod
-    def _exceedance_by_name(cls, result) -> dict[str, float]:
-        out: dict[str, float] = {}
-        for lvl in cls._catastrophe_levels(result):
+    def _setup_compare_hint(self) -> None:
+        """An italic, word-wrapped line between the accident table's
+        caption and the table saying what the run columns show
+        (``lblCompareHint``).  On its own line so a long run name cannot
+        push the Show as box out of the window."""
+        from qgis.PyQt import QtWidgets
+        if getattr(self.main_widget, 'lblCompareHint', None) is not None:
+            return
+        tw = getattr(self.main_widget, 'TWAccidentResults', None)
+        parent = tw.parentWidget() if tw is not None else None
+        layout = parent.layout() if parent is not None else None
+        index = layout.indexOf(tw) if layout is not None else -1
+        if index < 0:
+            return
+        try:
+            lbl = QtWidgets.QLabel(parent)
+            lbl.setObjectName('lblCompareHint')
+            lbl.setWordWrap(True)
+            font = lbl.font()
+            font.setItalic(True)
+            lbl.setFont(font)
+            layout.insertWidget(index, lbl)
+            self.main_widget.lblCompareHint = lbl
+        except Exception:  # nosec B110 B112
+            return
+        self._set_compare_hint(compare_hint(None, 0))
+
+    def _set_compare_hint(self, text: str) -> None:
+        lbl = getattr(self.main_widget, 'lblCompareHint', None)
+        if lbl is not None:
             try:
-                out[str(lvl.get('name', ''))] = float(lvl.get('exceedance', 0.0))
+                lbl.setText(self.tr(text))
             except Exception:  # nosec B110 B112
-                continue
-        return out
+                pass
 
-    def _catastrophe_baseline(self, per_run) -> tuple[dict[str, float], str]:
-        """Baseline exceedance per level name for the delta columns.
+    # ------------------------------------------------------------------
+    # Copy to Excel
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _decimal_point() -> str:
+        try:
+            return str(QLocale().decimalPoint()) or '.'
+        except Exception:  # nosec B110 B112
+            return '.'
 
-        Same priority as the accident table: the main run's sidecar, then
-        the live result, then the first selected run.
-        """
-        from omrat_utils.run_history_mixin import load_consequence_sidecar
-
-        main_run = self._main_run_meta()
-        if main_run is not None:
-            return (
-                self._exceedance_by_name(load_consequence_sidecar(main_run)),
-                f'\u0394 vs main ({main_run.name}) %',
+    def _wire_result_table_copy(self, tw) -> None:
+        """Ctrl+C copies the selected cells; the right-click menu adds
+        *Copy table with headers*.  Wired once per table."""
+        filters = getattr(self, '_result_copy_filters', None)
+        if filters is None:
+            filters = self._result_copy_filters = {}
+        if tw.objectName() in filters:
+            return
+        try:
+            keys = _ResultCopyKeys(lambda t=tw: self._copy_result_table(t), tw)
+            tw.installEventFilter(keys)
+            filters[tw.objectName()] = keys
+            tw.setContextMenuPolicy(_qt_enum(
+                Qt, 'CustomContextMenu', 'ContextMenuPolicy.CustomContextMenu',
+            ))
+            tw.customContextMenuRequested.connect(
+                lambda pos, t=tw: self._result_table_menu(t, pos),
             )
-        live = self._exceedance_by_name(
-            getattr(self, '_live_consequence_result', None),
+        except Exception:  # nosec B110 B112
+            pass
+
+    def _result_table_menu(self, tw, pos) -> None:
+        from qgis.PyQt.QtWidgets import QMenu
+        menu = QMenu(tw)
+        copy = menu.addAction(self.tr('Copy'))
+        copy.setEnabled(bool(tw.selectedRanges()))
+        copy.triggered.connect(lambda *_: self._copy_result_table(tw))
+        menu.addAction(self.tr('Copy table with headers')).triggered.connect(
+            lambda *_: self._copy_result_table(tw, whole=True),
         )
-        if live:
-            return live, '\u0394 vs current %'
-        first_run, first_result = per_run[0]
-        return (
-            self._exceedance_by_name(first_result),
-            f'\u0394 vs {getattr(first_run, "name", "run 1")} %',
-        )
+        menu.exec(tw.viewport().mapToGlobal(pos))
+
+    def _copy_result_table(self, tw, *, whole: bool = False) -> str:
+        """Put the selection (or the whole table with its headers) on the
+        clipboard as tab-separated text and return that text."""
+        text = self._result_table_tsv(tw, whole=whole)
+        if text:
+            try:
+                QApplication.clipboard().setText(text)
+            except Exception:  # nosec B110 B112
+                pass
+        return text
+
+    def _result_table_tsv(self, tw, *, whole: bool = False) -> str:
+        """Tab-separated cells for Excel: numbers as plain numbers with the
+        locale's decimal point (each cell's copy role), labels as text.
+        The View column (cell widgets) is left out."""
+        skip = {
+            c for c in range(tw.columnCount())
+            if any(tw.cellWidget(r, c) is not None for r in range(tw.rowCount()))
+        }
+        if whole:
+            rows = list(range(tw.rowCount()))
+            cols = [c for c in range(tw.columnCount()) if c not in skip]
+        else:
+            ranges = tw.selectedRanges()
+            rows = sorted({r for rng in ranges for r in range(rng.topRow(), rng.bottomRow() + 1)})
+            cols = sorted({
+                c for rng in ranges for c in range(rng.leftColumn(), rng.rightColumn() + 1)
+            } - skip)
+        if not cols or not (rows or whole):
+            return ''
+        role = _copy_role()
+        lines: list[list[str]] = []
+        if whole:
+            lines.append([
+                tw.horizontalHeaderItem(c).text() if tw.horizontalHeaderItem(c) is not None else ''
+                for c in cols
+            ])
+        for r in rows:
+            cells: list[str] = []
+            for c in cols:
+                item = tw.item(r, c)
+                if item is None:
+                    cells.append('')
+                    continue
+                copy = item.data(role)
+                cells.append(str(copy) if copy is not None else item.text())
+            lines.append(cells)
+        return to_tsv(lines)
 
     def _ensure_legacy_lep_widgets(self) -> None:
         """Create the ``LEP*`` / ``pbView*`` widgets as hidden children
@@ -517,170 +614,39 @@ class AccidentResultsMixin:
                 setattr(self.main_widget, pb_name, pb)
 
     def _configure_accident_table(self, tw) -> None:
-        from qgis.PyQt import QtWidgets
-        from qgis.PyQt.QtWidgets import QHeaderView
-        AIV = QtWidgets.QAbstractItemView
-
         headers = self._accident_headers()
         tw.setColumnCount(len(headers))
         tw.setHorizontalHeaderLabels(headers)
         tw.setRowCount(
             len(AccidentResultsMixin._ACCIDENT_ROWS) + len(SUMMARY_ROWS),
         )
-        tw.verticalHeader().setVisible(False)
-        tw.setEditTriggers(_qt_enum(
-            AIV, 'NoEditTriggers', 'EditTrigger.NoEditTriggers',
-        ))
-        tw.setSelectionBehavior(_qt_enum(
-            AIV, 'SelectRows', 'SelectionBehavior.SelectRows',
-        ))
-        tw.setSelectionMode(_qt_enum(
-            AIV, 'ExtendedSelection', 'SelectionMode.ExtendedSelection',
-        ))
-        tw.horizontalHeader().setStretchLastSection(False)
-        try:
-            mode_stretch = _qt_enum(
-                QHeaderView, 'Stretch', 'ResizeMode.Stretch',
-            )
-            mode_resize = _qt_enum(
-                QHeaderView,
-                'ResizeToContents', 'ResizeMode.ResizeToContents',
-            )
-            tw.horizontalHeader().setSectionResizeMode(0, mode_stretch)
-            tw.horizontalHeader().setSectionResizeMode(1, mode_resize)
-            tw.horizontalHeader().setSectionResizeMode(2, mode_resize)
-        except Exception:  # nosec B110 B112
-            pass
+        self._configure_result_table(tw)
 
     def _populate_accident_rows(self, tw) -> None:
+        """Row labels (nine accidents + three bold summary rows) and the
+        View buttons in the last column; the run columns go in between."""
         from qgis.PyQt import QtWidgets
-        for row, (label, le_name, _pb_name, slot_name) in enumerate(
+        view_col = tw.columnCount() - 1
+        for row, (label, _le_name, _pb_name, slot_name) in enumerate(
             self._ACCIDENT_ROWS,
         ):
             tw.setItem(row, 0, QtWidgets.QTableWidgetItem(label))
-            le = getattr(self.main_widget, le_name, None)
-            text = le.text() if le is not None else ''
-            tw.setItem(row, 1, QtWidgets.QTableWidgetItem(
-                self._format_result(parse_probability(text)),
-            ))
-
             btn = QtWidgets.QPushButton(self.tr('View'))
+            btn.setToolTip(self.tr('Open the details of the run selected in Previous runs'))
             slot = getattr(self, slot_name, None)
             if callable(slot):
                 btn.clicked.connect(slot)
             else:
                 btn.setEnabled(False)
-            tw.setCellWidget(row, 2, btn)
-
-            if le is not None:
-                try:
-                    le.textChanged.connect(
-                        lambda txt, r=row: self._on_lep_text_changed(r, txt),
-                    )
-                except Exception:  # nosec B110 B112
-                    pass
+            tw.setCellWidget(row, view_col, btn)
 
         n_accidents = len(self._ACCIDENT_ROWS)
         for offset, (label, _keys) in enumerate(SUMMARY_ROWS):
-            row = n_accidents + offset
             item = QtWidgets.QTableWidgetItem(label)
             font = item.font()
             font.setBold(True)
             item.setFont(font)
-            tw.setItem(row, 0, item)
-            tw.setItem(row, 1, QtWidgets.QTableWidgetItem(''))
-            tw.setItem(row, 2, QtWidgets.QTableWidgetItem(''))
-        self._refresh_summary_rows(tw)
-
-    def _current_accident_totals(self, tw) -> dict[str, float | None]:
-        """Annual frequencies of the nine accident rows, keyed like
-        ``RunHistory`` totals (``drift_allision`` ...).
-
-        Read from the hidden ``LEP*`` widgets, which always hold the
-        frequency; the visible cell may show years between incidents.
-        """
-        totals: dict[str, float | None] = {}
-        for row, key in enumerate(ACCIDENT_TOTAL_KEYS):
-            le = getattr(self.main_widget, self._ACCIDENT_ROWS[row][1], None)
-            if le is not None:
-                totals[key] = parse_probability(le.text())
-                continue
-            item = tw.item(row, 1) if tw is not None else None
-            totals[key] = parse_probability(item.text() if item is not None else None)
-        return totals
-
-    def _refresh_summary_rows(self, tw=None) -> None:
-        """Recompute the All grounding / All allision / All collisions
-        rows from the nine accident rows above them."""
-        from qgis.PyQt import QtWidgets
-        if tw is None:
-            tw = getattr(self.main_widget, 'TWAccidentResults', None)
-        if tw is None:
-            return
-        values = summary_values(self._current_accident_totals(tw))
-        n_accidents = len(self._ACCIDENT_ROWS)
-        for offset, value in enumerate(values):
-            row = n_accidents + offset
-            if row >= tw.rowCount():
-                break
-            item = QtWidgets.QTableWidgetItem(self._format_result(value))
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            tw.setItem(row, 1, item)
-
-    def _wire_clipboard_copy_shortcut(self, tw) -> None:
-        try:
-            from qgis.PyQt.QtGui import QKeySequence, QShortcut
-            for ks in (
-                QKeySequence.StandardKey.Copy,
-                QKeySequence('Ctrl+Insert'),
-            ):
-                sc = QShortcut(ks, tw)
-                sc.activated.connect(
-                    lambda t=tw: self._copy_table_selection_to_clipboard(t),
-                )
-        except Exception:  # nosec B110 B112
-            pass
-
-    @staticmethod
-    def _copy_table_selection_to_clipboard(tw) -> None:
-        """Copy the currently-selected cells of ``tw`` to the clipboard
-        as tab-separated values.
-
-        Whole-row selection yields one TSV line per selected row;
-        individual cell selection yields the bounding rectangle with
-        empty cells where there's no selection.  Cell widgets (the View
-        buttons in column 2) are emitted as empty strings.
-        """
-        try:
-            from qgis.PyQt.QtWidgets import QApplication
-        except Exception:  # nosec B110 B112
-            return
-        ranges = tw.selectedRanges()
-        if not ranges:
-            return
-        rows = sorted({
-            r for rng in ranges
-            for r in range(rng.topRow(), rng.bottomRow() + 1)
-        })
-        cols = sorted({
-            c for rng in ranges
-            for c in range(rng.leftColumn(), rng.rightColumn() + 1)
-        })
-        if not rows or not cols:
-            return
-        lines: list[str] = []
-        for r in rows:
-            cells: list[str] = []
-            for c in cols:
-                if tw.cellWidget(r, c) is not None:
-                    cells.append('')
-                    continue
-                item = tw.item(r, c)
-                cells.append(item.text() if item is not None else '')
-            lines.append('\t'.join(cells))
-        QApplication.clipboard().setText('\n'.join(lines))
+            tw.setItem(n_accidents + offset, 0, item)
 
     def _clear_accident_results(self, keys) -> None:
         """Blank the rows of ``keys`` (``ACCIDENT_TOTAL_KEYS`` names): a
@@ -691,16 +657,6 @@ class AccidentResultsMixin:
             le = getattr(self.main_widget, self._ACCIDENT_ROWS[row][1], None)
             if le is not None:
                 le.setText('')
-
-    def _on_lep_text_changed(self, row: int, text: str) -> None:
-        """Forward edits on a hidden LEP* into the new accident table."""
-        try:
-            from qgis.PyQt.QtWidgets import QTableWidgetItem
-            tw = self.main_widget.TWAccidentResults
-            tw.setItem(row, 1, QTableWidgetItem(self._format_result(parse_probability(text))))
-            self._refresh_summary_rows(tw)
-        except Exception:  # nosec B110 B112
-            pass
 
     # ------------------------------------------------------------------
     # View dispatch

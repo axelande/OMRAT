@@ -18,6 +18,9 @@ individual scripts stay the canonical place for their configuration):
    pyqgis4-checker, locally).
 3. **flake8** -- ``tools/run_flake8.py`` on the shipped surface.
 4. **bandit** -- ``tools/run_bandit.py``; gates on medium+ findings.
+4b. **docs** -- ``tools/check_doc_source_refs.py --check``: every GitHub
+   line link in ``help/source`` still points at the function or class it
+   names (fix with ``tools/check_doc_source_refs.py`` without ``--check``).
 5. **clear pycache** -- ``tools/clear_pycache.py`` so QGIS does not load
    stale bytecode after all of the above imported everything.
 
@@ -91,6 +94,7 @@ def _build_steps(args: argparse.Namespace) -> list[Step]:
         Step("qt6", "Qt6 / QGIS 4 check", [py, str(TOOLS_DIR / "run_qt6_check.py")]),
         Step("flake8", "flake8", [py, str(TOOLS_DIR / "run_flake8.py")]),
         Step("bandit", "bandit", [py, str(TOOLS_DIR / "run_bandit.py")]),
+        Step("docs", "doc source links", [py, str(TOOLS_DIR / "check_doc_source_refs.py"), "--check"]),
         Step("pycache", "clear __pycache__", [py, str(TOOLS_DIR / "clear_pycache.py")]),
     ]
 
@@ -155,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stop-on-fail", action="store_true",
                         help="abort after the first failing step (pycache is still cleared)")
     parser.add_argument("--skip", action="append", default=[],
-                        choices=["tests", "windows", "qt6", "flake8", "bandit", "pycache"],
+                        choices=["tests", "windows", "qt6", "flake8", "bandit", "docs", "pycache"],
                         help="skip a step; may be given more than once")
     parser.add_argument("--slow", action="store_true",
                         help="include tests marked @slow (pytest.ini deselects them by default)")

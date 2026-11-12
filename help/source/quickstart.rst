@@ -50,8 +50,9 @@ You need:
 1. Open the plugin
 ===================
 
-Click the OMRAT icon in the QGIS toolbar.  The dock widget docks on
-the right side of the window.
+Click the OMRAT icon on the **OMRAT** toolbar.  The OMRAT window opens
+as a separate window next to the QGIS main window; move and resize it
+as you like.  Clicking the icon again brings it to the front.
 
 .. figure:: _static/images/omrat_icon.png
    :width: 96px
@@ -59,7 +60,7 @@ the right side of the window.
 
    The OMRAT icon as it appears in the QGIS plugins toolbar.
 
-The dock has a **menu bar** (File, Settings, Consequence, Help) and a
+The window has a **menu bar** (File, Settings, Consequence, Help) and a
 stack of seven tabs: **Routes**, **Traffic Data**, **Depths**,
 **Objects**, **Run Analysis**, **Drift Analysis** and **Compare**.  The
 rough workflow is left-to-right.
@@ -88,15 +89,17 @@ several short legs joined end to end.
 
 To draw a leg, on the **Routes** tab:
 
-#. Set **Route** (the route ID new legs are assigned to) and
-   **Next leg ID** if you want something other than the defaults.
+#. Set **Route** (the route number new legs are assigned to) and
+   **Next leg no.** if you want something other than the defaults.
+   A leg is named ``LEG_<route>_<leg no.>``; its **Segment_Id** is
+   assigned automatically and never reused.
 #. Click **Add**.  The cursor turns into a crosshair.
-#. Click the start point on the canvas, then the end point.  The leg is
-   added to ``twRouteList`` and a blue line appears on the canvas.
-#. Repeat for each leg.  Click **Stop** to leave drawing mode.
+#. Click the start point on the canvas, then the next waypoints.  Each
+   click adds a leg to ``twRouteList`` and a blue line on the canvas.
+#. Click **Stop** to end the route; the next **Add** starts a new one.
 
-**Remove** deletes the selected leg.  **Load** imports legs from an
-existing QGIS line layer instead of digitising them by hand.
+**Remove** deletes the selected leg.  Legs come from drawing, from
+**File -> Load** or from an IWRAP import.
 
 .. figure:: _static/screenshots/quickstart/qs_03_route_after_first_leg.png
    :width: 80%
@@ -114,16 +117,27 @@ existing QGIS line layer instead of digitising them by hand.
    width of the corridor.
 
 .. tip::
-   Endpoints that exactly coincide between legs (within metres, not
-   visually) are treated as **shared vertices**: dragging one with the
-   QGIS Vertex Tool moves every connected leg's endpoint together,
-   so a curved route stays connected when you re-route.  Shared
-   endpoints also become **junctions** -- see :ref:`junctions`.
+   Legs hang on shared **waypoints**.  A click close to an existing
+   waypoint snaps to it, so a new leg joins the old one exactly.
+   Dragging a waypoint with the QGIS Vertex Tool moves every leg on it,
+   and dropping it on another waypoint merges the two.  A waypoint shared
+   by legs is a **junction** -- see :ref:`junctions`.  To detach a leg
+   end from a waypoint, or connect it to another one, use **Settings ->
+   Waypoint editor...** (:ref:`waypoint-editor`).  Legs that cross
+   without a shared waypoint are offered a split, because collisions
+   between crossing routes are only counted at a shared waypoint.
+
+Each leg also gets a **tangent line** across it at its midpoint: this
+is the AIS passage line where ships are counted, and the lateral
+distributions are drawn on it.  **Move tangent** lets you slide it along
+the leg (:ref:`moving-the-tangent-line`).
 
 Below the route table, the same tab hosts the **lateral distribution**
 panel (Direction 1 / Direction 2, up to three Gaussians plus a uniform
-component per direction).  The defaults are usable; :ref:`user_guide`
-explains when to change them.
+component per direction, and the mean time between position checks
+used by the powered model).  Direction 1 is always the traffic sailing
+in the drawn direction (start point -> end point).  The defaults are
+usable; :ref:`user_guide` explains when to change them.
 
 
 3. Bring in depth data
@@ -148,9 +162,12 @@ Where to get depth data:
   what OMRAT wants.
 
 Once you have polygons in QGIS, switch to the **Depths** tab and click
-**Load** to import them from a layer.  **Add manually** creates a single
-empty row you can paste a WKT polygon into, and **Remove** deletes the
-selected row.
+**Load** to import them from a layer.  **Add manually** opens a
+temporary polygon layer to draw in; the button then reads **Save**,
+which stores the drawn polygon as a new row (depth 10 m, edit it in the
+table).  **Remove** deletes the selected row.  **Simplify...** removes
+deep depth classes far from the structures to speed up the drift model
+(:ref:`simplify-depths`).
 
 .. figure:: _static/screenshots/quickstart/qs_05_depths_tab_empty.png
    :width: 80%
@@ -222,7 +239,7 @@ it to depth polygons in one click, without leaving QGIS.  You need a
 
 Bridges, wind-park footprints, and other surface structures go on the
 **Objects** tab.  The buttons are the same as on Depths -- **Load**
-imports a polygon layer, **Add manually** adds an empty row,
+imports a polygon layer, **Add manually** / **Save** draws one,
 **Remove** deletes the selected one -- except that each row carries the
 structure's **Height** in metres above sea level instead of a depth.
 
@@ -263,13 +280,20 @@ The other entries on the Settings menu are documented in
   the cells of the traffic table.
 * **Causation Factors** - the per-accident-type :math:`P_c` values,
   including a separate **Merging causation factor** that defaults to
-  the crossing value.
+  the crossing value and separate Category I factors for powered
+  grounding / allision, plus a few model options (squat, the powered
+  Category I start zone, the smallest encounter angle at waypoints, the
+  passenger ship / fast ferry reduction).
+* **Speed restriction zones...** - polygons with a speed limit per
+  ship type and length (see :ref:`speed-restriction-zones`).
 * **AIS connection settings** - host/database/user for the optional AIS
   Postgres database.
 * **Ship type mapping...** - per-vessel (IMO / MMSI) overrides of the
   AIS ship type, kept as a table in that database and filled from a CSV.
 * **Database setup wizard...** - guided creation and ingestion for that
   database (see :ref:`database-setup`).
+* **Waypoint editor...** - detach a leg end from a waypoint or connect
+  it to another one (see :ref:`waypoint-editor`).
 * **Junction transition matrix...** - how traffic splits between legs
   at each shared waypoint (see :ref:`junctions`).
 
@@ -291,13 +315,18 @@ boxes, then use the third to switch between the variables:
   underneath drives it globally or per ship type.
 
 Each view is a matrix of ship type (rows) x LOA interval (columns).
+The cells are plain text: select a block, copy it to Excel (Ctrl+C),
+edit it there and paste it back (Ctrl+V).
 
 If you have an AIS database configured, click **Update all
-distributions** on the **Routes** tab instead: it queries the database,
-fills Frequency / Speed / Draught / Height for every leg and direction,
-re-derives the junction transition matrices, and runs the route
-validation pass (close waypoints and X-intersections).  Manually
-entered **Scaling (%)** values survive the refresh.
+distributions** on the **Routes** tab instead: it runs the route
+validation pass (close waypoints and X-intersections), queries the
+database, fills the matrices and the lateral distributions for every
+leg and direction, and re-derives the junction transition matrices.
+Manually entered **Scaling (%)** values survive the refresh, and legs
+with **AIS lock** ticked are left untouched.  **Traffic report...**
+(top of the tab, also under **File**) writes an HTML overview of the
+traffic on every leg with automatic checks (:ref:`traffic-report`).
 
 
 7. Run the model
@@ -305,17 +334,23 @@ entered **Scaling (%)** values survive the refresh.
 
 Switch to the **Run Analysis** tab and fill in:
 
-* **Name of the model** - a short slug for this scenario.
+* **Name of the Run** - a short slug for this scenario.
 * **File path** - a folder (use the ``...`` button).  Each run writes
-  three files into it:
+  three main files into it:
 
   - ``<name>_<timestamp>.gpkg`` - the result layers.
   - ``<name>_<timestamp>.omrat`` - a snapshot of the inputs (read-only).
   - ``<name>_results_<timestamp>.md`` - a Markdown report covering
     every accident type.
 
-Click **Run model**.  The button is greyed out until both fields are
-set, and a popup spells out which is missing if you click anyway.
+  plus small JSON files next to the GeoPackage (``.collision.json``,
+  ``.drifting.json``, ``.powered.json``, ``.consequence.json``) that
+  the **View** dialogs and the **Compare** tab read.
+* **Project name** (optional) - tags the run so **Previous runs** can be
+  filtered per project.
+
+Click **Run model**.  The button is greyed out until the name and the
+folder are set.
 
 The calculation runs as a background QGIS task, so the UI stays
 responsive.  Progress is shown in the QGIS task manager tray at the
@@ -327,6 +362,10 @@ bottom of the window.  The phases run in order:
 #. Powered allision
 #. Oil-spill consequence (if configured)
 
+**Calculation matrix...** (next to Run model) lets a run calculate only
+some of the four model parts (:ref:`Calculation matrix <calculation-matrix>`).  If legs cross
+without a shared waypoint, Run model first offers to split them.
+
 .. figure:: _static/screenshots/ui_task_progress.png
    :width: 70%
    :alt: QGIS task manager showing OMRAT progress
@@ -337,9 +376,14 @@ bottom of the window.  The phases run in order:
 8. Read the results
 =====================
 
-When the run finishes, the **Accident probabilities** table fills in
-with one row per accident type, all in **expected events per year** and
-scientific notation (``1.148e-01`` means about one event every 9 years):
+When the run finishes it is saved, selected in **Previous runs**, and
+its column appears in the **Accident probabilities** table: one row per
+accident type plus the bold summary rows *All grounding*, *All
+allision* and *All collisions*, all in **expected events per year** and
+scientific notation (``1.148e-01`` means about one event every 9
+years); **Show as** switches to *Years between incidents*.  Tick
+**Baseline** on a run to compare the later ones with it: each selected
+run then gets a **Change (%)** column.
 
 .. list-table::
    :header-rows: 1
@@ -352,21 +396,23 @@ scientific notation (``1.148e-01`` means about one event every 9 years):
    * - **Drifting grounding**
      - Loss of propulsion, then drifting aground.
    * - **Powered allision**
-     - Under power, failing to turn at a bend, into a structure.
+     - Under power, into a structure: one inside the lane (Category I)
+       or one ahead after failing to turn at a waypoint (Category II).
    * - **Powered grounding**
-     - Under power, failing to turn at a bend, aground.
+     - Under power, aground: the same two categories.
    * - **Overtaking collision**
      - Same leg, same direction, different speeds.
    * - **Head-on collision**
      - Same leg, opposite directions.
    * - **Crossing collision**
-     - Two legs meeting at a waypoint at more than 30 degrees.
+     - Two routes through a waypoint whose paths cross (see
+       :ref:`junctions`).
    * - **Merging collision**
-     - Two legs meeting at 30 degrees or less -- streams converging
-       onto nearly the same course.
+     - Two routes through a waypoint that continue on the same leg --
+       streams joining.
    * - **Bend collision**
-     - One leg changing direction at a waypoint: a ship fails to
-       turn and hits traffic that did.
+     - The two opposite routes of a turn at a waypoint (``A -> B`` and
+       ``B -> A``) meeting in the bend.
 
 The **View** button on each row opens a drill-down dialog for the run
 selected in **Previous runs**, showing each leg's (and direction's)
@@ -404,12 +450,13 @@ means zero risk of that type:
        of the total drifting-grounding probability.
    * - **Powered Allision Results**
      - Line
-     - The same structure edges, coloured by the powered Cat II
-       allision probability (failure-to-turn-at-bend hits).
+     - The same structure edges, coloured by the powered allision
+       probability (Category I and II together) the ray caster put on
+       each edge.
    * - **Powered Grounding Results**
      - Line
-     - Depth-contour edges, coloured by the powered Cat II grounding
-       probability.
+     - Depth-contour edges, coloured by the powered grounding
+       probability (Category I and II together).
    * - **Ship-Ship Collision (per leg)**
      - Line
      - One line per route leg, coloured by ``combined`` =
@@ -434,12 +481,17 @@ total**.
    features where the contribution is small.
 
 Click any feature to open the attribute table.  The four obstacle
-layers carry a per-leg breakdown in ``leg_<id>`` columns, so you can
-trace which leg drove the colour; the collision layers carry the
-per-mode columns listed above.
+layers carry a per-leg breakdown in one column per leg, named after the
+route table (``LEG_1_2_b`` for drifting, ``LEG_1_2_b_East_going`` per
+direction for powered), so you can trace which leg drove the colour;
+the collision layers carry the per-mode columns listed above (the
+per-leg layer also ``leg_name``).
 
 Two runs can be compared side by side from the **Compare** tab -- pick
-two ``.omrat`` snapshots and click **Compare**.
+two ``.omrat`` snapshots and click **Compare**.  Its sub-tabs show the
+totals, the settings and inputs that differ, a breakdown per leg /
+waypoint / object, a zone around the structures and the leg lengths;
+**Add difference layers to QGIS (B - A)** maps where the risk moved.
 
 
 .. _quickstart-example-project:
@@ -453,9 +505,10 @@ repository ships a complete one at ``tests/example_data/proj.omrat``
 If you installed via the Plugin Manager, download it from
 https://github.com/axelande/OMRAT/tree/main/tests/example_data.
 
-#. **File -> Load** in the dock's menu bar.
+#. **File -> Load** in the OMRAT window's menu bar.
 #. Select ``proj.omrat``.
-#. When asked **Clear & Load** or **Merge**, choose **Clear & Load**.
+#. If the current model already has data, OMRAT asks **Clear & Load**
+   or **Merge**: choose **Clear & Load**.
 
 .. figure:: _static/screenshots/ui_loaded_example.png
    :width: 90%
@@ -467,12 +520,12 @@ https://github.com/axelande/OMRAT/tree/main/tests/example_data.
 Then skip straight to step 7.  Before running, spot-check that the
 **Routes** tab lists segments ``1``--``4``, that **Traffic Data** shows
 non-zero frequencies, that **Depths** has 17 rows and **Objects** 2, and
-set a model name and output folder on **Run Analysis**.
+set a run name and output folder on **Run Analysis**.
 
 .. note::
 
-   ``proj.omrat`` predates the settings, junction and traffic-scaling
-   blocks, so it loads with defaults for those (scaling 100 %, junctions
+   ``proj.omrat`` predates most causation-factor settings and the
+   junction and traffic-scaling blocks, so it loads with defaults for those (scaling 100 %, junctions
    rebuilt from the geometry).  That is expected.
 
 
@@ -494,14 +547,17 @@ Troubleshooting
 ===============
 
 **The Run model button is greyed out.**
-   Both **Name of the model** and **File path** must be filled in on
-   the Run Analysis tab.
+   Both **Name of the Run** and **File path** must be filled in on
+   the Run Analysis tab.  The tooltip of the button says which is
+   missing.
 
 **All result values are zero.**
    Check that the Routes, Traffic Data, Depths and Objects tabs all
    have data -- an empty traffic matrix short-circuits the calculation
-   to zero.  Then check **Settings -> Drift settings**: if the blackout
-   rate ``drift_p`` is zero, drifting risk is zero.
+   to zero.  Then check **Settings -> Drift settings**: if the drift
+   (blackout) probability per year is zero for every ship type,
+   drifting risk is zero.  A part that a partial **Calculation matrix**
+   left out shows a blank cell, not zero.
 
 **The calculation runs for more than 10 minutes on a small project.**
    That is much longer than expected.  Open **View -> Panels ->

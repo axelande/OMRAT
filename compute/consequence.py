@@ -150,9 +150,9 @@ def _by_cell_for_accident(
         if accident_key == 'crossing':
             return dict(bc.get('crossing', {}) or {})
         if accident_key == 'merging':
-            # Merging = leg pairs meeting at a shallow angle.  Since
-            # v0.14.0 it is its own accident type; before that, bend
-            # was folded in here.
+            # Merging = two routes through a waypoint leaving on the
+            # same leg.  Since v0.14.0 it is its own accident type;
+            # before that, bend was folded in here.
             return dict(bc.get('merging', {}) or {})
         if accident_key == 'bend':
             return dict(bc.get('bend', {}) or {})

@@ -17,9 +17,10 @@ IWRAP_PC_DEFAULTS: dict[str, float] = {
     'headon': 4.9e-5,
     'overtaking': 1.1e-4,
     'crossing': 1.3e-4,
-    # Merging (legs meeting at <= 30 deg) shares the crossing value
-    # by default -- IWRAP does not publish a separate figure.  It is
-    # a distinct entry so a project can calibrate it independently.
+    # Merging (two routes through a waypoint leaving on the same leg)
+    # shares the crossing value by default -- IWRAP does not publish a
+    # separate figure.  It is a distinct entry so a project can calibrate
+    # it independently.
     'merging': 1.3e-4,
     'bend': 1.3e-4,
     # Powered grounding / allision, Category II (missed turn) -- IWRAP
@@ -62,7 +63,6 @@ IWRAP_DRIFT_DEFAULTS: dict[str, Any] = {
     'anchor_d': 7,
     'speed': 1.0,
     'start_from': 'leg_center',
-    'squat_mode': 'average_speed',
     'rose': dict(IWRAP_ROSE_DEFAULT),
     'repair': dict(IWRAP_REPAIR_DEFAULT),
 }
@@ -82,10 +82,19 @@ def default_pc_values() -> dict[str, Any]:
     """Fresh copy of the ``pc`` block defaults.
 
     IWRAP causation factors plus OMRAT's own Category-I start-zone
-    setting (``compute/cat1_start_zone.py``), which the Causation factors
-    dialog edits alongside them.
+    setting (``compute/cat1_start_zone.py``), the passenger ship / fast
+    ferry reduction factors (``compute/passenger_reduction.py``, default 20 as in IWRAP)
+    the two squat tick boxes (``compute/squat.py``, default on) and the
+    smallest route angle at a waypoint (``compute/encounter_angle.py``,
+    default 10 degrees), which the Causation factors dialog edits alongside them.
     """
     from compute.cat1_start_zone import CAT1_START_ZONE_DEFAULTS
+    from compute.encounter_angle import DEFAULTS as ENCOUNTER_ANGLE_DEFAULTS
+    from compute.passenger_reduction import DEFAULTS as PASSENGER_REDUCTION_DEFAULTS
+    from compute.squat import SQUAT_DEFAULTS
     out: dict[str, Any] = dict(IWRAP_PC_DEFAULTS)
     out.update(CAT1_START_ZONE_DEFAULTS)
+    out.update(PASSENGER_REDUCTION_DEFAULTS)
+    out.update(SQUAT_DEFAULTS)
+    out.update(ENCOUNTER_ANGLE_DEFAULTS)
     return out

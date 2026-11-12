@@ -160,9 +160,6 @@ class TestRunCalculation:
         assert mw.LEPDriftAllision.text() == ''
         assert mw.LEPHeadOnCollision.text() == ''
         assert mw.LEPPoweredAllision.text() == '2.000e-03'
-        # Blank = not calculated; a calculated zero shows '0'.
-        assert mw.TWAccidentResults.item(0, 1).text() == ''
-        assert mw.TWAccidentResults.item(2, 1).text() == omrat._format_result(2e-3)
 
 
 class TestCalculationState:

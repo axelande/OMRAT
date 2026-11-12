@@ -884,7 +884,7 @@ class OMRAT(
         name = os.path.basename(self.project_path) if self.project_path else self.tr('the current model')
         msg_box.setText(self.tr('Save changes to {name} before closing OMRAT?').format(name=name))
         msg_box.setInformativeText(self.tr(
-            "Closing the dock keeps the layers on the map but the traffic, "
+            "Closing OMRAT removes its layers from the map, and the traffic, "
             "distributions and settings are lost unless you save."
         ))
         btn_save = msg_box.addButton(self.tr('Save'), QMessageBox.ButtonRole.AcceptRole)
@@ -978,7 +978,7 @@ class OMRAT(
         if out_dir is None or not run_name:
             missing: list[str] = []
             if not run_name:
-                missing.append('Name of the model')
+                missing.append('Name of the Run')
             if out_dir is None:
                 missing.append('Output folder (File path)')
             QMessageBox.information(
@@ -1086,19 +1086,10 @@ class OMRAT(
         )
         # Parts left out in the Calculation matrix have no value now.
         self._clear_accident_results(skipped_totals(getattr(calc_object, 'run_phases', None)))
-        # Catastrophe-level exceedance table on the Run Analysis tab.
-        try:
-            self._populate_catastrophe_results_table(
-                getattr(calc_object, 'consequence_result', None),
-            )
-        except Exception as e:
-            QgsMessageLog.logMessage(
-                f'Failed to populate catastrophe-results table: {e}',
-                'OMRAT', Qgis.MessageLevel.Warning,
-            )
         # Auto-save the run to the history GeoPackage so the user can
-        # reload / compare it later.  Failures here are non-fatal --
-        # the on-canvas results and line-edits are already populated.
+        # reload / compare it later.  The result tables on the Run
+        # Analysis tab show saved runs only: the new run appears there
+        # when it is selected below.  Failures here are non-fatal.
         try:
             self._auto_save_run(calc_object)
         except Exception as e:

@@ -3,7 +3,7 @@
 # OMRAT documentation build configuration file
 #
 
-import sys, os
+import os
 
 # -- General configuration -----------------------------------------------------
 
@@ -22,10 +22,26 @@ master_doc = 'index'
 project = u'OMRAT'
 copyright = u'2022-2026, Axel Hörteborn / RISE'
 
-# The short X.Y version.
-version = '0.3'
+
+# The version is read from the plugin's metadata.txt so the docs never show
+# a stale number (it is in the browser tab title: "OMRAT x.y.z documentation").
+def _plugin_version():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', '..', 'metadata.txt')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            for line in fh:
+                if line.startswith('version='):
+                    return line.split('=', 1)[1].strip()
+    except OSError:
+        pass
+    return ''
+
+
 # The full version, including alpha/beta/rc tags.
-release = '0.3.1'
+release = _plugin_version()
+# The short X.Y version.
+version = '.'.join(release.split('.')[:2])
 
 exclude_patterns = []
 pygments_style = 'sphinx'
@@ -41,8 +57,15 @@ html_theme_options = {
     'github_button': True,
     'github_type': 'star',
     'fixed_sidebar': True,
-    'sidebar_collapse': True,
-    'page_width': '1100px',
+    # The whole tree is written into every page; _static/nav_toggle.js folds
+    # it and adds the expand / collapse arrows.  Without JavaScript the tree
+    # simply stays open.
+    'sidebar_collapse': False,
+    # Wider sidebar (alabaster default 220px); the page grows by the same
+    # amount so the text column keeps its width.  Below page_width alabaster
+    # switches to the narrow layout (sidebar on top).
+    'sidebar_width': '280px',
+    'page_width': '1160px',
 }
 
 html_static_path = ['_static']
@@ -51,8 +74,11 @@ htmlhelp_basename = 'OMRATdoc'
 
 # -- Custom CSS for source code reference boxes --------------------------------
 
+
 def setup(app):
     app.add_css_file('custom.css')
+    app.add_js_file('nav_toggle.js')
+
 
 # -- Options for LaTeX output --------------------------------------------------
 

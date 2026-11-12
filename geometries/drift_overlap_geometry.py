@@ -59,7 +59,11 @@ def create_polygon_from_line(
         weighted_mu = 0.0
     if not np.isfinite(weighted_std) or weighted_std <= 0:
         weighted_std = 0.0
-    moved_line = translate(line, xoff=0, yoff=weighted_mu)
+    # The mean is an offset to the left of the line (the axis the probability
+    # holes use); it was a northward shift before 2026-11-10, which is only
+    # right for a leg drawn eastward.
+    from drifting.engine import _offset_line_perpendicular
+    moved_line = _offset_line_perpendicular(line, weighted_mu)
     coverage_range = max(1.0, 4.89 * weighted_std)
     return moved_line.buffer(coverage_range)
 
@@ -321,15 +325,22 @@ def compute_min_distance_by_object(
     weights: list[list[float]],
     objs_gdf_list: list[gpd.GeoDataFrame],
     distance: float,
+    distance_lines: list[LineString] | None = None,
 ) -> list[list[list[float | None]]]:
     """For each leg + 8 drift directions, min reverse-ray distance per object.
 
     Returns a 3-level list indexed as
     ``[leg_index][direction_index][object_index]``.  ``None`` means the
     object is not reachable by drifting from that leg/direction.
+
+    ``distance_lines`` (one per leg, e.g. the leg offset by the mean of its
+    lateral distribution) are what the distance is measured from; the leg
+    itself still decides which objects are in reach, and an object behind
+    its distance line keeps its distance from the leg.
     """
     per_leg_dir_obj: list[list[list[float | None]]] = []
-    for line, dist, wgt in zip(lines, distributions, weights):
+    for leg_i, (line, dist, wgt) in enumerate(zip(lines, distributions, weights)):
+        dline = distance_lines[leg_i] if distance_lines and leg_i < len(distance_lines) else line
         n_objs = sum(len(gdf) for gdf in objs_gdf_list)
         per_dir: list[list[float | None]] = []
 
@@ -350,8 +361,12 @@ def compute_min_distance_by_object(
                         intersection = polygon.intersection(obj)
                         try:
                             md = directional_min_distance_reverse_ray(
-                                intersection, line, compass_angle,
+                                intersection, dline, compass_angle,
                             )
+                            if md is None and dline is not line:
+                                md = directional_min_distance_reverse_ray(
+                                    intersection, line, compass_angle,
+                                )
                             if md is not None:
                                 prev = min_dists[flat_idx]
                                 if prev is None or md < prev:

@@ -190,3 +190,17 @@ def test_storage_normaliser_drops_orphan_traffic_on_load():
     out = store._normalize_legacy_to_schema(_orphaned_project())
     assert '7' not in out['traffic_data']
     assert sorted(out['traffic_data']) == ['1', '2', '3']
+
+
+def test_schema_accepts_fractional_drift_width_and_uniform_share():
+    """These fields were typed ``int`` until 2026-11-12: a blackout rate of
+    0.5, an anchoring depth of 7.5 m, a typed width of 2500.5 m (saved as the
+    route-table text) or a uniform share of 2.5 % failed save and load."""
+    data = sanitize_project(_drawn_project())
+    data['drift'].update(drift_p=0.5, anchor_d=7.5)
+    leg = data['segment_data']['1']
+    leg.update(Width='2500.5', u_p1=2.5, u_p2=0.5)
+    model = RootModelSchema.model_validate(data)
+    assert model.drift.drift_p == 0.5 and model.drift.anchor_d == 7.5
+    seg = model.segment_data.root['1']
+    assert (seg.Width, seg.u_p1, seg.u_p2) == (2500.5, 2.5, 0.5)

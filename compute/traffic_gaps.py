@@ -4,11 +4,11 @@ An AIS update collapses each cell's observations to their mean and writes
 ``inf`` when there were none (``AisUpdateTask._collapse_td_block``).  For
 the draught that read as *unlimited*: those ships grounded on every depth
 class, and the drift model let them anchor everywhere (KNOWN_ISSUES item 9;
-run axel_run2, 20 Oct 2026: 5,903 ships/yr, mostly sailing and pleasure craft).
+one model had 5,903 ships/yr like that, mostly sailing and pleasure craft).
 For the speed it turned every ship-ship encounter of the leg into
 ``0 * inf = NaN``, so the head-on, overtaking and merging totals of the
-whole model came out NaN (KNOWN_ISSUES item 14; Salvorev, 29 Oct 2026:
-27 ships/yr on one leg whose frequencies had been edited by hand).
+whole model came out NaN (KNOWN_ISSUES item 14; 27 ships/yr on one leg
+whose frequencies had been edited by hand were enough).
 
 :func:`fill_traffic_gaps` runs on the private copy of the data at the
 start of a calculation (``CalculationTask.run``,
@@ -260,7 +260,7 @@ def negative_weights(segment_data: dict[str, Any] | None) -> list[tuple[str, str
 
     ``compute.data_preparation.get_distribution`` drops a component whose
     weight is not positive, so a negative weight silently changes the
-    lateral distribution (kattegatt1 had -4900 / -3300, KNOWN_ISSUES 6).
+    lateral distribution (weights of -4900 / -3300 have been seen, KNOWN_ISSUES 6).
     """
     found: list[tuple[str, str, float]] = []
     for seg_id, seg in (segment_data or {}).items():

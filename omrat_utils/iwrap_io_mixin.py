@@ -23,7 +23,9 @@ from typing import TYPE_CHECKING
 
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
-from compute.iwrap_convertion import parse_iwrap_xml, write_iwrap_xml
+from compute.iwrap_convertion import (
+    describe_length_class_merges, length_class_merges, parse_iwrap_xml, write_iwrap_xml,
+)
 from compute.traffic_redirect import describe_redirect_summary, prepare_export_data
 from omrat_utils.gather_data import GatherData
 
@@ -68,7 +70,9 @@ class IwrapIOMixin:
             QMessageBox.information(
                 self.main_widget,
                 self.tr('Export Successful'),
-                self.tr(f'Project successfully exported to:\n{filename}'),
+                self.tr(f'Project successfully exported to:\n{filename}')
+                + describe_length_class_merges(length_class_merges(data.get('ship_categories')))
+                + self._describe_export_scaling(getattr(self, '_iwrap_scaled_cells', 0)),
             )
         except Exception as exc:
             self.show_error_popup(str(exc), 'export_to_iwrap')
@@ -96,6 +100,7 @@ class IwrapIOMixin:
         """
         data = GatherData(self).get_all_for_save()
         prepared, summary = prepare_export_data(data)
+        self._iwrap_scaled_cells = int(summary.get('scaled_cells', 0))
         if not summary['removed']:
             return prepared
         answer = QMessageBox.warning(
@@ -114,10 +119,19 @@ class IwrapIOMixin:
             return None
         return prepared
 
+    def _describe_export_scaling(self, scaled_cells: int) -> str:
+        """Line for the export message when ``Scaling (%)`` changed frequencies."""
+        if scaled_cells <= 0:
+            return ''
+        return self.tr(
+            '\n\nTraffic scaling: the frequencies were written with Scaling (%) applied '
+            '({n} cells), as the OMRAT calculation uses them.'
+        ).format(n=scaled_cells)
+
     def _do_iwrap_export(self, filename: str, data: dict | None = None) -> None:
         """Write ``data`` (default: the gathered project) as IWRAP XML.
-        Suppressed legs are always resolved first; on already prepared data
-        that is a no-op."""
+        Suppressed legs and traffic scaling are always resolved first; on
+        already prepared data that is a no-op."""
         if data is None:
             data = GatherData(self).get_all_for_save()
         data, _summary = prepare_export_data(data)

@@ -1,7 +1,10 @@
 """QGIS-fixture tests for the Run Analysis / Compare UI changes:
 
-* ``TWPreviousRuns`` has a checkable **Main** column and the accident
-  table's delta columns are computed against the main run;
+* ``TWPreviousRuns`` has a checkable **Baseline** column (one per
+  project list); ``TWAccidentResults`` shows the baseline once (values
+  only) and every other selected run with its value and its change
+  against it -- no column for the live model (2026-11-09);
+* the result tables copy to Excel as numbers (locale decimal point);
 * ``TWAccidentResults`` carries three bold summary rows;
 * loading legs from file draws the tangent-line layer;
 * ``snapshot_layers.add_snapshot_to_project`` builds one ordered group.
@@ -67,105 +70,231 @@ def _row_of(tw, run_id) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Main column
+# Baseline column
 # ---------------------------------------------------------------------------
 
-class TestMainColumn:
-    def test_headers_have_main_right_of_name(self, omrat, history):
-        omrat._main_run_id = None
+def _select(omrat, *run_ids):
+    from qgis.PyQt.QtCore import QItemSelectionModel
+    tw_runs = omrat.main_widget.TWPreviousRuns
+    tw_runs.clearSelection()
+    sel = tw_runs.selectionModel()
+    for rid in run_ids:
+        sel.select(
+            tw_runs.model().index(_row_of(tw_runs, rid), 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+    omrat._on_previous_runs_selection_changed()
+
+
+def _tick_baseline(omrat, run_id, ticked: bool = True) -> None:
+    from qgis.PyQt.QtCore import Qt
+    tw = omrat.main_widget.TWPreviousRuns
+    tw.item(_row_of(tw, run_id), 1).setCheckState(
+        Qt.CheckState.Checked if ticked else Qt.CheckState.Unchecked)
+
+
+def _headers(tw) -> list[str]:
+    return [tw.horizontalHeaderItem(c).text() for c in range(tw.columnCount())]
+
+
+class TestBaselineColumn:
+    def test_headers_have_baseline_right_of_name(self, omrat, history):
+        omrat._baseline_runs = None
         history.save_run('base', totals=_totals(1.0))
         omrat.refresh_previous_runs_table()
         tw = omrat.main_widget.TWPreviousRuns
-        headers = [tw.horizontalHeaderItem(c).text() for c in range(tw.columnCount())]
-        assert headers == ['Name', 'Main', 'Date', 'Duration', 'Version', 'Project']
+        assert _headers(tw) == ['Name', 'Baseline', 'Date', 'Duration', 'Version', 'Project']
 
-    def test_main_cells_are_checkable_and_unchecked(self, omrat, history):
+    def test_baseline_cells_are_checkable_and_unchecked(self, omrat, history):
         from qgis.PyQt.QtCore import Qt
-        omrat._main_run_id = None
+        omrat._baseline_runs = None
         history.save_run('base', totals=_totals(1.0))
         omrat.refresh_previous_runs_table()
         item = omrat.main_widget.TWPreviousRuns.item(0, 1)
         assert item.flags() & Qt.ItemFlag.ItemIsUserCheckable
         assert item.checkState() == Qt.CheckState.Unchecked
 
-    def test_ticking_sets_main_and_unticks_others(self, omrat, history):
+    def test_ticking_sets_baseline_and_unticks_others(self, omrat, history):
         from qgis.PyQt.QtCore import Qt
-        omrat._main_run_id = None
+        omrat._baseline_runs = None
         id_a = history.save_run('a', totals=_totals(1.0))
         id_b = history.save_run('b', totals=_totals(2.0))
         omrat.refresh_previous_runs_table()
         tw = omrat.main_widget.TWPreviousRuns
-        tw.item(_row_of(tw, id_a), 1).setCheckState(Qt.CheckState.Checked)
-        assert omrat._get_main_run_id() == id_a
-        tw.item(_row_of(tw, id_b), 1).setCheckState(Qt.CheckState.Checked)
-        assert omrat._get_main_run_id() == id_b
+        _tick_baseline(omrat, id_a)
+        assert omrat._get_baseline_run_id() == id_a
+        _tick_baseline(omrat, id_b)
+        assert omrat._get_baseline_run_id() == id_b
         assert tw.item(_row_of(tw, id_a), 1).checkState() == Qt.CheckState.Unchecked
-        assert _FakeSettings.store['omrat/main_run_id'] == id_b
+        stored = json.loads(_FakeSettings.store['omrat/baseline_runs'])
+        assert list(stored.values()) == [id_b]
 
-    def test_unticking_clears_main(self, omrat, history):
-        from qgis.PyQt.QtCore import Qt
-        omrat._main_run_id = None
+    def test_unticking_clears_baseline(self, omrat, history):
+        omrat._baseline_runs = None
         id_a = history.save_run('a', totals=_totals(1.0))
         omrat.refresh_previous_runs_table()
-        tw = omrat.main_widget.TWPreviousRuns
-        item = tw.item(_row_of(tw, id_a), 1)
-        item.setCheckState(Qt.CheckState.Checked)
-        item.setCheckState(Qt.CheckState.Unchecked)
-        assert omrat._get_main_run_id() is None
+        _tick_baseline(omrat, id_a)
+        _tick_baseline(omrat, id_a, ticked=False)
+        assert omrat._get_baseline_run_id() is None
+        assert 'omrat/baseline_runs' not in _FakeSettings.store
 
-    def test_refresh_keeps_tick_and_forgets_deleted_main(self, omrat, history):
+    def test_refresh_keeps_tick_and_forgets_deleted_baseline(self, omrat, history):
         from qgis.PyQt.QtCore import Qt
-        omrat._main_run_id = None
+        omrat._baseline_runs = None
         id_a = history.save_run('a', totals=_totals(1.0))
-        omrat._set_main_run_id(id_a)
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_a)
+        omrat._baseline_runs = None            # re-read from the settings
         omrat.refresh_previous_runs_table()
         tw = omrat.main_widget.TWPreviousRuns
         assert tw.item(_row_of(tw, id_a), 1).checkState() == Qt.CheckState.Checked
         history.delete_run(id_a)
         omrat.refresh_previous_runs_table()
-        assert omrat._get_main_run_id() is None
+        assert omrat._get_baseline_run_id() is None
+        assert omrat._baseline_map() == {}
 
-
-class TestComparisonAgainstMain:
-    def test_delta_uses_main_run(self, omrat, history):
-        omrat._main_run_id = None
-        id_main = history.save_run('main-run', totals=_totals(1.0))
-        id_other = history.save_run('other', totals=_totals(2.0))
-        omrat._set_main_run_id(id_main)
+    def test_old_main_run_setting_is_not_read(self, omrat, history):
+        omrat._baseline_runs = None
+        id_a = history.save_run('a', totals=_totals(1.0))
+        _FakeSettings.store['omrat/main_run_id'] = id_a
         omrat.refresh_previous_runs_table()
-        tw_runs = omrat.main_widget.TWPreviousRuns
-        tw_runs.clearSelection()
-        tw_runs.selectRow(_row_of(tw_runs, id_other))
-        omrat._on_previous_runs_selection_changed()
+        assert omrat._get_baseline_run_id() is None
+
+
+# ---------------------------------------------------------------------------
+# Run columns of the accident table
+# ---------------------------------------------------------------------------
+
+class TestRunColumns:
+    def test_baseline_once_then_value_and_change(self, omrat, history):
+        omrat._baseline_runs = None
+        id_base = history.save_run('base-run', totals=_totals(1.0))
+        id_other = history.save_run('other', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_other)
 
         tw = omrat.main_widget.TWAccidentResults
-        # base 3 + probability + delta; columns: type, current, other, delta, View
-        assert tw.columnCount() == 5
-        assert tw.horizontalHeaderItem(2).text() == 'other'
-        assert tw.horizontalHeaderItem(3).text() == 'Δ vs main (main-run) %'
-        # every accident row doubled -> +100 %
+        assert _headers(tw) == ['Accident type', 'base-run (baseline)', 'other', 'Change (%)', 'View']
+        assert tw.item(1, 1).text() == '2.000e-04'
+        assert tw.item(1, 2).text() == '4.000e-04'
         for row in range(9):
             assert tw.item(row, 3).text() == '+100.0%'
-        # summary rows too
+        # Summary rows: bold, in every run column.
         assert tw.item(9, 0).text() == 'All grounding'
-        assert tw.item(9, 2).text() == '1.200e-03'  # (2e-4 + 4e-4) * 2
+        assert tw.item(9, 1).text() == '6.000e-04'
+        assert tw.item(9, 2).text() == '1.200e-03'
         assert tw.item(9, 3).text() == '+100.0%'
-        assert tw.item(9, 3).font().bold()
-        omrat._reset_accident_table_to_base()
+        assert tw.item(9, 1).font().bold() and tw.item(9, 3).font().bold()
+        assert 'base-run' in omrat.main_widget.lblCompareHint.text()
 
-    def test_without_main_falls_back_to_current(self, omrat, history):
-        omrat._main_run_id = None
+    def test_selected_baseline_is_shown_once(self, omrat, history):
+        omrat._baseline_runs = None
+        id_base = history.save_run('base-run', totals=_totals(1.0))
+        id_other = history.save_run('other', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_base, id_other)
+        tw = omrat.main_widget.TWAccidentResults
+        assert _headers(tw) == ['Accident type', 'base-run (baseline)', 'other', 'Change (%)', 'View']
+
+    def test_baseline_shown_without_a_selection(self, omrat, history):
+        omrat._baseline_runs = None
+        id_base = history.save_run('base-run', totals=_totals(1.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat)
+        tw = omrat.main_widget.TWAccidentResults
+        assert _headers(tw) == ['Accident type', 'base-run (baseline)', 'View']
+
+    def test_no_baseline_values_only_with_a_hint(self, omrat, history):
+        omrat._baseline_runs = None
+        id_a = history.save_run('a', totals=_totals(1.0))
+        id_b = history.save_run('b', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        _select(omrat, id_a, id_b)
+        tw = omrat.main_widget.TWAccidentResults
+        assert _headers(tw) == ['Accident type', 'b', 'a', 'View']   # newest first
+        assert 'Tick Baseline' in omrat.main_widget.lblCompareHint.text()
+
+    def test_no_live_column(self, omrat, history):
+        """The hidden LEP* fields (written by compute) are not shown: a
+        finished run reaches the table through the run history."""
+        omrat._baseline_runs = None
+        _set_all_leps(omrat.main_widget)
+        _select(omrat)
+        tw = omrat.main_widget.TWAccidentResults
+        assert _headers(tw) == ['Accident type', 'View']
+        assert 'Select runs' in omrat.main_widget.lblCompareHint.text()
+
+    def test_unticking_removes_the_change_columns(self, omrat, history):
+        omrat._baseline_runs = None
+        id_base = history.save_run('base-run', totals=_totals(1.0))
+        id_other = history.save_run('other', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_other)
+        _tick_baseline(omrat, id_base, ticked=False)
+        tw = omrat.main_widget.TWAccidentResults
+        assert _headers(tw) == ['Accident type', 'other', 'View']
+
+    def test_view_buttons_stay_in_the_last_column(self, omrat, history):
+        omrat._baseline_runs = None
         id_a = history.save_run('a', totals=_totals(1.0))
         omrat.refresh_previous_runs_table()
-        omrat.main_widget.LEPDriftAllision.setText('1.000e-04')
-        tw_runs = omrat.main_widget.TWPreviousRuns
-        tw_runs.clearSelection()
-        tw_runs.selectRow(_row_of(tw_runs, id_a))
-        omrat._on_previous_runs_selection_changed()
+        _select(omrat, id_a)
         tw = omrat.main_widget.TWAccidentResults
-        assert tw.horizontalHeaderItem(3).text() == 'Δ vs current %'
-        assert tw.item(0, 3).text() == '+0.0%'
-        omrat._reset_accident_table_to_base()
+        last = tw.columnCount() - 1
+        assert all(tw.cellWidget(r, last) is not None for r in range(9))
+        assert tw.cellWidget(9, last) is None      # summary rows have no View
+
+
+# ---------------------------------------------------------------------------
+# Copy to Excel
+# ---------------------------------------------------------------------------
+
+class TestCopyToExcel:
+    def _fill(self, omrat, history, monkeypatch):
+        omrat._baseline_runs = None
+        id_base = history.save_run('base', totals=_totals(1.0))
+        id_other = history.save_run('other', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_other)
+        monkeypatch.setattr(omrat, '_decimal_point', lambda: ',')
+        return omrat.main_widget.TWAccidentResults
+
+    def test_whole_table_with_headers_as_numbers(self, omrat, history, monkeypatch):
+        tw = self._fill(omrat, history, monkeypatch)
+        lines = omrat._result_table_tsv(tw, whole=True).split('\n')
+        assert lines[0].split('\t') == ['Accident type', 'base (baseline)', 'other', 'Change (%)']
+        assert lines[1].split('\t') == ['Drifting allision', '0,0001', '0,0002', '100']
+        assert lines[9].split('\t') == ['Bend collision', '5e-05', '0,0001', '100']
+        assert lines[10].split('\t') == ['All grounding', '0,0006', '0,0012', '100']
+        assert len(lines) == 13
+
+    def test_selection_without_headers(self, omrat, history, monkeypatch):
+        from qgis.PyQt.QtWidgets import QTableWidgetSelectionRange
+        tw = self._fill(omrat, history, monkeypatch)
+        tw.clearSelection()
+        tw.setRangeSelected(QTableWidgetSelectionRange(0, 2, 1, 4), True)   # incl. View
+        assert omrat._result_table_tsv(tw) == '0,0002\t100\n0,0004\t100'
+
+    def test_years_mode_copies_years(self, omrat, history, monkeypatch):
+        tw = self._fill(omrat, history, monkeypatch)
+        omrat.main_widget.cbResultDisplayMode.setCurrentIndex(1)
+        lines = omrat._result_table_tsv(tw, whole=True).split('\n')
+        # drift allision 1e-4 -> 10000 years; doubled -> 5000 years, -50 %
+        assert lines[1].split('\t') == ['Drifting allision', '10000', '5000', '-50']
+
+    def test_ctrl_c_reaches_the_table_copy(self, omrat, history, monkeypatch):
+        from qgis.PyQt.QtCore import Qt
+        from qgis.PyQt.QtTest import QTest
+        tw = self._fill(omrat, history, monkeypatch)
+        calls = []
+        monkeypatch.setattr(omrat, '_copy_result_table', lambda t, whole=False: calls.append((t, whole)))
+        QTest.keyClick(tw, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        assert calls == [(tw, False)]
 
 
 # ---------------------------------------------------------------------------
@@ -180,21 +309,7 @@ class TestSummaryRows:
             'All grounding', 'All allision', 'All collisions',
         ]
         assert tw.item(9, 0).font().bold()
-        assert tw.cellWidget(9, 2) is None  # no View button
-
-    def test_summary_follows_lep_edits(self, omrat):
-        w = omrat.main_widget
-        w.LEPDriftingGrounding.setText('1.000e-03')
-        w.LEPPoweredGrounding.setText('2.000e-03')
-        w.LEPDriftAllision.setText('5.000e-04')
-        w.LEPPoweredAllision.setText('')
-        for name in ('LEPOvertakingCollision', 'LEPHeadOnCollision',
-                     'LEPCrossingCollision', 'LEPMergingCollision', 'LEPBendCollision'):
-            getattr(w, name).setText('1.000e-05')
-        tw = w.TWAccidentResults
-        assert tw.item(9, 1).text() == '3.000e-03'
-        assert tw.item(10, 1).text() == '5.000e-04'
-        assert tw.item(11, 1).text() == '5.000e-05'
+        assert tw.cellWidget(9, tw.columnCount() - 1) is None  # no View button
 
 
 # ---------------------------------------------------------------------------
@@ -218,83 +333,35 @@ class TestResultDisplayMode:
         assert cb.itemData(0) == 'frequency'
         assert cb.itemData(1) == 'return_period'
         assert cb.currentIndex() == 0
-        tw = omrat.main_widget.TWAccidentResults
-        assert tw.horizontalHeaderItem(1).text() == 'Probability'
 
-    def test_switching_rerenders_cells_and_summary(self, omrat, history):
+    def test_switching_rerenders_values_and_change(self, omrat, history):
         from omrat_utils.accident_summary import RESULT_DISPLAY_SETTING
+        omrat._baseline_runs = None
+        totals = _totals(1.0)
+        totals['powered_allision'] = 0.0
+        id_base = history.save_run('base', totals=totals)
+        id_other = history.save_run('other', totals=_totals(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_other)
         w = omrat.main_widget
-        _set_all_leps(w)
         tw = w.TWAccidentResults
-        assert tw.item(1, 1).text() == '1.000e-03'
+        assert tw.item(1, 1).text() == '2.000e-04'
 
         w.cbResultDisplayMode.setCurrentIndex(1)
-        assert tw.horizontalHeaderItem(1).text() == 'Years between incidents'
-        assert tw.item(1, 1).text() == '1,000'      # drifting grounding
-        assert tw.item(3, 1).text() == '500'        # powered grounding
-        assert tw.item(2, 1).text() == '\u221e'     # zero frequency
-        assert tw.item(4, 1).text() == '100,000'    # overtaking
-        assert tw.item(9, 1).text() == '333'        # All grounding 1/3e-3
-        assert tw.item(11, 1).text() == '20,000'    # All collisions 1/5e-5
+        assert tw.item(1, 1).text() == '5,000'      # drifting grounding 1 / 2e-4
+        assert tw.item(1, 2).text() == '2,500'
+        assert tw.item(1, 3).text() == '-50.0%'     # change of the years
+        assert tw.item(2, 1).text() == '∞'     # zero frequency
+        assert tw.item(2, 3).text() == '—'     # change from infinity: undefined
+        assert tw.item(9, 1).text() == '1,667'      # All grounding 1 / 6e-4
         assert tw.item(9, 1).font().bold()
-        # Stored value is untouched and the choice is persisted.
-        assert w.LEPDriftingGrounding.text() == '1.000e-03'
         assert _FakeSettings.store[RESULT_DISPLAY_SETTING] == 'return_period'
 
-        # LEP edits while in years mode land as years.
-        w.LEPDriftingGrounding.setText('4.000e-03')
-        assert tw.item(1, 1).text() == '250'
-        assert tw.item(9, 1).text() == '167'
-
         w.cbResultDisplayMode.setCurrentIndex(0)
-        assert tw.horizontalHeaderItem(1).text() == 'Probability'
-        assert tw.item(1, 1).text() == '4.000e-03'
-        assert tw.item(9, 1).text() == '6.000e-03'
-
-    def test_compare_columns_follow_mode_and_delta_stays_relative(self, omrat, history):
-        omrat._main_run_id = None
-        w = omrat.main_widget
-        _set_all_leps(w)
-        rid = history.save_run('other', totals=_totals(2.0))
-        omrat.refresh_previous_runs_table()
-        w.cbResultDisplayMode.setCurrentIndex(1)
-        tw_runs = w.TWPreviousRuns
-        tw_runs.clearSelection()
-        tw_runs.selectRow(_row_of(tw_runs, rid))
-        omrat._on_previous_runs_selection_changed()
-
-        tw = w.TWAccidentResults
-        assert tw.columnCount() == 5
-        assert tw.horizontalHeaderItem(1).text() == 'Years between incidents'
-        # other run: drift_grounding = 4e-4 -> 2,500 years
-        assert tw.item(1, 2).text() == '2,500'
-        # delta is computed on frequencies: 4e-4 vs live 1e-3 -> -60 %
-        assert tw.item(1, 3).text() == '-60.0%'
-        assert tw.horizontalHeaderItem(3).text() == 'Δ vs current %'
-        # summary row: (4e-4 + 8e-4) -> 833 years
-        assert tw.item(9, 2).text() == '833'
-        w.cbResultDisplayMode.setCurrentIndex(0)
-        assert tw.item(1, 2).text() == '4.000e-04'
-        assert tw.item(1, 3).text() == '-60.0%'
-        omrat._reset_accident_table_to_base()
-
-    def test_catastrophe_table_follows_mode(self, omrat, history):
-        w = omrat.main_widget
-        omrat._populate_catastrophe_results_table({'levels': [
-            {'name': 'Minor', 'quantity': 50.0, 'exceedance': 0.01},
-            {'name': 'Major', 'quantity': 500.0, 'exceedance': 0.0},
-        ]})
-        tw = w.TWCatastropheResults
-        assert tw.horizontalHeaderItem(2).text() == 'Exceedance (events/year)'
-        assert tw.item(0, 2).text() == '1.000e-02'
-        w.cbResultDisplayMode.setCurrentIndex(1)
-        assert tw.horizontalHeaderItem(2).text() == 'Years between exceedances'
-        assert tw.item(0, 2).text() == '100'
-        assert tw.item(1, 2).text() == '\u221e'
-        assert 'years between' in w.lblCatastropheResults.text()
-        w.cbResultDisplayMode.setCurrentIndex(0)
-        assert tw.item(0, 2).text() == '1.000e-02'
-        assert 'events/year' in w.lblCatastropheResults.text()
+        assert tw.item(1, 1).text() == '2.000e-04'
+        assert tw.item(1, 3).text() == '+100.0%'
+        assert tw.item(2, 1).text() == '0'
 
 
 # ---------------------------------------------------------------------------

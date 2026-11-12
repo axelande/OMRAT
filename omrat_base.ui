@@ -273,16 +273,6 @@ QToolTip {
               <item>
                <layout class="QHBoxLayout" name="horizontalLayout_Buttons2">
                 <item>
-                 <widget class="QPushButton" name="pbLoadRoute">
-                  <property name="enabled">
-                   <bool>false</bool>
-                  </property>
-                  <property name="text">
-                   <string>Load</string>
-                  </property>
-                 </widget>
-                </item>
-                <item>
                  <widget class="QPushButton" name="pbRemoveRoute">
                   <property name="text">
                    <string>Remove</string>
@@ -2566,7 +2556,6 @@ shadows/holes created by shallow depths and low structures.</string>
   <tabstop>twRouteList</tabstop>
   <tabstop>pbAddRoute</tabstop>
   <tabstop>pbStopRoute</tabstop>
-  <tabstop>pbLoadRoute</tabstop>
   <tabstop>pbRemoveRoute</tabstop>
   <tabstop>pbMoveTangent</tabstop>
   <tabstop>pbCopyTraffic</tabstop>

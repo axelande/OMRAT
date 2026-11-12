@@ -29,16 +29,15 @@ from qgis.core import Qgis, QgsMessageLog
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
-from omrat_utils.accident_summary import (
-    ACCIDENT_TOTAL_KEYS, summary_values,
-)
-
 if TYPE_CHECKING:
     pass
 
-# QSettings key holding the run_id of the "main" run that the
-# comparison columns on the Run Analysis tab are computed against.
-MAIN_RUN_SETTING = 'omrat/main_run_id'
+# QSettings key holding the baseline run of each Previous runs list, as
+# JSON ``{list key: run_id}``; the key is the project shown, or
+# ``ALL_PROJECTS``.  The baseline is the first run column of the result
+# tables and the reference of their change columns (2026-11-09; it was
+# one global "main" run before, ``omrat/main_run_id``, no longer read).
+BASELINE_RUNS_SETTING = 'omrat/baseline_runs'
 
 # ``cbRunProject`` item data for "All projects".
 ALL_PROJECTS = '__all_projects__'
@@ -152,14 +151,9 @@ def _qt_enum(klass, name: str, *scoped_paths: str):
 class RunHistoryMixin:
     """Auto-save flow + previous-runs table + output-folder gating."""
 
-    # The accident-row order is shared with ``AccidentResultsMixin`` --
-    # we declare it here too because the run-history's
-    # "fill comparison columns" path indexes into the accident table.
-    _ACCIDENT_TOTAL_KEYS: tuple[str, ...] = ACCIDENT_TOTAL_KEYS
-
     # Column indices of ``TWPreviousRuns``.
     _RUNS_COL_NAME = 0
-    _RUNS_COL_MAIN = 1
+    _RUNS_COL_BASELINE = 1
     _RUNS_COL_DATE = 2
     _RUNS_COL_DURATION = 3
     _RUNS_COL_VERSION = 4
@@ -675,15 +669,16 @@ class RunHistoryMixin:
         AIV = QtWidgets.QAbstractItemView
         tw = self.main_widget.TWPreviousRuns
 
-        headers = ['Name', 'Main', 'Date', 'Duration', 'Version', 'Project']
+        headers = ['Name', 'Baseline', 'Date', 'Duration', 'Version', 'Project']
         tw.setColumnCount(len(headers))
         tw.setHorizontalHeaderLabels(headers)
         tw.horizontalHeader().setStretchLastSection(True)
         try:
-            tw.horizontalHeaderItem(self._RUNS_COL_MAIN).setToolTip(
-                'Tick one run to make it the "main" run.  The delta '
-                'columns of the accident table are then computed against '
-                'it instead of against the current model.'
+            tw.horizontalHeaderItem(self._RUNS_COL_BASELINE).setToolTip(
+                'Tick one run as the baseline.  It is shown first in the '
+                'result tables, and every other selected run gets a change '
+                'column against it.  Each project list remembers its own '
+                'baseline.'
             )
         except Exception:  # nosec B110 B112
             pass
@@ -789,13 +784,11 @@ class RunHistoryMixin:
             QgsMessageLog.logMessage(
                 f'Could not fill in run versions: {exc}', 'OMRAT', Qgis.MessageLevel.Warning,
             )
-        main_id = self._get_main_run_id()
-        if main_id is not None and main_id not in {r.run_id for r in all_runs}:
-            # The main run was deleted from history: forget it.
-            self._set_main_run_id(None)
-            main_id = None
+        self._prune_baselines(all_runs)
         project = self._fill_run_project_combo(all_runs)
         runs = [r for r in all_runs if project is None or r.project_label() == project]
+        self._shown_runs_project = project
+        baseline_id = self._get_baseline_run_id()
         checked = _qt_enum(QtCore.Qt, 'Checked', 'CheckState.Checked')
         unchecked = _qt_enum(QtCore.Qt, 'Unchecked', 'CheckState.Unchecked')
         flag_enabled = _qt_enum(QtCore.Qt, 'ItemIsEnabled', 'ItemFlag.ItemIsEnabled')
@@ -813,13 +806,13 @@ class RunHistoryMixin:
                 name_item.setData(user_role, run.run_id)
                 tw.setItem(i, self._RUNS_COL_NAME, name_item)
 
-                main_item = QtWidgets.QTableWidgetItem('')
-                main_item.setFlags(flag_enabled | flag_checkable | flag_selectable)
-                main_item.setCheckState(
-                    checked if run.run_id == main_id else unchecked,
+                baseline_item = QtWidgets.QTableWidgetItem('')
+                baseline_item.setFlags(flag_enabled | flag_checkable | flag_selectable)
+                baseline_item.setCheckState(
+                    checked if run.run_id == baseline_id else unchecked,
                 )
-                main_item.setToolTip('Compare against this run')
-                tw.setItem(i, self._RUNS_COL_MAIN, main_item)
+                baseline_item.setToolTip('Compare the other runs with this run')
+                tw.setItem(i, self._RUNS_COL_BASELINE, baseline_item)
 
                 tw.setItem(
                     i, self._RUNS_COL_DATE,
@@ -891,40 +884,83 @@ class RunHistoryMixin:
         self.refresh_previous_runs_table()
 
     # ------------------------------------------------------------------
-    # "Main" run (comparison baseline)
+    # Baseline run, one per Previous runs list
     # ------------------------------------------------------------------
-    def _get_main_run_id(self) -> int | None:
-        """run_id of the user-designated main run, or ``None``."""
-        cached = getattr(self, '_main_run_id', None)
-        if cached is not None:
-            return int(cached)
-        try:
-            value = QSettings().value(MAIN_RUN_SETTING, None)
-        except Exception:  # nosec B110 B112
-            value = None
-        if value in (None, ''):
-            return None
-        try:
-            run_id = int(value)
-        except (TypeError, ValueError):
-            return None
-        self._main_run_id = run_id
-        return run_id
+    def _baseline_key(self) -> str:
+        """Key of the list shown: its project, or ``ALL_PROJECTS``."""
+        project = getattr(self, '_shown_runs_project', None)
+        return ALL_PROJECTS if project is None else str(project)
 
-    def _set_main_run_id(self, run_id: int | None) -> None:
-        self._main_run_id = run_id
+    def _baseline_map(self) -> dict[str, int]:
+        """``{list key: run_id}`` from QSettings (cached)."""
+        cached = getattr(self, '_baseline_runs', None)
+        if cached is not None:
+            return cached
+        try:
+            raw = QSettings().value(BASELINE_RUNS_SETTING, '')
+        except Exception:  # nosec B110 B112
+            raw = ''
+        mapping: dict[str, int] = {}
+        try:
+            stored = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            stored = {}
+        if isinstance(stored, dict):
+            for key, value in stored.items():
+                try:
+                    mapping[str(key)] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        self._baseline_runs = mapping
+        return mapping
+
+    def _store_baseline_map(self, mapping: dict[str, int]) -> None:
+        self._baseline_runs = dict(mapping)
         try:
             settings = QSettings()
-            if run_id is None:
-                settings.remove(MAIN_RUN_SETTING)
+            if mapping:
+                settings.setValue(BASELINE_RUNS_SETTING, json.dumps(mapping, sort_keys=True))
             else:
-                settings.setValue(MAIN_RUN_SETTING, int(run_id))
+                settings.remove(BASELINE_RUNS_SETTING)
         except Exception:  # nosec B110 B112
             pass
 
-    def _main_run_meta(self):
-        """``RunMeta`` of the main run, or ``None`` (unset / deleted)."""
-        run_id = self._get_main_run_id()
+    def _get_baseline_run_id(self) -> int | None:
+        """run_id of the baseline of the list shown, or ``None``."""
+        return self._baseline_map().get(self._baseline_key())
+
+    def _set_baseline_run_id(self, run_id: int | None) -> None:
+        """Set (``None``: clear) the baseline of the list shown."""
+        mapping = dict(self._baseline_map())
+        if run_id is None:
+            mapping.pop(self._baseline_key(), None)
+        else:
+            mapping[self._baseline_key()] = int(run_id)
+        self._store_baseline_map(mapping)
+
+    def _prune_baselines(self, all_runs) -> None:
+        """Forget baselines that were deleted from the history or moved to
+        another project (Set project...): a project list's baseline must
+        be one of its runs; the All projects list takes any run."""
+        labels = {r.run_id: r.project_label() for r in all_runs}
+        mapping = self._baseline_map()
+        kept = {
+            key: run_id for key, run_id in mapping.items()
+            if run_id in labels and (key == ALL_PROJECTS or labels[run_id] == key)
+        }
+        if kept != mapping:
+            self._store_baseline_map(kept)
+
+    def _forget_baseline_runs(self, run_ids: set[int]) -> None:
+        """Drop every list's baseline that is one of ``run_ids`` (deleted)."""
+        mapping = self._baseline_map()
+        if not run_ids or not any(v in run_ids for v in mapping.values()):
+            return
+        self._store_baseline_map({k: v for k, v in mapping.items() if v not in run_ids})
+
+    def _baseline_run_meta(self):
+        """``RunMeta`` of the baseline of the list shown, or ``None``."""
+        run_id = self._get_baseline_run_id()
         if run_id is None:
             return None
         from omrat_utils.run_history import RunHistory
@@ -933,13 +969,13 @@ class RunHistoryMixin:
         except Exception:  # nosec B110 B112
             return None
         if run is None:
-            self._set_main_run_id(None)
+            self._forget_baseline_runs({run_id})
         return run
 
     def _on_previous_runs_item_changed(self, item) -> None:
-        """Checkbox in the Main column toggled -> exactly one main run."""
+        """Checkbox in the Baseline column toggled -> at most one baseline."""
         from qgis.PyQt import QtCore
-        if item is None or item.column() != self._RUNS_COL_MAIN:
+        if item is None or item.column() != self._RUNS_COL_BASELINE:
             return
         tw = self.main_widget.TWPreviousRuns
         user_role = _qt_enum(QtCore.Qt, 'UserRole', 'ItemDataRole.UserRole')
@@ -951,21 +987,22 @@ class RunHistoryMixin:
             return
         run_id = int(run_id)
         if item.checkState() == checked:
-            self._set_main_run_id(run_id)
+            self._set_baseline_run_id(run_id)
             was_blocked = tw.blockSignals(True)
             try:
                 for row in range(tw.rowCount()):
-                    other = tw.item(row, self._RUNS_COL_MAIN)
+                    other = tw.item(row, self._RUNS_COL_BASELINE)
                     if other is not None and row != item.row():
                         other.setCheckState(unchecked)
             finally:
                 tw.blockSignals(was_blocked)
-        elif self._get_main_run_id() == run_id:
-            self._set_main_run_id(None)
-        # Re-fill the comparison columns against the new baseline.
+        elif self._get_baseline_run_id() == run_id:
+            self._set_baseline_run_id(None)
+        # Re-fill the run columns against the new baseline.
         self._on_previous_runs_selection_changed()
 
     def _selected_run_ids(self) -> list[int]:
+        """Selected runs in table order (newest first)."""
         from qgis.PyQt.QtCore import Qt
         user_role = _qt_enum(Qt, 'UserRole', 'ItemDataRole.UserRole')
         tw = self.main_widget.TWPreviousRuns
@@ -974,7 +1011,7 @@ class RunHistoryMixin:
         sel_model = tw.selectionModel()
         if sel_model is None:
             return out
-        for idx in sel_model.selectedRows():
+        for idx in sorted(sel_model.selectedRows(), key=lambda i: i.row()):
             item = tw.item(idx.row(), 0)
             if item is None:
                 continue
@@ -985,153 +1022,25 @@ class RunHistoryMixin:
         return out
 
     def _on_previous_runs_selection_changed(self) -> None:
-        """Add / remove comparison columns on TWAccidentResults and
-        TWCatastropheResults to match the rows selected in
-        TWPreviousRuns."""
+        """Show the baseline and the runs selected in TWPreviousRuns in
+        TWAccidentResults and TWCatastropheResults."""
         from omrat_utils.run_history import RunHistory
         run_ids = self._selected_run_ids()
         try:
             self._pb_add_run_to_map.setEnabled(len(run_ids) == 1)
         except Exception:  # nosec B110 B112
             pass
-        if not run_ids:
-            self._reset_accident_table_to_base()
-            self._reset_catastrophe_table_to_base()
-            return
-        try:
-            runs = RunHistory().compare_runs(run_ids)
-        except Exception as exc:
-            QgsMessageLog.logMessage(
-                f'Could not load previous-run details: {exc}',
-                'OMRAT', Qgis.MessageLevel.Warning,
-            )
-            self._reset_accident_table_to_base()
-            self._reset_catastrophe_table_to_base()
-            return
-        if not runs:
-            self._reset_accident_table_to_base()
-            self._reset_catastrophe_table_to_base()
-            return
-        self._fill_result_fields_from_runs(runs)
-        self._fill_catastrophe_table_from_runs(runs)
-
-    def _fill_result_fields_from_runs(self, runs) -> None:
-        """Add one comparison column per selected row in TWPreviousRuns."""
-        from qgis.PyQt.QtWidgets import QTableWidgetItem
-        tw = getattr(self.main_widget, 'TWAccidentResults', None)
-        if tw is None:
-            return
-
-        self._reset_accident_table_to_base()
-        if not runs:
-            return
-
-        current_baseline, delta_header = self._comparison_baseline(tw, runs)
-        baseline_summary = summary_values(
-            dict(zip(self._ACCIDENT_TOTAL_KEYS, current_baseline)),
-        )
-        n_accidents = len(self._ACCIDENT_TOTAL_KEYS)
-
-        view_col = tw.columnCount() - 1
-        for run_idx, run in enumerate(runs):
+        runs = []
+        if run_ids:
             try:
-                totals = run.totals_dict()
-            except Exception:  # nosec B110 B112
-                totals = {}
-            try:
-                run_label = run.name
-            except Exception:  # nosec B110 B112
-                run_label = f'Run {run_idx + 1}'
-
-            tw.insertColumn(view_col)
-            tw.insertColumn(view_col + 1)
-            view_col += 2
-            prob_col = view_col - 2
-            delta_col = view_col - 1
-            tw.setHorizontalHeaderItem(
-                prob_col, QTableWidgetItem(str(run_label)),
-            )
-            tw.setHorizontalHeaderItem(
-                delta_col, QTableWidgetItem(delta_header),
-            )
-
-            for row, key in enumerate(self._ACCIDENT_TOTAL_KEYS):
-                v = totals.get(key)
-                tw.setItem(row, prob_col, QTableWidgetItem(self._format_result(v)))
-                tw.setItem(
-                    row, delta_col,
-                    QTableWidgetItem(
-                        self._format_delta_pct(v, current_baseline[row]),
-                    ),
+                runs = RunHistory().compare_runs(run_ids)
+            except Exception as exc:
+                QgsMessageLog.logMessage(
+                    f'Could not load previous-run details: {exc}',
+                    'OMRAT', Qgis.MessageLevel.Warning,
                 )
-            for offset, v in enumerate(summary_values(totals)):
-                row = n_accidents + offset
-                if row >= tw.rowCount():
-                    break
-                self._set_bold_item(tw, row, prob_col, self._format_result(v))
-                self._set_bold_item(
-                    tw, row, delta_col,
-                    self._format_delta_pct(v, baseline_summary[offset]),
-                )
-
-    def _comparison_baseline(self, tw, runs) -> tuple[list[float | None], str]:
-        """Pick the baseline the delta columns are computed against.
-
-        Priority: the user-designated *main* run (Main checkbox in
-        ``TWPreviousRuns``), then the current model's live values, then
-        the first selected run.
-        """
-        main_run = self._main_run_meta()
-        if main_run is not None:
-            try:
-                main_totals = main_run.totals_dict()
-            except Exception:  # nosec B110 B112
-                main_totals = {}
-            baseline = [main_totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS]
-            return baseline, f'Δ vs main ({main_run.name}) %'
-
-        baseline = self._capture_current_run_baseline(tw)
-        if any(b is not None for b in baseline):
-            return baseline, 'Δ vs current %'
-        try:
-            first_totals = runs[0].totals_dict()
-        except Exception:  # nosec B110 B112
-            first_totals = {}
-        baseline = [first_totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS]
-        return baseline, f'Δ vs {getattr(runs[0], "name", "run 1")} %'
-
-    @staticmethod
-    def _set_bold_item(tw, row: int, col: int, text: str) -> None:
-        from qgis.PyQt.QtWidgets import QTableWidgetItem
-        item = QTableWidgetItem(text)
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
-        tw.setItem(row, col, item)
-
-    def _capture_current_run_baseline(self, tw) -> list[float | None]:
-        """Live annual frequencies of the nine accident rows.
-
-        Taken from the hidden ``LEP*`` widgets (via
-        ``_current_accident_totals``) rather than the visible cells,
-        which may be showing years between incidents.
-        """
-        try:
-            totals = self._current_accident_totals(tw)
-        except Exception:  # nosec B110 B112
-            totals = {}
-        return [totals.get(k) for k in self._ACCIDENT_TOTAL_KEYS]
-
-    @staticmethod
-    def _format_delta_pct(v: Any, base: Any) -> str:
-        try:
-            base_f = float(base) if base is not None else None
-        except (TypeError, ValueError):
-            base_f = None
-        if v is None or base_f is None or base_f == 0:
-            return '—'
-        rel = (float(v) - base_f) / base_f * 100.0
-        return f"{rel:+.1f}%"
+                runs = []
+        self._show_run_comparison(self._baseline_run_meta(), runs)
 
     # ------------------------------------------------------------------
     # Context menu + load-to-map + delete
@@ -1239,9 +1148,8 @@ class RunHistoryMixin:
         if confirm != yes:
             return
         history = RunHistory()
+        self._forget_baseline_runs(set(run_ids))
         for run_id in run_ids:
-            if self._get_main_run_id() == run_id:
-                self._set_main_run_id(None)
             try:
                 history.delete_run(run_id, delete_gpkg=delete_gpkg)
             except Exception as exc:

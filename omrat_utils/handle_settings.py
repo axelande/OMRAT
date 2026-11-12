@@ -50,6 +50,7 @@ class DriftSettings:
         # The blackout-by-ship-type table is created lazily when the dialog
         # is shown (see _ensure_blackout_table).
         self._blackout_table: QTableWidget | None = None
+        self._signals_wired = False
 
     # ------------------------------------------------------------------
     # Wind rose
@@ -159,7 +160,8 @@ class DriftSettings:
         layout = QVBoxLayout(container)
         label = QLabel(
             "Blackout rate per ship type (events per ship-year).\n"
-            "IWRAP defaults: 1.0 for most types, 0.1 for Passenger / Ro-ro / Ro-pax."
+            "Defaults: 0.1 for passenger ships, ro-ro / ro-pax, cruise ships and fast ferries "
+            "(high speed craft), 1.0 for the rest."
         )
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -240,13 +242,6 @@ class DriftSettings:
         anchor_d = parse_decimal(self.dsw.leAnchorMaxDepth.text())
         start_mode_text = self.dsw.cbStartDriftingFrom.currentText().strip().lower()
         start_from = 'leg_center' if start_mode_text.startswith('leg') else 'distribution_center'
-        squat_mode_text = self.dsw.cbSquatMode.currentText().strip().lower()
-        if "drift" in squat_mode_text:
-            squat_mode = 'drift_speed'
-        elif "don" in squat_mode_text:
-            squat_mode = 'none'
-        else:
-            squat_mode = 'average_speed'
         repair: dict[str, str | float | bool] = {'func': self.dsw.leRepairFunc.toPlainText(),
                                                  'std': parse_decimal(self.dsw.leRepairStd.text()),
                                                  'loc': parse_decimal(self.dsw.leRepairLoc.text()),
@@ -254,7 +249,7 @@ class DriftSettings:
                                                  'use_lognormal': self.dsw.rbLogNormal.isChecked()}
         blackout_by_ship_type = self._collect_blackout_from_table()
         self.drift_values = {'drift_p': drift_p, 'anchor_p': anchor_p, 'anchor_d': anchor_d, 'speed': speed,
-                             'start_from': start_from, 'squat_mode': squat_mode, 'rose': rose,
+                             'start_from': start_from, 'rose': rose,
                              'repair': repair,
                              'blackout_by_ship_type': blackout_by_ship_type}
         self.parent.drift_values = self.drift_values
@@ -294,14 +289,6 @@ class DriftSettings:
         start_from = str(self.drift_values.get('start_from', 'leg_center')).lower()
         start_idx = 0 if start_from == 'leg_center' else 1
         self.dsw.cbStartDriftingFrom.setCurrentIndex(start_idx)
-        squat_mode = str(self.drift_values.get('squat_mode', 'average_speed')).lower()
-        if squat_mode == 'drift_speed':
-            squat_idx = 1
-        elif squat_mode == 'none':
-            squat_idx = 2
-        else:
-            squat_idx = 0
-        self.dsw.cbSquatMode.setCurrentIndex(squat_idx)
         self.dsw.leDriftProb.setText(f"{self.drift_values['drift_p']}")
         self.dsw.leRepairFunc.setText(f"{self.drift_values['repair']['func']}")
         self.dsw.leRepairStd.setText(f"{self.drift_values['repair']['std']}")
@@ -339,24 +326,36 @@ class DriftSettings:
     def run(self):
         self.populate_drift()
         self.dsw.show()
-        # Get the button box
+        self._wire_signals()
+        # Show the selected repair model right away (no popup).
+        self.repair.refresh_plot()
+        self.dsw.exec()
+
+    def _wire_signals(self) -> None:
+        """Connect the dialog's signals -- once.
+
+        The dialog object lives as long as the plugin and ``run`` is called
+        on every open; connecting there added another connection per open,
+        so a click on **Test eval** ran (and popped up) once per earlier open.
+        """
+        if getattr(self, '_signals_wired', False):
+            return
+        self._signals_wired = True
         self.buttonBox = self.dsw.findChild(QDialogButtonBox, 'buttonBox')
+        # Test eval checks the selected model and reports with a popup.
+        # Edits only redraw (problems are written in the plot): they fire on
+        # every keystroke, and a radio switch toggles both buttons.
         self.dsw.pbTestRepair.clicked.connect(self.repair.test_evaluate)
-        self.dsw.rbLogNormal.toggled.connect(self.repair.test_evaluate)
-        self.dsw.rbUserDefined.toggled.connect(self.repair.test_evaluate)
-        self.dsw.leRepairStd.textChanged.connect(self.repair.test_evaluate)
-        self.dsw.leRepairLoc.textChanged.connect(self.repair.test_evaluate)
-        self.dsw.leRepairScale.textChanged.connect(self.repair.test_evaluate)
+        self.dsw.rbLogNormal.toggled.connect(self.repair.refresh_plot)
+        self.dsw.leRepairStd.textChanged.connect(self.repair.refresh_plot)
+        self.dsw.leRepairLoc.textChanged.connect(self.repair.refresh_plot)
+        self.dsw.leRepairScale.textChanged.connect(self.repair.refresh_plot)
+        self.dsw.leRepairFunc.textChanged.connect(self.repair.refresh_plot)
         # The rose is checked / normalised on demand only.  The previous
         # editingFinished auto-adjust rewrote the other seven fields on
         # every focus change, so a rose could not be typed in field by field.
         check_btn = getattr(self.dsw, 'pbCheckRose', None)
         if check_btn is not None:
             check_btn.clicked.connect(self.check_rose)
-
-        # Connect the accepted signal to your custom slot
         self.buttonBox.accepted.connect(self.commit_changes)
-
-        # Optionally, connect the rejected signal to a different slot
         self.buttonBox.rejected.connect(self.discard_changes)
-        self.dsw.exec()

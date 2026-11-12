@@ -43,8 +43,9 @@ and give sources for :math:`P_C`:
        chapter, with five worked examples in
        ``drifting/debug/level_1`` ... ``level_5``.
    * - :ref:`collisions`
-     - Head-on, overtaking, crossing, bend collisions (Hansen eq.
-       4.2-4.4, Pedersen).
+     - Head-on, overtaking, crossing, merging, bend collisions (Hansen
+       eq. 4.2-4.5, Pedersen); crossing, merging and bend per pair of
+       routes through a waypoint (:ref:`junctions`).
    * - :ref:`powered`
      - IWRAP Category I + II powered grounding + allision
        (:math:`N_I = P_c Q m` in the lane,
@@ -77,6 +78,10 @@ published studies use unless there's local data.
      - :math:`1.3 \times 10^{-4}`
      - :math:`1.2 \times 10^{-4}`
      - Pedersen value.
+   * - Merging collision
+     - :math:`1.3 \times 10^{-4}`
+     - --
+     - Crossing value; IWRAP has no separate figure.
    * - Bend collision
      - :math:`1.3 \times 10^{-4}`
      - --
@@ -94,16 +99,21 @@ published studies use unless there's local data.
      - --
      - No avoidance -- the ship is powerless.
 
-Local adjustment factors are typically applied on top:
+One reduction is built in, as in IWRAP: **passenger ships and fast
+ferries** have their own reduction factor :math:`F` (default 20, two
+navigators, well-known route; 1 = none).  In a ship-ship encounter the
+causation factor is divided by :math:`\sqrt{F}` for every such ship in
+it; their powered grounding and allision frequency is divided by
+:math:`F`.  Drifting is not affected.  See :ref:`collisions`.
 
-* **Ferry / passenger vessels** -- divide by 20 (two navigators,
-  well-known route).
+Other local adjustment factors are typically applied on top by hand:
+
 * **Pilot on board** -- divide by 3 (COWIconsult).
 * **Poor visibility (3-10 %)** -- multiply by 2.
 * **Poor visibility (10-30 %)** -- multiply by 8.
 
-Adjust these in **Settings -> Causation Factors** if your project
-needs them.
+Adjust these, and the reduction factors, in **Settings -> Causation
+Factors** if your project needs them.
 
 
 Lateral traffic distribution
@@ -114,12 +124,14 @@ three Gaussian components and one uniform component:
 
 .. math::
 
-   f(z) = \sum_{i=1}^{3} w_i \; \phi\!\left(\frac{z - \mu_i}{\sigma_i}\right)
+   f(z) = \sum_{i=1}^{3} \frac{w_i}{\sigma_i} \; \phi\!\left(\frac{z - \mu_i}{\sigma_i}\right)
         + w_u \; U(z; a, b)
 
 where
 
 * :math:`z` is the lateral distance from the leg centreline (m),
+  negative = starboard of the drawn direction (``Start_Point ->
+  End_Point``), on the same axis for both directions,
 * :math:`w_i`, :math:`\mu_i`, :math:`\sigma_i` are the weight, mean,
   and standard deviation of Gaussian :math:`i`,
 * :math:`w_u` is the weight of the uniform component on
@@ -131,7 +143,12 @@ stored per segment per direction (``mean1_1``, ``std1_1``,
 ``weight1_1``, ``u_min1``, ``u_max1``, ``u_p1``, etc.).
 
 Implemented in
-:func:`compute.data_preparation.get_distribution`.
+:func:`compute.data_preparation.get_distribution` (drifting) and
+:func:`geometries.distribution_curves.mixture` (ship-ship collisions,
+powered rays and the curves on the tangent line; it normalises the
+weights by their sum, uniform part included).  Head-on and overtaking
+sum the lateral overlap over every pair of components, and the powered
+rays span the whole mixture.
 
 
 Coordinate systems
@@ -143,9 +160,19 @@ Coordinate systems
   the zone from the study-area centroid and projects once per run.
 
 The drifting model lives in UTM end-to-end.  The powered model uses
-a cheaper per-project **equirectangular** projection centred on the
-first leg's start point (``SimpleProjector``), which is fine at the
-per-leg length scale where rays travel tens of kilometres.
+a light **transverse Mercator** projection centred on the model
+(``ModelProjector``: about the centre of the legs' bounding box, with the
+ellipsoid's radii of curvature there), right within 0.05 % over an area
+the size of the Kattegat.  Until 2026-11-09 it was an equirectangular
+projection around the *first* leg's start point (``SimpleProjector``):
+east-west distances 1.2 degrees of latitude away came out 3.3 % short, and
+reordering the route table changed the powered results (on the Kattegat
+model powered allision by 23 %).  Since 2026-11-12 the ship-ship
+collision model takes the courses at a waypoint (crossing, merging and
+bend angles) and the junction matrices' geometric defaults take their
+deflection angles in the same projection; before, they used raw
+longitude / latitude differences, which distort angles away from
+north-south and east-west at high latitude.
 
 
 Compass convention

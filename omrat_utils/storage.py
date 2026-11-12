@@ -363,7 +363,6 @@ class Storage:
             drift['anchor_p'] = 0.7
         drift.setdefault('anchor_d', drift.get('anchor_depth', 0))
         drift.setdefault('start_from', 'leg_center')
-        drift.setdefault('squat_mode', 'average_speed')
         if 'blackout_by_ship_type' in drift and isinstance(drift['blackout_by_ship_type'], dict):
             converted: dict[int, float] = {}
             for k, v in drift['blackout_by_ship_type'].items():

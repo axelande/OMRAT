@@ -35,8 +35,18 @@ def _is_qgis_available() -> bool:
         return False
 
 
-def get_distribution(segment_data: dict[str, Any], direction: int) -> tuple[list[Any], list[float]]:
+def get_distribution(segment_data: dict[str, Any], direction: int,
+                     mirror: bool = False) -> tuple[list[Any], list[float]]:
+    """Lateral distribution of one direction: three normals + the uniform part.
+
+    The stored values are on the leg's lateral axis, positive = left of the
+    *drawn* direction, for both directions.  ``mirror=True`` returns them on
+    the axis of the reversed line (positive = left of ``End_Point ->
+    Start_Point``): the drift model draws direction 2 as the reversed line
+    and measures the offset to its own left (``clean_traffic``).
+    """
     d = direction + 1  # given as 0, 1 and should be 1, 2
+    sign = -1.0 if mirror else 1.0
     distributions: list[Any] = []
     weights: list[float] = []
 
@@ -44,7 +54,7 @@ def get_distribution(segment_data: dict[str, Any], direction: int) -> tuple[list
         if f'weight{d}_{i}' in segment_data:
             std_val = float(segment_data[f'std{d}_{i}'])
             if segment_data[f'weight{d}_{i}'] > 0 and std_val > 0 and np.isfinite(std_val):
-                di = norm(loc=float(segment_data[f'mean{d}_{i}']), scale=std_val)
+                di = norm(loc=sign * float(segment_data[f'mean{d}_{i}']), scale=std_val)
                 distributions.append(di)
                 weights.append(float(segment_data[f'weight{d}_{i}']))
             else:
@@ -56,6 +66,8 @@ def get_distribution(segment_data: dict[str, Any], direction: int) -> tuple[list
     if float(segment_data.get(f'u_p{d}', 0)) > 0:
         low = float(segment_data[f'u_min{d}'])
         high = float(segment_data[f'u_max{d}'])
+        if mirror:
+            low, high = -high, -low
         distributions.append(uniform(loc=low, scale=high - low))
         weights.append(float(segment_data[f'u_p{d}']))
     else:
@@ -65,11 +77,22 @@ def get_distribution(segment_data: dict[str, Any], direction: int) -> tuple[list
 
 
 def clean_traffic(data: dict[str, Any]) -> list[tuple[LineString, list[Any], list[float], list[dict[str, float]], str]]:
-    """List all ships that on each segment/direction"""
+    """List all ships that on each segment/direction (the drift model's input).
+
+    A cell's ``draught`` includes the squat at its speed when **Causation
+    factors > Squat in drifting grounding** is ticked (``compute/squat.py``);
+    ``anchor_draught`` is the static draught.
+    """
+    from compute.squat import KEY_DRIFTING, squat_for_row, squat_on, type_names as _type_names
+    with_squat = squat_on(data.get('pc'), KEY_DRIFTING)
+    type_names = _type_names(data)
     traffics: list[tuple[LineString, list[Any], list[float], list[dict[str, float]], str]] = []
     for segment, dirs in data["traffic_data"].items():
         for k, (di, var) in enumerate(dirs.items()):
-            distributions, weights = get_distribution(data["segment_data"][segment], k)
+            # Direction 2 is drawn as the reversed line below; its lateral
+            # offsets go on that line's own left axis (before 2026-11-10 they
+            # were read on the drawn axis, so direction 2 sailed mirrored).
+            distributions, weights = get_distribution(data["segment_data"][segment], k, mirror=k == 1)
             if k == 0:
                 geom_base: BaseGeometry = sw.loads(
                     f'LineString({data["segment_data"][segment]["Start_Point"]},'
@@ -91,9 +114,13 @@ def clean_traffic(data: dict[str, Any]) -> list[tuple[LineString, list[Any], lis
                     if isinstance(value, str):
                         value = int(value)
                     if value > 0:
+                        speed = float(var['Speed (knots)'][i][j])
+                        draught = float(var['Draught (meters)'][i][j])
+                        squat = squat_for_row(type_names, i, speed) if with_squat else 0.0
                         info: dict[str, float] = {'freq': value,
-                                                  'speed': float(var['Speed (knots)'][i][j]),
-                                                  'draught': float(var['Draught (meters)'][i][j]),
+                                                  'speed': speed,
+                                                  'draught': draught + squat,
+                                                  'anchor_draught': draught,
                                                   'height': float(var['Ship heights (meters)'][i][j]),
                                                   'ship_type': i,
                                                   'ship_size': j,

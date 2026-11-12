@@ -131,11 +131,13 @@ def allision_report_from_computations(
     ``_build_legs_and_obstacles`` (split ids + heights) -- then this is
     the figure ``run_powered_allision_model`` produced.
     """
-    from compute.powered_model import PoweredModelMixin, _pc_pair
+    from compute.powered_model import PoweredModelMixin, _pc_pair, powered_type_scale
     pc_vals = data.get('pc') if isinstance(data.get('pc'), dict) else {}
     pc_cat2, pc_cat1 = _pc_pair(pc_vals, 'allision')
     heights = {str(o.get('id')): _f(o.get('height')) for o in object_geoms or []}
-    acc = PoweredModelMixin()._sum_allision_contribs(
+    host = PoweredModelMixin()
+    host._powered_type_scale = powered_type_scale(dict(data))   # as run_powered_allision_model
+    acc = host._sum_allision_contribs(
         computations, data.get('traffic_data') or {}, heights, pc_cat2, pc_cat1,
     )
     return acc.report('allision', pc_cat2, pc_cat1)

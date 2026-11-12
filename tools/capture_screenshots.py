@@ -57,12 +57,14 @@ import time
 from pathlib import Path
 
 from qgis.PyQt import QtCore, QtGui, QtWidgets
-from qgis.core import QgsApplication, QgsProject
+from qgis.core import QgsProject
 from qgis.utils import iface, plugins
+
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+
 
 def _find_repo_root() -> Path:
     """Return the OMRAT repository root.
@@ -128,10 +130,10 @@ DOCK_WIDTH = 520
 DOCK_HEIGHT = 820
 
 
-
 # ---------------------------------------------------------------------------
 # Plugin bootstrap
 # ---------------------------------------------------------------------------
+
 
 def find_or_load_plugin():
     """Return the live OMRAT plugin instance, loading it if needed."""
@@ -812,10 +814,14 @@ def capture_canvas_and_results(plugin, run_model: bool = False) -> None:
             print(f'  WARN: accident-results setup failed: {exc}')
 
         tw = getattr(dock, 'TWAccidentResults', None)
-        if tw is not None and tw.rowCount() >= len(fake_probs):
-            from qgis.PyQt import QtWidgets as _qtw
-            for row, txt in enumerate(fake_probs):
-                tw.setItem(row, 1, _qtw.QTableWidgetItem(txt))
+        render = getattr(plugin, '_render_accident_comparison', None)
+        if tw is not None and callable(render):
+            # The table shows saved runs only: draw the numbers as one
+            # (unsaved) example run column.
+            from omrat_utils.accident_summary import ACCIDENT_TOTAL_KEYS
+            from omrat_utils.result_compare import RunValues, accident_values
+            totals = {k: float(v) for k, v in zip(ACCIDENT_TOTAL_KEYS, fake_probs)}
+            render(None, [RunValues('Example run', accident_values(totals))])
         else:
             print('  WARN: TWAccidentResults missing / unconfigured; '
                   'ui_results_filled will show empty cells')
@@ -946,7 +952,7 @@ def capture_quickstart(plugin) -> None:
         settings.setExtent(canvas.extent())
         settings.setDestinationCrs(canvas.mapSettings().destinationCrs())
         settings.setLayers([
-            l for l in QgsProject.instance().mapLayers().values() if l is not None
+            lyr for lyr in QgsProject.instance().mapLayers().values() if lyr is not None
         ])
         settings.setBackgroundColor(QtGui.QColor('white'))
         painter = QtGui.QPainter(img)

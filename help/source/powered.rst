@@ -41,9 +41,9 @@ Current implementation notes:
 
 .. container:: source-code-ref pipeline
 
-   **Grounding pipeline:** ``compute/powered_model.py:417`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L417>`__ |
-   **Allision pipeline:** ``compute/powered_model.py:458`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L458>`__ |
-   **Exponential decay:** ``compute/basic_equations.py:96`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L96>`__
+   **Grounding pipeline:** ``compute/powered_model.py:523`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L523>`__ |
+   **Allision pipeline:** ``compute/powered_model.py:569`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L569>`__ |
+   **Exponential decay:** ``compute/basic_equations.py:102`` -- `powered_na() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L102>`__
 
 
 Category I: Direct Overlap
@@ -84,7 +84,7 @@ are the mean and standard deviation of the lateral position distribution.
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:754`` -- `get_powered_grounding_cat1() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L754>`__
+   ``compute/basic_equations.py:778`` -- `get_powered_grounding_cat1() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L778>`__
 
 .. literalinclude:: ../../compute/basic_equations.py
    :language: python
@@ -108,9 +108,11 @@ OMRAT evaluates the integral numerically with the same ray caster as
 Category II (see :ref:`shadow-ray-casting` below), so shadowing and
 arbitrary polygon shapes come for free:
 
-1. For each leg and direction, cast ``N_RAYS = 1000`` rays *parallel to
-   the leg* from the waypoint the ships come from, each carrying the
-   mass :math:`m_i = f(z_i)\,\Delta z` of its lateral offset.
+1. For each leg and direction, cast rays *parallel to the leg* from the
+   waypoint the ships come from, across the direction's whole lateral
+   distribution (``N_RAYS = 1000`` for one normal component, more for a
+   wider mixture; see :ref:`ray-sampling`), each carrying the mass
+   :math:`m_i = f(z_i)\,\Delta z` of its lateral offset.
 2. Clip every ray at the leg length.  An obstacle past the far
    waypoint is Category II territory for this leg; an obstacle whose
    near face lies inside the leg is hit before the turn and counts
@@ -140,8 +142,8 @@ Right after the origin waypoint the parallel-ray picture is wrong: the
 ships are still arriving from the previous leg, and their lateral
 position is not yet described by this leg's fitted distribution.  An
 obstacle lying next to a junction would otherwise collect the far tail
-of the distribution of a leg whose ships never sail there.  In the ESCOW
-case study a wind farm 5 km from a junction received 88 % of its powered
+of the distribution of a leg whose ships never sail there.  In one case
+study a wind farm 5 km from a junction received 88 % of its powered
 allision from the East-going flow of the leg *leaving* that junction:
 the park began 2.4σ to starboard of the fitted mean and the 0.8 % tail
 beyond it, times 10,000 ships a year and the causation factor, gave
@@ -227,7 +229,7 @@ Where:
 
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:792`` -- `get_powered_grounding_cat2() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L792>`__
+   ``compute/basic_equations.py:816`` -- `get_powered_grounding_cat2() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L816>`__
 
 .. literalinclude:: ../../compute/basic_equations.py
    :language: python
@@ -254,9 +256,16 @@ For a ship travelling at 10 knots (~5.1 m/s):
 
    a = 3 \times 60 \times 5.1 \approx 920 \text{ m}
 
+In the model the interval is entered in **seconds** per leg and
+direction (``ai1`` / ``ai2``, **Mean time between checks**; default
+180 s = 3 minutes), and :math:`V` is the speed of each traffic cell at
+the turning point (lower there when the waypoint lies in a speed
+restriction zone, see :ref:`speed-restriction-zones`).  A direction with
+``ai <= 0`` gets no Category II.
+
 .. container:: source-code-ref
 
-   ``compute/basic_equations.py:730`` -- `get_recovery_distance() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L730>`__
+   ``compute/basic_equations.py:754`` -- `get_recovery_distance() <https://github.com/axelande/OMRAT/blob/main/compute/basic_equations.py#L754>`__
 
 Exponential Decay
 -----------------
@@ -292,8 +301,11 @@ Shadow-Aware Ray Casting
 The Category II equations above describe the probability for a
 *single ray* from the turning point to a single obstacle. In practice,
 the lateral traffic distribution means ships may be at any lateral
-offset when they miss the turn. OMRAT evaluates this by casting
-**1000 rays** across the lateral distribution, from :math:`\mu - 6\sigma` to :math:`\mu + 6\sigma`.
+offset when they miss the turn. OMRAT evaluates this by casting rays
+across the whole lateral distribution -- **1000 rays** for one normal
+component, up to 3,000 for a wider mixture -- from the lowest
+:math:`\mu - 6\sigma` to the highest :math:`\mu + 6\sigma` of its
+components (see :ref:`ray-sampling`).
 
 .. image:: _static/images/shadow_ray_casting.svg
    :width: 100%
@@ -304,13 +316,18 @@ The Algorithm
 
 For each leg and direction (turning point + extension direction):
 
-1. **Sample the lateral distribution**: Generate ``N_RAYS = 1000``
-   equally spaced offsets from :math:`\mu - 6\sigma` to
-   :math:`\mu + 6\sigma` (``compute/ray_sampling.py``), where :math:`\mu` and :math:`\sigma` are
-   the lateral distribution parameters.
+1. **Sample the lateral distribution**: Generate equally spaced offsets
+   from the lowest :math:`\mu_k - 6\sigma_k` to the highest
+   :math:`\mu_k + 6\sigma_k` of the direction's normal components (the
+   uniform part's bounds included) -- ``mixture_rays`` in
+   ``compute/ray_sampling.py``.  One component gets ``N_RAYS = 1000``
+   rays; a wider mixture gets more, up to 3,000, so the narrowest
+   component keeps a spacing of 0.012 :math:`\sigma`.
 
 2. **Compute PDF weights**: For each offset :math:`z_i`, evaluate the
-   normal PDF and multiply by the spacing:
+   mixture density (the normal components with their weights plus the
+   uniform part, as drawn on the tangent line) and multiply by the
+   spacing:
 
    .. math::
 
@@ -333,16 +350,28 @@ For each leg and direction (turning point + extension direction):
    - **mass** = sum of :math:`m_i` for all rays that hit it (first)
    - **weighted distance** = :math:`\sum m_i \times d_i`
    - **mean distance** = weighted distance / mass
-   - **probability integral** = :math:`\sum m_i \times \exp(-d_i / a)`
+   - the rays themselves (``ray_masses``, ``ray_dists``), and the same
+     split per boundary edge that was hit (``edges``), which the result
+     layer uses to colour the edges; an obstacle's edges sum to its
+     total.
 
-6. **Compute final probability**: For each obstacle:
+   Every obstacle has its own id -- a MultiPolygon is split into
+   ``<id>_<i>`` and a repeated id gets ``#2``, ``#3``, ... -- so two
+   polygons are never added up as one obstacle.
+
+6. **Compute final probability**: For each obstacle and traffic cell,
+   summed **ray by ray** (``cat2_probability``):
 
    .. math::
 
-      P_{\text{obs}} = P_C \times Q \times \text{mass}
-        \times \exp\!\left(-\frac{d_{\text{mean}}}{a}\right)
+      P_{\text{obs}} = P_C \times Q \times \sum_{r \in \text{obs}} m_r
+        \exp\!\left(-\frac{d_r}{a}\right)
 
-   Where :math:`a = \lambda \times V` is the recovery distance.
+   Where :math:`a = \lambda \times V` is the recovery distance of that
+   cell.  Until 2026-11-09 the model used
+   :math:`\text{mass} \times \exp(-d_{\text{mean}} / a)`; because the
+   exponential is convex that understated the probability, the more so
+   the larger the obstacle polygon.
 
 Performance Optimization (Depth-Bin Caching)
 --------------------------------------------
@@ -350,8 +379,9 @@ Performance Optimization (Depth-Bin Caching)
 Powered grounding now groups ships by an **effective depth bin**:
 
 1. Extract unique depth contour values from ``depths``.
-2. Map each ship draught to the deepest contour that is still shallower
-   than or equal to that draught.
+2. Map each ship draught (plus its squat, see
+   `Draft Filtering for Grounding`_) to the deepest contour that is
+   still shallower than or equal to that draught.
 3. Run expensive shadow/ray computations **once per bin**, then reuse
    results for all ship classes mapped to that bin.
 
@@ -360,13 +390,12 @@ significantly reduces runtime on projects with many draught entries.
 
 .. container:: source-code-ref
 
-   ``compute/powered_model.py:85`` -- depth-bin grouping and caching in `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L85>`__ |
-   ``compute/powered_model.py:114`` -- per-bin progress updates |
-   ``compute/powered_model.py:178`` -- ship draught -> cached bin mapping
+   ``compute/powered_model.py:336`` -- `_precompute_bin_results() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L336>`__ (depth bins, one ray cast per bin, per-bin progress) |
+   ``compute/powered_model.py:366`` -- `_sum_grounding_contribs() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L366>`__ (ship draught -> cached bin)
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:415`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L415>`__
+   ``geometries/get_powered_overlap.py:466`` -- `_compute_cat2_with_shadows() <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L466>`__
 
 
 Shadow Effect
@@ -421,23 +450,32 @@ ship's draught:
 
 .. math::
 
-   \text{Hazard if:} \quad \text{depth} \leq T_{\text{ship}}
+   \text{Hazard if:} \quad \text{depth} \leq T_{\text{ship}} + S
 
-Where :math:`T_{\text{ship}}` is the ship's draught in metres.
+Where :math:`T_{\text{ship}}` is the ship's draught in metres and
+:math:`S` its squat.  **Add squat to the draught in powered grounding**
+(**Settings > Causation factors**, on by default) adds Barras'
+open-water squat :math:`S = C_b V^2 / 100` (:math:`V` in knots, the
+cell's speed on the leg; :math:`C_b` from the ship type's name,
+``compute/squat.py``); unticked, :math:`S = 0`.  A traffic cell with
+ships but no draught is filled before every run (see
+:ref:`traffic-gaps`); the model itself falls back to 5 m.
 
 Since different ship types have different draughts, the set of
 obstacles varies per ship type. A large tanker with :math:`T = 15` m
 faces more grounding hazards than a small ferry with :math:`T = 4` m.
 
 To avoid running the expensive ray-casting computation once per ship
-type, OMRAT groups ships by **unique draught values**:
+type, OMRAT groups ships by **depth bin**:
 
-1. Collect all unique draughts from the traffic data
-2. For each unique draught, filter depth areas to those
-   :math:`\leq T` and build the obstacle list
-3. Run the shadow-aware ray casting once per draught bracket
-4. When summing per-ship-type contributions, look up the
-   pre-computed results for the closest matching draught bracket
+1. Collect all unique draughts (plus squat) from the traffic data
+2. Map each to its bin: the deepest depth class that is not deeper
+   than the draught
+3. For each bin, filter depth areas to those :math:`\leq` the bin
+   depth, build the obstacle list and run the shadow-aware ray casting
+   once
+4. When summing per-cell contributions, look up the pre-computed
+   results of the cell's bin
 
 For powered **allision** (hitting structures above water), draft
 filtering does not apply -- all objects are obstacles regardless of
@@ -445,7 +483,7 @@ ship draught.
 
 .. container:: source-code-ref
 
-   ``compute/powered_model.py:215`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L215>`__
+   ``compute/powered_model.py:302`` -- `_collect_draught_set() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L302>`__
 
 
 Computation Pipeline
@@ -460,23 +498,26 @@ Grounding Pipeline
 
 ::
 
-   1. Build equirectangular projector from first segment
-   2. Collect all unique draughts from traffic data
-   3. For each unique draught:
-      a. Filter depth areas to those <= draught
-      b. Build projected obstacle list
+   1. Build the projector centred on the model (ModelProjector)
+   2. Collect all unique draughts (+ squat, if ticked) from traffic data
+   3. Map them to depth bins; for each bin:
+      a. Filter depth areas to those <= bin depth
+      b. Build projected obstacle list (one id per polygon)
       c. Run _run_all_computations():
-         For each (leg, direction):
+         For each (leg, direction) with traffic:
            - Determine turning point and extension direction
-           - Cat II: cast 1000 rays from the turning point onwards
-           - Cat I:  cast 1000 rays along the leg, clipped at its length
+           - Cat II: cast 1000-3000 rays over the lateral mixture,
+                     from the turning point onwards (up to 50 km)
+           - Cat I:  cast the same rays along the leg, clipped at its
+                     length, skipping the start zone
            - First-hit logic assigns each ray to nearest obstacle
-           - Accumulate mass and mean distance per obstacle and category
-   4. For each (leg, direction, LOA class, ship type):
-      a. Get ship frequency Q, speed V, draught T, check interval ai
-      b. Look up shadow results for closest draught bracket
+           - Accumulate the hit rays per obstacle, edge and category
+   4. For each (leg, direction, ship type, length class) cell with ships:
+      a. Get ship frequency Q (/ F for passenger ships and fast ferries),
+         speed V at the turning point, draught T (+ squat), interval ai
+      b. Look up the ray-cast results of T's depth bin
       c. For each obstacle hit:
-         Cat II: total += Pc_II * Q * mass * exp(-d_mean / (ai * V))
+         Cat II: total += Pc_II * Q * sum_r m_r * exp(-d_r / (ai * V))   (ray by ray)
          Cat I:  total += Pc_I  * Q * mass
 
 Allision Pipeline
@@ -486,14 +527,16 @@ The allision pipeline is simpler because no draft filtering is needed:
 
 ::
 
-   1. Build equirectangular projector from first segment
+   1. Build the projector centred on the model (ModelProjector)
    2. Build projected obstacle list (all objects, ignore depths)
    3. Run _run_all_computations() once for all obstacles (Cat I + II)
-   4. For each (leg, direction, LOA class, ship type):
-      a. Get ship frequency Q, speed V, check interval ai, ship height
-      b. Skip obstacles the ship clears (ship height < structure height)
+   4. For each (leg, direction, ship type, length class) cell with ships:
+      a. Get ship frequency Q (/ F for passenger ships and fast ferries),
+         speed V at the turning point, check interval ai, ship height
+      b. Skip obstacles the ship clears (ship height < structure height;
+         a height of 0 or inf is unknown and gets no clearance)
       c. For each obstacle hit:
-         Cat II: total += Pc_II * Q * mass * exp(-d_mean / (ai * V))
+         Cat II: total += Pc_II * Q * sum_r m_r * exp(-d_r / (ai * V))   (ray by ray)
          Cat I:  total += Pc_I  * Q * mass
 
 Per-Ship-Type Parameters
@@ -512,12 +555,24 @@ Key parameters that vary per ship type:
    * - Traffic frequency
      - :math:`Q` (ships/year)
      - Linear scaling of risk
+   * - Ship type
+     - --
+     - Passenger ships and fast ferries: :math:`Q` divided by the
+       reduction factor :math:`F` (``pc['passenger_reduction']`` /
+       ``pc['fast_ferry_reduction']``, default 20 as in IWRAP; 1 = none;
+       **Settings > Causation factors**).  Also sets the block
+       coefficient of the squat.
    * - Ship speed
      - :math:`V` (m/s)
-     - Affects recovery distance :math:`a = \lambda \times V`
+     - Affects recovery distance :math:`a = \lambda \times V` (Category
+       II only; the speed at the turning point).  A missing speed is
+       filled before the run, else 10 knots.
    * - Ship draught
      - :math:`T` (m)
      - Determines which depths are hazards (grounding only)
+   * - Ship height
+     - (m)
+     - Clearance under a structure (allision only, when known)
    * - Position check interval
      - :math:`\lambda` (seconds)
      - Affects recovery distance; set per segment direction
@@ -529,8 +584,8 @@ a short recovery distance, so the exponential drops off quickly.
 
 .. container:: source-code-ref pipeline
 
-   ``compute/powered_model.py:417`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L417>`__ |
-   ``compute/powered_model.py:458`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L458>`__
+   ``compute/powered_model.py:523`` -- `run_powered_grounding_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L523>`__ |
+   ``compute/powered_model.py:569`` -- `run_powered_allision_model() <https://github.com/axelande/OMRAT/blob/main/compute/powered_model.py#L569>`__
 
 
 .. _powered-visualization:
@@ -543,6 +598,16 @@ rows opens an interactive dialog for the run selected in **Previous
 runs**, implemented by ``PoweredOverlapVisualizer``.  It shows the
 shadow-aware ray-casting results in four panels, with a table on the
 right and a matplotlib toolbar (pan / zoom / save) above the figure.
+The dialog casts the rays again from the run's input snapshot, on the
+model's projection and with the project's Cat I start zone and speed
+restriction zones, so its panels show what the model counted.
+
+For grounding, the model casts the rays once per *depth bin*: a ship
+grounds on every depth area not deeper than its draught (plus squat
+when that box is ticked), so ships of different draughts see different
+obstacles.  **Obstacles: depth areas down to** above the figure picks
+the bin the panels show, the deepest one in the traffic first.  The
+table's frequencies are the model's, summed over every bin.
 
 Leg table
 ---------
@@ -610,8 +675,9 @@ Cat II panels (bottom right)
   gives each obstacle's mass and mean distance :math:`d`.
 - **Probability** (lower, same x-axis): the survival curve
   :math:`\exp(-d / (a_i V))` on a log scale.  For each obstacle the
-  open marker is the survival at :math:`d_{mean}`, the filled marker
-  :math:`P_{II} = \text{mass} \times \text{survival}`; the label spells
+  open marker is its mean survival over the rays that hit it, the
+  filled marker :math:`P_{II} = \sum_r m_r \exp(-d_r / (a_i V))` =
+  mass x mean survival, at the obstacle's mean distance; the label spells
   out the product.  The title shows the recovery distance
   :math:`a_i V`.
 
@@ -621,7 +687,7 @@ obstacle leaves little mass for those further away.
 
 .. container:: source-code-ref
 
-   ``geometries/get_powered_overlap.py:869`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L869>`__
+   ``geometries/get_powered_overlap.py:946`` -- `PoweredOverlapVisualizer <https://github.com/axelande/OMRAT/blob/main/geometries/get_powered_overlap.py#L946>`__
 
 
 Combined Powered Risk
@@ -643,9 +709,9 @@ decay computed by the ray-casting algorithm. The summation runs over:
 - All ship types (LOA class x type category)
 
 The ``powered_model.py`` module orchestrates this computation. The
-shadow-aware geometry (mass and mean distance per obstacle) is computed
-once per unique draught bracket, then reused across all ship types
-with that draught.
+shadow-aware geometry (the rays that hit each obstacle) is computed
+once per depth bin, then reused across all traffic cells whose
+draught falls in that bin.
 
 
 Comparison with Drifting Risk
@@ -713,16 +779,23 @@ Causation Factor Summary
 Ray span and ray count
 ----------------------
 
-Both categories sample the lateral distribution with ``N_RAYS = 1000``
-rays between :math:`\mu - 6\sigma` and :math:`\mu + 6\sigma` of the
-direction's first normal component (``compute/ray_sampling.py``).  Until
+Both categories sample the direction's **whole lateral distribution** --
+every normal component with its weight and the uniform part, the curve
+drawn on the tangent line -- with rays from the lowest
+:math:`\mu - 6\sigma` to the highest :math:`\mu + 6\sigma` of its
+components (``compute/ray_sampling.py``).  Each ray carries the share of
+ships the distribution puts there.  A single normal component gets
+``N_RAYS = 1000`` rays (0.012 :math:`\sigma` apart); a wider mixture gets
+more, so the narrowest component keeps that spacing, up to 3,000.  Until
+2026-11-09 only the first normal component was cast, with all the ships,
+so the ships of a second lane were counted in the first one.  Until
 2026-10-02 the span was :math:`4\sigma` with 500 rays; the mass of a
 normal beyond :math:`4\sigma` is 6.3e-5 per side, which on a 10,000
 ships-a-year leg is an accident frequency of the order of 1e-4 per year
-once an obstacle sits out there, more than a whole Category II total on
-the ESCOW project.  Doubling the ray count keeps the spacing finer than
-before (0.012 :math:`\sigma` against 0.016).  Powered grounding time
-grows with the ray count: on the ESCOW project from 117 s to about
+once an obstacle sits out there, more than a whole Category II total in
+a wind farm case study.  Doubling the ray count keeps the spacing finer
+than before (0.012 :math:`\sigma` against 0.016).  Powered grounding
+time grows with the ray count: in that case study from 117 s to about
 200 s.
 
 The two figures are constants, not project settings, and every results

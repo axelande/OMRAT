@@ -95,8 +95,16 @@ def build_zone(omrat: "OMRAT", length_m: float) -> tuple[Any, list[dict[str, Any
 
 
 def suggested_limit(omrat: "OMRAT", rows: list[list[str]]) -> tuple[float | None, float | None]:
-    """``(detail limit, deepest draught)`` suggested from the traffic."""
-    draught = max_traffic_draught(getattr(omrat, 'traffic_data', None))
+    """``(detail limit, deepest draught)`` suggested from the traffic (squat included)."""
+    names = None
+    try:
+        names = omrat.drift_settings._project_type_names()
+    except Exception:  # nosec B110 -- no settings handler (tests): index-based block coefficients
+        names = None
+    from compute.squat import KEY_DRIFTING, KEY_POWERED, squat_on
+    pc = getattr(getattr(omrat, 'causation_f', None), 'data', None)
+    with_squat = squat_on(pc, KEY_DRIFTING) or squat_on(pc, KEY_POWERED)
+    draught = max_traffic_draught(getattr(omrat, 'traffic_data', None), with_squat, names)
     return suggest_detail_limit(class_values(rows), draught), draught
 
 
@@ -308,7 +316,7 @@ class DepthSimplifyDialog(QDialog):
         else:
             self.lblLimitHint.setText(
                 f'Suggested {limit:g} m: the first class deeper than the deepest draught in the traffic '
-                f'({draught:.1f} m).  A class value is the shallow edge of its band.')
+                f'({draught:.1f} m, squat included).  A class value is the shallow edge of its band.')
         self.cbQuantile.blockSignals(True)
         self.cbQuantile.setCurrentIndex(REPAIR_QUANTILES.index(DEFAULT_REPAIR_QUANTILE))
         self.cbQuantile.blockSignals(False)

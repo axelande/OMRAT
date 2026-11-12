@@ -2,11 +2,12 @@
 
 * ``_auto_save_run`` writes a ``<stem>.consequence.json`` sidecar next to
   the per-run GeoPackage;
-* selecting rows in ``TWPreviousRuns`` adds one exceedance + one delta
-  column per run to ``TWCatastropheResults`` (mirroring the accident
-  table), read from that sidecar;
-* runs without a sidecar show a dash; clearing the selection restores the
-  live three-column layout.
+* ``TWCatastropheResults`` shows saved runs only (mirroring the accident
+  table, 2026-11-09): the ticked baseline once, values only, then each
+  other selected run with its exceedance and its change, read from that
+  sidecar; no baseline -> values only;
+* runs without a sidecar show a dash; an empty selection leaves only the
+  two fixed columns.
 """
 from __future__ import annotations
 
@@ -124,104 +125,130 @@ class TestSidecarWriter:
         assert load_consequence_sidecar(RunMeta(run_id=2, name='x', timestamp='t')) is None
 
 
+def _tick_baseline(omrat, run_id) -> None:
+    """Tick Baseline on the run's row, as a user would."""
+    from qgis.PyQt.QtCore import Qt
+    tw = omrat.main_widget.TWPreviousRuns
+    tw.item(_row_of(tw, run_id), 1).setCheckState(Qt.CheckState.Checked)
+
+
+def _headers(tw) -> list[str]:
+    return [tw.horizontalHeaderItem(c).text() for c in range(tw.columnCount())]
+
+
+FIXED = ['Catastrophe level', 'Threshold (m^3)']
+
+
 class TestCatastropheCompare:
-    def test_selected_run_fills_columns_from_sidecar(self, omrat, history, tmp_path):
-        omrat._main_run_id = None
+    def test_selected_run_fills_rows_and_values(self, omrat, history, tmp_path):
+        omrat._baseline_runs = None
         rid = _save_run_with_sidecar(history, tmp_path, 'test14', _result(2.0))
         omrat.refresh_previous_runs_table()
-        # No live result (nothing run this session) -> rows come from the run.
-        omrat._populate_catastrophe_results_table(None)
         tw = omrat.main_widget.TWCatastropheResults
+        _select(omrat)
         assert tw.rowCount() == 0
+        assert _headers(tw) == FIXED
 
         _select(omrat, rid)
-
-        assert tw.columnCount() == 5
-        assert tw.horizontalHeaderItem(3).text() == 'test14'
-        assert tw.horizontalHeaderItem(4).text() == 'Δ vs test14 %'
+        assert _headers(tw) == FIXED + ['test14']     # no baseline: values only
         assert [tw.item(r, 0).text() for r in range(tw.rowCount())] == ['Minor', 'Major', 'Catastrophic']
         assert tw.item(0, 1).text() == '50.00'
-        assert tw.item(0, 2).text() == DASH          # no live value
-        assert tw.item(0, 3).text() == '2.000e-03'
-        assert tw.item(1, 3).text() == '4.000e-04'
-        assert tw.item(0, 4).text() == '+0.0%'       # baseline is the run itself
-        omrat._reset_catastrophe_table_to_base()
+        assert tw.item(0, 2).text() == '2.000e-03'
+        assert tw.item(1, 2).text() == '4.000e-04'
 
-    def test_live_result_is_baseline_and_restored_on_clear(self, omrat, history, tmp_path):
-        omrat._main_run_id = None
-        rid = _save_run_with_sidecar(history, tmp_path, 'other', _result(2.0))
-        omrat.refresh_previous_runs_table()
-        omrat._populate_catastrophe_results_table(_result(1.0))
-        tw = omrat.main_widget.TWCatastropheResults
-        assert tw.columnCount() == 3 and tw.rowCount() == 3
-        assert tw.item(0, 2).text() == '1.000e-03'
+        _select(omrat)
+        assert tw.rowCount() == 0
+        assert _headers(tw) == FIXED
 
-        _select(omrat, rid)
-        assert tw.columnCount() == 5
-        assert tw.horizontalHeaderItem(4).text() == 'Δ vs current %'
-        for r in range(3):
-            assert tw.item(r, 4).text() == '+100.0%'
-
-        omrat.main_widget.TWPreviousRuns.clearSelection()
-        omrat._on_previous_runs_selection_changed()
-        assert tw.columnCount() == 3
-        assert tw.rowCount() == 3
-        assert tw.item(0, 2).text() == '1.000e-03'
-        assert tw.horizontalHeaderItem(2).text() == 'Exceedance (events/year)'
-
-    def test_main_run_is_baseline(self, omrat, history, tmp_path):
-        omrat._main_run_id = None
-        id_main = _save_run_with_sidecar(history, tmp_path, 'main-run', _result(1.0))
+    def test_baseline_once_then_value_and_change(self, omrat, history, tmp_path):
+        omrat._baseline_runs = None
+        id_base = _save_run_with_sidecar(history, tmp_path, 'base-run', _result(1.0))
         id_other = _save_run_with_sidecar(history, tmp_path, 'other', _result(3.0))
-        omrat._set_main_run_id(id_main)
         omrat.refresh_previous_runs_table()
-        omrat._populate_catastrophe_results_table(None)
+        _tick_baseline(omrat, id_base)
         tw = omrat.main_widget.TWCatastropheResults
 
-        _select(omrat, id_other)
-        assert tw.horizontalHeaderItem(4).text() == 'Δ vs main (main-run) %'
+        _select(omrat, id_other, id_base)
+        assert _headers(tw) == FIXED + ['base-run (baseline)', 'other', 'Change (%)']
+        assert tw.item(0, 2).text() == '1.000e-03'
+        assert tw.item(0, 3).text() == '3.000e-03'
         for r in range(3):
             assert tw.item(r, 4).text() == '+200.0%'
-        omrat._reset_catastrophe_table_to_base()
+
+    def test_baseline_shown_without_a_selection(self, omrat, history, tmp_path):
+        omrat._baseline_runs = None
+        id_base = _save_run_with_sidecar(history, tmp_path, 'base-run', _result(1.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat)
+        tw = omrat.main_widget.TWCatastropheResults
+        assert _headers(tw) == FIXED + ['base-run (baseline)']
+        assert tw.rowCount() == 3
 
     def test_run_without_sidecar_shows_dashes(self, omrat, history, tmp_path):
-        omrat._main_run_id = None
+        omrat._baseline_runs = None
+        id_base = _save_run_with_sidecar(history, tmp_path, 'base', _result(1.0))
         rid_old = _save_run_with_sidecar(history, tmp_path, 'old', None)
         omrat.refresh_previous_runs_table()
-        omrat._populate_catastrophe_results_table(_result(1.0))
+        _tick_baseline(omrat, id_base)
         tw = omrat.main_widget.TWCatastropheResults
 
         _select(omrat, rid_old)
-        assert tw.columnCount() == 5
-        assert tw.horizontalHeaderItem(3).text() == 'old'
+        assert _headers(tw) == FIXED + ['base (baseline)', 'old', 'Change (%)']
         assert 'Re-run' in tw.horizontalHeaderItem(3).toolTip()
         for r in range(3):
             assert tw.item(r, 3).text() == DASH
             assert tw.item(r, 4).text() == DASH
-        omrat._reset_catastrophe_table_to_base()
 
-    def test_two_runs_two_column_pairs_and_extra_level_row(self, omrat, history, tmp_path):
-        omrat._main_run_id = None
+    def test_two_runs_and_an_extra_level_row(self, omrat, history, tmp_path):
+        omrat._baseline_runs = None
         res_b = _result(1.0)
         res_b['levels'].append({'name': 'Extreme', 'quantity': 50000.0, 'exceedance': 1e-6})
         rid_a = _save_run_with_sidecar(history, tmp_path, 'a', _result(1.0))
         rid_b = _save_run_with_sidecar(history, tmp_path, 'b', res_b)
         omrat.refresh_previous_runs_table()
-        omrat._populate_catastrophe_results_table(_result(1.0))
         tw = omrat.main_widget.TWCatastropheResults
 
         _select(omrat, rid_a, rid_b)
-        assert tw.columnCount() == 7
+        assert _headers(tw) == FIXED + ['b', 'a']     # table order: newest first
         assert tw.rowCount() == 4
         assert tw.item(3, 0).text() == 'Extreme'
         assert tw.item(3, 1).text() == '50000.00'
-        assert tw.item(3, 2).text() == DASH        # live has no such level
-        col_b = 3 if tw.horizontalHeaderItem(3).text() == 'b' else 5
-        col_a = 8 - col_b
-        assert tw.item(3, col_b).text() == '1.000e-06'
-        assert tw.item(3, col_a).text() == DASH
-        assert tw.item(3, col_b + 1).text() == DASH  # no baseline for that level
+        assert tw.item(3, 2).text() == '1.000e-06'
+        assert tw.item(3, 3).text() == DASH           # a has no such level
 
-        omrat.main_widget.TWPreviousRuns.clearSelection()
-        omrat._on_previous_runs_selection_changed()
-        assert tw.rowCount() == 3 and tw.columnCount() == 3
+    def test_follows_the_display_mode(self, omrat, history, tmp_path):
+        omrat._baseline_runs = None
+        id_base = _save_run_with_sidecar(history, tmp_path, 'base', _result(1.0))
+        id_other = _save_run_with_sidecar(history, tmp_path, 'other', _result(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_other)
+        w = omrat.main_widget
+        tw = w.TWCatastropheResults
+        assert tw.item(0, 4).text() == '+100.0%'
+
+        w.cbResultDisplayMode.setCurrentIndex(1)
+        assert tw.item(0, 2).text() == '1,000'        # 1 / 1e-3 years
+        assert tw.item(0, 3).text() == '500'
+        assert tw.item(0, 4).text() == '-50.0%'       # change of the years
+        assert 'years between' in w.lblCatastropheResults.text()
+
+        w.cbResultDisplayMode.setCurrentIndex(0)
+        assert tw.item(0, 2).text() == '1.000e-03'
+        assert tw.item(0, 4).text() == '+100.0%'
+        assert 'events/year' in w.lblCatastropheResults.text()
+
+    def test_copy_table_with_headers(self, omrat, history, tmp_path, monkeypatch):
+        omrat._baseline_runs = None
+        id_base = _save_run_with_sidecar(history, tmp_path, 'base', _result(1.0))
+        id_other = _save_run_with_sidecar(history, tmp_path, 'other', _result(2.0))
+        omrat.refresh_previous_runs_table()
+        _tick_baseline(omrat, id_base)
+        _select(omrat, id_other)
+        monkeypatch.setattr(omrat, '_decimal_point', lambda: ',')
+        tw = omrat.main_widget.TWCatastropheResults
+        lines = omrat._result_table_tsv(tw, whole=True).split('\n')
+        assert lines[0].split('\t') == FIXED + ['base (baseline)', 'other', 'Change (%)']
+        assert lines[1].split('\t') == ['Minor', '50', '0,001', '0,002', '100']
+        assert lines[2].split('\t') == ['Major', '500', '0,0002', '0,0004', '100']

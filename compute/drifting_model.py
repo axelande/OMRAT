@@ -31,8 +31,9 @@ try:
 except Exception:  # nosec B110 B112
     shp_make_valid = None
 
-from compute.basic_equations import get_not_repaired  # noqa: E402
+from compute.basic_equations import HOURS_PER_YEAR, get_not_repaired  # noqa: E402
 from compute.drift_reach import REACH_QUANTILE, drift_reach_m  # noqa: E402
+from compute.drift_start import mixture_mean, uses_distribution_center  # noqa: E402
 from compute.drift_corridor_geometry import (  # noqa: E402
     _compass_idx_to_math_idx,
     _extract_obstacle_segments,
@@ -335,12 +336,17 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         transformed_lines: list[LineString],
         distributions: list[list[Any]],
         weights: list[list[float]],
+        use_offset: bool = False,
     ) -> list[dict[str, Any]]:
         """Per-leg lateral-distribution scalars + ``LegState`` for each leg.
 
         Computed once so every ``(leg, direction)`` worker shares the
         same lateral-distribution parameters; the result is consumed
         by ``_shadow_task`` inside ``_precompute_shadow_layer``.
+        ``use_offset`` (**Start drifting from: Distribution center**) puts
+        the mean of the line's lateral distribution in
+        ``LegState.mean_offset_m`` (left of the line positive); the edge
+        distances are then measured from that offset line.
         """
         out: list[dict[str, Any]] = []
         for leg_idx, line in enumerate(transformed_lines):
@@ -373,7 +379,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     leg_state = LegState(
                         leg_id=str(leg_idx),
                         line=line,
-                        mean_offset_m=0.0,
+                        mean_offset_m=(mixture_mean(dists_dir, w_dir if w_dir is not None else [])
+                                       if use_offset else 0.0),
                         lateral_sigma_m=max(1.0, lateral_spread / 5.0),
                     )
                 else:
@@ -537,7 +544,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             # to the analytical ``h_eff`` (which correctly accounts for the
             # AIS lateral ship distribution).  Without this normalisation, a
             # polygon whose ship density is far from the leg's uniform
-            # assumption over-contributes -- see the ESCOW test10 inflation.
+            # assumption over-contributes (inflated drift totals in a case study).
             total_reach = float(sum(float(c['reachable_width']) for c in positive))
             if total_reach <= 0.0:
                 return []
@@ -550,12 +557,19 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 endpoints[2 * i + 1, 0] = eg['p2'][0]
                 endpoints[2 * i + 1, 1] = eg['p2'][1]
             # Distance is measured to ``effective_line`` (leg centerline by
-            # default, offset by the traffic-distribution mean if the user
-            # opted in via ``use_leg_offset``).
+            # default, offset by the traffic-distribution mean with Start
+            # drifting from = Distribution center).  An end behind the offset
+            # line (between it and the leg) keeps its distance from the leg
+            # line, so the edge is not dropped.
             dists = directional_distances_to_points(
                 endpoints, effective_line, compass_angle,
                 use_leg_offset=False,
             )
+            if effective_line is not line:
+                behind = ~np.isfinite(dists)
+                if behind.any():
+                    dists = np.where(behind, directional_distances_to_points(
+                        endpoints, line, compass_angle, use_leg_offset=False), dists)
             items: list[dict[str, Any]] = []
             for i, eg in enumerate(positive):
                 valid = [float(d) for d in [dists[2 * i], dists[2 * i + 1]] if np.isfinite(d)]
@@ -563,10 +577,11 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     continue
                 edge_dist = sum(valid) / len(valid)
                 reachable_width = float(eg['reachable_width'])
-                # ``edge_h_eff`` is the pure-geometric per-edge share
-                # (uniform-ship assumption) -- kept for backtracing.  The
-                # ``len_frac`` is what actually multiplies ``h_eff`` in the
-                # cascade so the polygon total matches the analytical value.
+                # ``edge_h_eff`` is the edge's share of the drift width with
+                # the ships spread evenly along the reference line; grounding /
+                # allision multiply it by ``h_eff / hole_pct``
+                # (``_apply_hit_entry``).  ``len_frac``, the edge's share of
+                # the polygon, splits anchoring over the edges.
                 edge_h_eff = reachable_width / leg_drift_width
                 len_frac = reachable_width / total_reach
                 items.append({
@@ -804,7 +819,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         global_shadow_bounds = self._compute_global_shadow_bounds(
             transformed_lines, structures, depths, reach_distance)
         leg_precomputed = self._precompute_leg_lateral_params(
-            transformed_lines, distributions, weights)
+            transformed_lines, distributions, weights, use_offset=use_leg_offset_for_distance)
 
         def _shadow_task(leg_idx: int, d_idx: int) -> tuple[tuple[int, int], dict[str, Any]]:
             return self._build_shadow_entry(
@@ -908,13 +923,15 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         anchor_d: float, structures: list, depths: list,
         struct_min_dists, depth_min_dists,
         struct_probability_holes, depth_probability_holes, threshold_to_idx,
+        leg_line=None,
     ) -> list[tuple[str, int, float, float]]:
         draught = float(cell.get('draught', 0.0))
         return self._collect_cell_obstacles(
             leg_idx, d_idx, draught, anchor_d, structures, depths,
             struct_min_dists, depth_min_dists,
             struct_probability_holes, depth_probability_holes,
-            threshold_to_idx,
+            threshold_to_idx, leg_line=leg_line,
+            anchor_draught=cell.get('anchor_draught'),
         )
 
     def _compute_bucket_entries(
@@ -1057,6 +1074,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                         leg_idx, d_idx, cell, anchor_d, structures, depths,
                         struct_min_dists, depth_min_dists,
                         struct_probability_holes, depth_probability_holes, threshold_to_idx,
+                        leg_line=transformed_lines[leg_idx],
                     )
                     if not obstacles:
                         continue
@@ -1290,11 +1308,23 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                             reach_distance: float,
                             data: dict[str, Any] | None = None,
                             ) -> tuple[list, list, list, list]:
+        distance_lines = None
+        if uses_distribution_center((data or {}).get('drift')):
+            # Start drifting from = Distribution center: the obstacle order
+            # and the plain p_nr distance come from the same offset line as
+            # the edge distances (``_precompute_leg_lateral_params``).
+            from drifting.engine import _offset_line_perpendicular
+            distance_lines = [
+                _offset_line_perpendicular(line, mixture_mean(dists, wgts))
+                for line, dists, wgts in zip(transformed_lines, distributions, weights)
+            ]
         struct_min_dists = compute_min_distance_by_object(
-            transformed_lines, distributions, weights, structs_gdfs, distance=reach_distance
+            transformed_lines, distributions, weights, structs_gdfs, distance=reach_distance,
+            distance_lines=distance_lines,
         ) if len(structs_gdfs) > 0 else []
         depth_min_dists = compute_min_distance_by_object(
-            transformed_lines, distributions, weights, depths_gdfs, distance=reach_distance
+            transformed_lines, distributions, weights, depths_gdfs, distance=reach_distance,
+            distance_lines=distance_lines,
         ) if len(depths_gdfs) > 0 else []
         # Calculate probability holes using FAST Monte Carlo method
         # Unified progress tracking across structures AND depths
@@ -1445,7 +1475,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             if speed_kts <= 0.0 or freq <= 0.0:
                 continue
             hours_present = (line_length / (speed_kts * 1852.0)) * freq
-            bph = blackout_rate_by_type.get(ship_type, drift_p) / (365.0 * 24.0)
+            bph = blackout_rate_by_type.get(ship_type, drift_p) / HOURS_PER_YEAR
             base = hours_present * bph
             cell_a = cell_g = 0.0
             for d_idx in range(8):
@@ -1560,6 +1590,51 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         report['totals']['anchoring'] = total_anchoring
         return total_allision, total_grounding, report
 
+    def _leg_share_inside(self, leg_line, geom) -> float:
+        """Share of ``leg_line``'s length inside ``geom`` (cached for the run).
+
+        The cache holds the two objects themselves, so their ``id`` cannot be
+        reused while the entry exists; ``run_drifting_model`` clears it.
+        """
+        if leg_line is None or geom is None:
+            return 0.0
+        cache = self.__dict__.setdefault('_anchor_leg_share', {})
+        key = (id(leg_line), id(geom))
+        hit = cache.get(key)
+        if hit is not None:
+            return hit[2]
+        share = 0.0
+        try:
+            length = float(leg_line.length)
+            if length > 0.0 and not geom.is_empty and geom.intersects(leg_line):
+                share = min(1.0, float(leg_line.intersection(geom).length) / length)
+        except Exception:  # nosec B110 - an invalid geometry anchors nothing, as before
+            share = 0.0
+        cache[key] = (leg_line, geom, share)
+        return share
+
+    def _anchoring_obstacle(
+        self, idx: int, dist, hole_pct: float, depths: list, leg_line,
+    ) -> tuple[str, int, float, float] | None:
+        """The anchoring entry for depth polygon ``idx``, or None.
+
+        A drift path only meets an anchor area where it crosses one of its
+        edges, so a leg that already lies *inside* anchorable water got
+        ``hole_pct = 0`` and no anchoring at all -- unless a hole in the
+        polygon happened to give the paths an edge to cross (KNOWN_ISSUES 24).
+        Such a leg now anchors from distance 0, with the share of the leg
+        inside as its hole; the nested-anchor rule in
+        :meth:`_compute_bucket_entries` then reduces every obstacle inside
+        the anchor area by ``anchor_p``.
+        """
+        d_obj = depths[idx] if 0 <= idx < len(depths) else None
+        share = self._leg_share_inside(leg_line, d_obj.get('wkt') if isinstance(d_obj, dict) else None)
+        if share > 0.0:
+            return ('anchoring', idx, 0.0, min(1.0, max(share, float(hole_pct or 0.0))))
+        if dist is not None and hole_pct > 0.0:
+            return ('anchoring', idx, dist, hole_pct)
+        return None
+
     def _collect_cell_obstacles(
         self,
         leg_idx: int, d_idx: int, draught: float, anchor_d: float,
@@ -1567,9 +1642,17 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         struct_min_dists, depth_min_dists,
         struct_probability_holes, depth_probability_holes,
         threshold_to_idx,
+        leg_line=None,
+        anchor_draught: float | None = None,
     ) -> list[tuple[str, int, float, float]]:
+        """Obstacles one ship cell can meet drifting from leg ``leg_idx`` in direction ``d_idx``.
+
+        ``draught`` decides the grounding areas (squat included);
+        ``anchor_draught`` (default: ``draught``) the anchoring depth limit.
+        """
         math_dir_idx = _compass_idx_to_math_idx(d_idx)
         obstacles: list[tuple[str, int, float, float]] = []
+        a_draught = float(anchor_draught) if anchor_draught is not None else draught
         if struct_min_dists and struct_probability_holes:
             for s_idx in range(len(structures)):
                 try:
@@ -1579,7 +1662,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                         obstacles.append(('allision', s_idx, dist, hole_pct))
                 except (IndexError, TypeError):
                     pass
-        anchor_threshold = anchor_d * draught if anchor_d > 0.0 else 0.0
+        anchor_threshold = anchor_d * a_draught if anchor_d > 0.0 else 0.0
         if depth_min_dists and depth_probability_holes and threshold_to_idx:
             grounding_idx = threshold_to_idx.get(round(draught, 2))
             if grounding_idx is not None:
@@ -1599,13 +1682,14 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 # 7 x 5.88 -> 41.16), which silently dropped the anchoring
                 # obstacle for most AIS-derived ship cells.
                 anchoring_idx = threshold_to_idx.get(
-                    round(anchor_d * round(draught, 2), 2))
+                    round(anchor_d * round(a_draught, 2), 2))
                 if anchoring_idx is not None:
                     try:
-                        dist = depth_min_dists[leg_idx][math_dir_idx][anchoring_idx]
-                        hole_pct = depth_probability_holes[leg_idx][math_dir_idx][anchoring_idx]
-                        if dist is not None and hole_pct > 0.0:
-                            obstacles.append(('anchoring', anchoring_idx, dist, hole_pct))
+                        entry = self._anchoring_obstacle(
+                            anchoring_idx, depth_min_dists[leg_idx][math_dir_idx][anchoring_idx],
+                            depth_probability_holes[leg_idx][math_dir_idx][anchoring_idx], depths, leg_line)
+                        if entry is not None:
+                            obstacles.append(entry)
                     except (IndexError, TypeError):
                         pass
         elif depth_min_dists and depth_probability_holes:
@@ -1613,10 +1697,12 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 try:
                     dist = depth_min_dists[leg_idx][math_dir_idx][dep_idx]
                     hole_pct = depth_probability_holes[leg_idx][math_dir_idx][dep_idx]
+                    if anchor_threshold > 0.0 and dep['depth'] < anchor_threshold:
+                        entry = self._anchoring_obstacle(dep_idx, dist, hole_pct, depths, leg_line)
+                        if entry is not None:
+                            obstacles.append(entry)
                     if dist is None or hole_pct <= 0.0:
                         continue
-                    if anchor_threshold > 0.0 and dep['depth'] < anchor_threshold:
-                        obstacles.append(('anchoring', dep_idx, dist, hole_pct))
                     if dep['depth'] < draught:
                         obstacles.append(('grounding', dep_idx, dist, hole_pct))
                 except (IndexError, TypeError):
@@ -1728,9 +1814,16 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         grounding_d = 0.0
         obs_total = 0.0
         shadow_loss = max(0.0, 1.0 - (h_reach / hole_pct)) if hole_pct > 0 else 0.0
+        # Drifting risk-reduction factor of this accident type (see
+        # ``run_drifting_model``); the sums before it go to ``totals_before_rf``.
+        rf_key = 'allision' if obs_type == 'allision' else 'grounding'
+        rf = float((getattr(self, '_drift_rf', None) or {}).get(rf_key, 1.0))
+        before_rf = report.setdefault('totals_before_rf', {'allision': 0.0, 'grounding': 0.0})
         if not precomputed_edges:
             p_nr = get_not_repaired(drift['repair'], drift_speed, dist)
-            c = base * rp * h_eff * p_nr
+            c_raw = base * rp * h_eff * p_nr
+            before_rf[rf_key] += c_raw
+            c = c_raw * rf
             allision_d += c if obs_type == 'allision' else 0.0
             grounding_d += c if obs_type != 'allision' else 0.0
             obs_total += c
@@ -1739,8 +1832,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                                 freq, ship_type, ship_size, None, line)
         else:
             # Per-edge branch -- IWRAP-style uniform ships along the reference
-            # line (leg centerline by default, leg+mean_offset if the user
-            # toggles ``use_leg_offset_for_distance``).  The lateral spread
+            # line (leg centerline by default, leg+mean_offset with Start
+            # drifting from = Distribution center).  The lateral spread
             # (std) is NOT used in the drift model here; only the geometric
             # ``reachable_width`` matters.  The attenuation ratio combines
             # (a) between-polygon geometric shadow (h_reach / hole_pct) and
@@ -1763,7 +1856,9 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                 if edge_hole <= 0.0:
                     continue
                 p_nr = eg['edge_p_nr']
-                c = base * rp * edge_hole * p_nr
+                c_raw = base * rp * edge_hole * p_nr
+                before_rf[rf_key] += c_raw
+                c = c_raw * rf
                 allision_d += c if obs_type == 'allision' else 0.0
                 grounding_d += c if obs_type != 'allision' else 0.0
                 obs_total += c
@@ -1779,7 +1874,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
                     reachable_width=eg.get('reachable_width_m', 0.0),
                     edge_h_eff=eg['edge_h_eff'], len_frac=eg['len_frac'],
                     edge_dist=eg['edge_dist'], edge_p_nr=p_nr, edge_hole=edge_hole,
-                    base=base, rp=rp, contrib=c,
+                    base=base, rp=rp, contrib=c, risk_factor=rf,
                 )
         debug_add(report, leg_dir_key, key_name, obs_type, obs_total, dist, h_eff, 1.0,
                   p_nr=None, anchor_effect=None, exposure_factor=base * rp,
@@ -1819,7 +1914,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             leg_idx, d_idx, draught, anchor_d, structures, depths,
             struct_min_dists, depth_min_dists,
             struct_probability_holes, depth_probability_holes,
-            threshold_to_idx,
+            threshold_to_idx, leg_line=line,
+            anchor_draught=cell.get('anchor_draught'),
         )
         if not obstacles:
             return 0.0, 0.0, 0.0
@@ -2016,18 +2112,22 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             })
             cumulative_geoms.append((boundary, idx))
 
-        # Collect all thresholds from traffic draughts and anchor draughts.
+        # Collect all thresholds from traffic draughts (squat included) and
+        # anchor draughts (the static draught, see compute/squat.py).
         draughts: set[float] = set()
+        anchor_draughts: set[float] = set()
         for _, _, _, leg_traffic, _ in clean_traffic(data):
             for cell in leg_traffic:
                 d = float(cell.get('draught', 0.0))
                 if d > 0:
                     draughts.add(round(d, 2))
+                d_anchor = float(cell.get('anchor_draught', d))
+                if d_anchor > 0:
+                    anchor_draughts.add(round(d_anchor, 2))
         anchor_d_val = float(drift.get('anchor_d', 0.0))
-        all_thresholds: set[float] = set()
-        for d in draughts:
-            all_thresholds.add(d)
-            if anchor_d_val > 0:
+        all_thresholds: set[float] = set(draughts)
+        if anchor_d_val > 0:
+            for d in anchor_draughts:
                 all_thresholds.add(round(anchor_d_val * d, 2))
 
         # For threshold T, the merged polygon includes all depths
@@ -2057,17 +2157,20 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
 
     def _apply_drifting_risk_factors(
         self, report: dict, total_allision: float, total_grounding: float,
-        allision_rf: float, grounding_rf: float,
     ) -> tuple[float, float]:
-        prob_a = float(total_allision * allision_rf)
-        prob_g = float(total_grounding * grounding_rf)
-        if allision_rf != 1.0:
-            for k, v in list(report.get('by_cell_allision', {}).items()):
-                report['by_cell_allision'][k] = float(v) * allision_rf
-        if grounding_rf != 1.0:
-            for k, v in list(report.get('by_cell_grounding', {}).items()):
-                report['by_cell_grounding'][k] = float(v) * grounding_rf
-        return prob_a, prob_g
+        """Record the risk-reduction factors next to the (already reduced) totals.
+
+        ``_apply_hit_entry`` multiplies every contribution by its factor, so
+        ``report['totals']``, the breakdown maps, ``by_cell_*`` and the result
+        layers all hold reduced values; ``totals_before_rf`` keeps the sums
+        before the factors.  Until 2026-11-12 only the run total and
+        ``by_cell_*`` were reduced, so the sidecar totals (Compare tab), the
+        per-leg / per-object maps and the layers showed unreduced values.
+        """
+        rf = dict(getattr(self, '_drift_rf', None) or {'allision': 1.0, 'grounding': 1.0})
+        report['risk_factors'] = rf
+        report.setdefault('totals_before_rf', {'allision': 0.0, 'grounding': 0.0})
+        return float(total_allision), float(total_grounding)
 
     def _store_depth_meta(self, data: dict, effective_depths_meta: list) -> None:
         self._last_depths = effective_depths_meta
@@ -2128,11 +2231,19 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
         longest = max(line.length for line in transformed_lines) if transformed_lines else 0.0
         reach_distance = self._compute_reach_distance(data, longest)
         drift = data['drift']
+        pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
+        # Drifting risk-reduction factors (IWRAP ``p_*_drifting_causation``):
+        # applied to every allision / grounding contribution in
+        # ``_apply_hit_entry``, so the totals, every breakdown map, the result
+        # layers and the sidecar agree with the run total.
+        self._drift_rf = {'allision': float(pc_vals.get('allision_drifting_rf', 1.0)),
+                          'grounding': float(pc_vals.get('grounding_drifting_rf', 1.0))}
         use_merged, merged_depths_gdfs, merged_depths_meta, threshold_to_idx = (
             self._merge_depths_by_threshold(data, depths, drift)
         )
         effective_depths_gdfs = merged_depths_gdfs if use_merged else depths_gdfs
         effective_depths_meta = merged_depths_meta if use_merged else depths
+        self._anchor_leg_share = {}   # see _leg_share_inside
         struct_min_dists, depth_min_dists, struct_probability_holes, depth_probability_holes = (
             self._precompute_spatial(transformed_lines, distributions, weights,
                                      structs_gdfs, effective_depths_gdfs, reach_distance, data)
@@ -2141,7 +2252,7 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             transformed_lines, distributions, weights, structures, effective_depths_meta,
             struct_min_dists, depth_min_dists, reach_distance,
             drift.get('repair', {}), float(drift.get('speed', 0.0)) * 1852.0 / 3600.0,
-            bool(drift.get('use_leg_offset_for_distance', False)),
+            uses_distribution_center(drift),
             progress_base=0.0, progress_span=0.5,
         )
         if shadow_cache.get('__cancelled__'):
@@ -2161,11 +2272,8 @@ class DriftingModelMixin(DriftingReportBuilderMixin):
             threshold_to_idx=threshold_to_idx if use_merged else None,
             shadow_cache=shadow_cache, bucket_memo=bucket_memo,
         )
-        pc_vals = data.get('pc', {}) if isinstance(data.get('pc', {}), dict) else {}
-        allision_rf = float(pc_vals.get('allision_drifting_rf', 1.0))
-        grounding_rf = float(pc_vals.get('grounding_drifting_rf', 1.0))
         self.drifting_allision_prob, self.drifting_grounding_prob = self._apply_drifting_risk_factors(
-            report, total_allision, total_grounding, allision_rf, grounding_rf)
+            report, total_allision, total_grounding)
         self.drifting_report = report
         self._last_structures = structures
         self._store_depth_meta(data, effective_depths_meta)

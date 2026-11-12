@@ -20,6 +20,22 @@ FALLBACK_CLASS_M = 25.0
 SOG_NOT_AVAILABLE_KN = 102.3
 """AIS speed over ground 1023 (x 0.1 kn) means "not available" (ITU-R M.1371)."""
 
+SAR_AIRCRAFT_SQL = "(ss.mmsi IS NULL OR ss.mmsi::text NOT LIKE '111______')"
+"""SQL condition that leaves out search-and-rescue aircraft (alias ``ss`` = the segments table).
+
+ITU-R M.585 gives SAR aircraft the MMSI range ``111MIDxxx``.  They were
+binned as "Search and Rescue vessel" at 130-241 kn until 2026-11-09; one
+such cell on the Kattegat model carried 8.7 % of the powered allision
+(KNOWN_ISSUES 23).  Compared as text so it works whatever type the
+database gives the column.  Used by the traffic query and the junction
+crossing query of ``omrat_utils.handle_ais`` -- keep both."""
+
+
+def is_sar_aircraft(mmsi: Any) -> bool:
+    """True for an MMSI in the SAR aircraft range ``111MIDxxx`` (mirror of :data:`SAR_AIRCRAFT_SQL`)."""
+    text = str(mmsi).strip() if mmsi is not None else ''
+    return len(text) == 9 and text.startswith('111')
+
 
 def valid_sog(value: Any) -> float | None:
     """Speed over ground in knots, or None for a missing / "not available" value."""

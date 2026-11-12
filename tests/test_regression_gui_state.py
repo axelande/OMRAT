@@ -154,8 +154,88 @@ def _minimal_drift_values(speed: float = 1.94, use_lognormal: bool = False
         'anchor_d': 7,
         'speed': speed,
         'start_from': 'leg_center',
-        'squat_mode': 'average_speed',
         'rose': rose,
         'repair': repair,
         'blackout_by_ship_type': default_blackout_by_ship_type(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Repair-time "Test eval" follows the selected radio button
+# ---------------------------------------------------------------------------
+
+def _curves(ax):
+    """Plotted curves (the dashed reach marker is a 2-point line too)."""
+    return [ln for ln in ax.get_lines() if len(ln.get_xdata()) > 2]
+
+
+@pytest.fixture
+def drift_with_repair(drift_settings, monkeypatch):
+    """``drift_settings`` with a real :class:`Repair` (canvas in the dialog)
+    and the popups recorded instead of shown."""
+    import matplotlib.pyplot as plt
+    import omrat_utils.repair_time as repair_time
+    from omrat_utils.repair_time import Repair
+
+    popups: list[tuple[str, str]] = []
+    box = MagicMock()
+    box.warning.side_effect = lambda _w, title, msg: popups.append((title, msg))
+    box.information.side_effect = lambda _w, title, msg: popups.append((title, msg))
+    monkeypatch.setattr(repair_time, 'QMessageBox', box)
+    drift_settings.repair = Repair(drift_settings)
+    drift_settings._signals_wired = False
+    drift_settings.popups = popups
+    yield drift_settings
+    plt.close(drift_settings.repair.figure)
+
+
+def test_test_eval_with_lognormal_plots_the_lognormal(drift_with_repair):
+    """Lognormal selected + empty expression box: Test eval draws the
+    lognormal CDF.  It used to check the expression box and answer
+    "The repair function is empty"."""
+    ds = drift_with_repair
+    values = _minimal_drift_values(use_lognormal=True)
+    values['repair']['func'] = ''
+    values['repair'].update(std=0.97, loc=0.2, scale=0.49)
+    ds.drift_values = values
+    ds.populate_drift()
+    ds._wire_signals()
+    ds.dsw.pbTestRepair.click()
+    assert ds.popups == []
+    curves = _curves(ds.repair.ax)
+    assert len(curves) == 1
+    assert max(curves[0].get_ydata()) > 0.99
+
+
+def test_repair_signals_are_wired_once(drift_with_repair):
+    """``run`` is called on every open; the signals must not pile up
+    (each extra connection meant one more evaluation / popup per click)."""
+    ds = drift_with_repair
+    calls: list[int] = []
+    ds.repair.test_evaluate = lambda: calls.append(1)
+    ds._wire_signals()
+    ds._wire_signals()
+    ds.dsw.pbTestRepair.click()
+    assert calls == [1]
+
+
+def test_switching_and_typing_never_pops_up(drift_with_repair):
+    """Radio switches and keystrokes only redraw: an empty expression or a
+    half-typed number is written in the plot, not shown as a popup."""
+    ds = drift_with_repair
+    values = _minimal_drift_values(use_lognormal=True)
+    values['repair']['func'] = ''
+    ds.drift_values = values
+    ds.populate_drift()
+    ds._wire_signals()
+    ds.dsw.rbUserDefined.click()      # empty expression box
+    ds.dsw.rbLogNormal.click()
+    ds.dsw.leRepairStd.setText('')    # mid-edit
+    ds.dsw.leRepairStd.setText('0,9')
+    assert ds.popups == []
+    assert len(_curves(ds.repair.ax)) == 1
+    # The explicit button still reports a problem with a popup.
+    ds.dsw.leRepairScale.setText('0')
+    ds.dsw.pbTestRepair.click()
+    assert len(ds.popups) == 1
+    assert 'scale must be greater than 0' in ds.popups[0][1]

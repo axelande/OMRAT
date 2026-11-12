@@ -12,6 +12,8 @@ tmpclaude-*
 drifting_report.md
 examples/
 tool_comparison_study/
+CLAUDE.md
+KNOWN_ISSUES.md
 
 .vscode/*
 .qgis-settings/

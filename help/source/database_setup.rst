@@ -145,9 +145,11 @@ If the CSV is bare (just ``mmsi`` / ``time`` / ``lon`` / ``lat`` /
 placeholders.  Downstream AIS queries derive vessel length and beam
 directly from the AIS Type-5 dimensions (``loa = dim_a + dim_b``,
 ``beam = dim_c + dim_d``); ship-type classification uses the AIS
-``type_and_cargo`` field.  Air-draught distributions stay empty unless
-you supply a richer vessel registry of your own and reinstate a JOIN in
-``omrat_utils/handle_ais.py``.
+``type_and_cargo`` field.  Air draught is not part of AIS: the ship
+heights stay empty unless you point **Settings -> AIS connection
+settings -> External vessel lookup (optional)** at a vessel registry
+table of your own (per-MMSI LOA, beam, ship type and air draught
+columns, each optional).
 
 The **Parquet** path (requires the optional ``pyarrow`` package) is
 built for the Danish Maritime Authority's monthly ``aisdk`` dumps but
@@ -215,11 +217,26 @@ wizard…**.  The wizard has five pages:
      or ``.parquet`` dumps).
    * Set ``min_sed_m`` (default **30 m**) and ``min_svd_kn`` (default
      **0.3 kn**) — these are the OMRAT-tuned TDKC threshold floors.
-   * Set the target year and a source label.
+     Three track-splitting settings sit next to them:
+     ``max_gap_s`` (default **3600 s**: a vessel's track is split where
+     two pings are further apart in time), ``speed_tolerance``
+     (default **0.3**) and ``speed_floor_kn`` (default **1.0 kn**): the
+     track is also split where the speed implied by two positions
+     exceeds the average reported SOG x (1 + tolerance) + floor, which
+     catches position jumps.
+   * Pick the **Target year** (there is no default on purpose) and a
+     source label.  Pings outside that calendar year (UTC) are skipped,
+     so a wrong year ingests nothing.
+   * *Clear year data...* (optional) empties the year's segments,
+     states and statics tables and its watermark entries before a
+     re-ingest with other settings; the tables themselves are kept.
    * Click *Run ingestion*.  The job runs on a ``QThread``; progress
-     messages stream into the log view.  Per-MMSI: insert one
-     ``statics_YYYY`` row, one ``states_YYYY`` row, and a batch of
+     messages stream into the log view.  Per-MMSI: a ``statics_YYYY``
+     and a ``states_YYYY`` row when they differ from the latest ones
+     (see :ref:`database-setup-dedup`), and a batch of
      ``segments_YYYY_M`` linestring rows from ``tdkc_segments(...)``.
+     *Cancel* stops cleanly; thanks to the watermark a later run with
+     the same files resumes where it stopped.
 
 5. **Done** — saves the connection profile and ingestion settings to
    QSettings (``omrat/db_profiles/default/*`` and
@@ -285,6 +302,38 @@ See :ref:`user_guide` ("Importing from AIS" section) for the
 plugin-side workflow once the database is populated.
 
 
+What Update AIS reads from the segments
+---------------------------------------
+
+For each leg OMRAT counts the segments that cross the leg's passage
+line (the tangent line, as wide as the leg's **Width**) in the year and
+months chosen in **AIS connection settings**, and bins every crossing
+into the traffic matrix:
+
+* **Direction** -- a crossing whose course is within **Max angle
+  deviation** (default 30 degrees) of the leg bearing goes to direction 1
+  (the drawn direction), within that angle of the reverse bearing to
+  direction 2; anything else is not counted.
+* **Ship type** -- the row of the matrix: the ship type mapping table
+  (:ref:`ship-type-mapping`), then the external vessel lookup, then
+  the AIS ``type_and_cargo`` code.
+* **Length** -- the column: the project's length classes from
+  **Settings -> Ship Categories** (a class ``min - max`` holds lengths
+  above ``min`` up to ``max``).  A ship longer than the last class is
+  put in the last class.  A missing or implausible AIS length
+  (dimensions that add up to less than 2 m or exceed the AIS maximum)
+  is taken from the external vessel lookup when one is set up, and
+  otherwise counts as 100 m.
+* **Search-and-rescue aircraft** (MMSI ``111MIDxxx``, ITU-R M.585) are
+  left out in the query, in the traffic count and in the junction
+  crossings alike.
+* **Observations** -- speed, draught, beam and air draught are averaged
+  per cell.  A speed of 102.3 kn (the AIS "not available" value) and
+  dimensions of 0 (AIS "unknown") are dropped instead of averaged.  A
+  cell with ships but no valid observation is stored as missing and
+  filled at calculation time (see :ref:`traffic-gaps`).
+
+
 .. _ship-type-mapping:
 
 Custom ship type mapping (IMO / MMSI)
@@ -321,7 +370,7 @@ You choose the schema; the table defaults to ``ship_type_map``.
 **Import CSV...** creates the table when it does not exist and replaces
 its contents from a ``;`` / ``,`` / tab separated file with an ``mmsi``
 and/or ``imo`` column plus a ``ship_type`` column.  The type cell may
-hold the index, an AIS type code (30-89, converted with the same rule
+hold the index, an AIS type code (30-99, converted with the same rule
 as the passage query) or a category name (``Tanker``, ``Cargo``,
 ``ferry``, ``hsc``, ...).  Rows that cannot be read are listed and
 skipped.  **Export CSV...** writes the table back out (with a
@@ -342,7 +391,7 @@ distributions** again.
 Database schema reference
 =========================
 
-The schema matches OMRAT's legacy (sjfv) layout used by
+The schema matches OMRAT's legacy layout used by
 ``omrat_utils/handle_ais.py``.  Two metadata tables in ``omrat_meta``
 plus a year-partitioned trio in the user-configured schema::
 
@@ -365,7 +414,7 @@ plus a year-partitioned trio in the user-configured schema::
        date   timestamptz
        draught         double precision
        type_and_cargo  smallint
-       eta             timestamptz   (NULL in v0.1; populated in v0.2)
+       eta             timestamptz   (Type-5 ETA; NULL when not given)
        destination     varchar(20)
        static_id       bigint  -> statics_YYYY.rowid  ON DELETE SET NULL
 
@@ -409,6 +458,8 @@ pass of **Update all distributions** reads it to pair a vessel's
 passage-line crossings into junction transits (:ref:`junction-ais-counts`);
 segments without a ``route_id`` are paired per MMSI within 2 h instead.
 
+
+.. _database-setup-dedup:
 
 Static + state row deduplication
 ================================
@@ -610,15 +661,14 @@ Operational notes
   timestamp seen per MMSI.  This is what the pipeline uses to skip
   already-ingested data on reruns.
 * **Threading**: the ingestion worker uses ``QThread``; the UI stays
-  responsive.  Cancellation isn't wired up yet — close the wizard or
-  stop QGIS to abort.
+  responsive.  *Cancel* on the Ingest page stops the run cleanly
+  (the watermark keeps what was done); the wizard cannot be finished while a run is going on.
 * **Batch commits**: the worker commits every 200 tracks so a long run
   doesn't sit in a single transaction the entire time.
-* **Static-data caveat**: in the v0.1 cut each MMSI gets one
-  ``statics_YYYY`` row + one ``states_YYYY`` row per ingestion run.
-  Vessels that change registration mid-period get a less precise
-  mapping; the schema supports proper time-windowed linkage and a
-  future iteration can populate it without changing the on-disk format.
+* **Static data**: a new ``statics_YYYY`` / ``states_YYYY`` row is
+  written only when the vessel's identity or voyage data change (see
+  :ref:`database-setup-dedup`), and each segment links to the row valid
+  when it was sailed.
 
 
 Troubleshooting
@@ -634,9 +684,8 @@ Troubleshooting
     ``Migrator(profile).ensure_year_partition(year)`` programmatically.
 
 **Ingestion is slow**
-    Expected; profiling and parallelisation are on the v0.2 roadmap.
-    For one Baltic month (~10M points) on a developer laptop, expect
-    tens of minutes.  Bulk inserts already use
+    Expected: ingestion runs in one thread.  For one Baltic month
+    (~10M points) on a developer laptop, expect tens of minutes.  Bulk inserts already use
     ``psycopg2.extras.execute_values``; the next bottleneck will likely
     be TDKC itself, where Numba acceleration inside AISsegments is a
     clear candidate.

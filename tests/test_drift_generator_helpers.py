@@ -85,158 +85,81 @@ class TestCacheAndProgress:
 
 
 # ---------------------------------------------------------------------------
-# _detect_depth_bin_width
-# ---------------------------------------------------------------------------
-
-class TestDetectDepthBinWidth:
-    def test_uniform_5m_steps(self, gen):
-        tbl = _fake_table([
-            ['d1', '5', '...'],
-            ['d2', '10', '...'],
-            ['d3', '15', '...'],
-            ['d4', '20', '...'],
-        ])
-        assert gen._detect_depth_bin_width(tbl) == pytest.approx(5.0)
-
-    def test_single_value_returns_zero(self, gen):
-        tbl = _fake_table([['d1', '10', '...']])
-        assert gen._detect_depth_bin_width(tbl) == 0.0
-
-    def test_intervals_are_skipped_for_detection(self, gen):
-        """Rows like '0-10' are ignored -- only bare values count."""
-        tbl = _fake_table([
-            ['d1', '0-10', '...'],    # skipped (interval)
-            ['d2', '10-20', '...'],   # skipped (interval)
-            ['d3', '15', '...'],
-            ['d4', '20', '...'],
-        ])
-        # Only two bare values -> diff = 5.
-        assert gen._detect_depth_bin_width(tbl) == pytest.approx(5.0)
-
-    def test_negative_depths_use_absolute_value(self, gen):
-        tbl = _fake_table([
-            ['d1', '-5', '...'],
-            ['d2', '-10', '...'],
-            ['d3', '-15', '...'],
-        ])
-        assert gen._detect_depth_bin_width(tbl) == pytest.approx(5.0)
-
-    def test_negative_interval_is_skipped(self, gen):
-        """A negative interval like '-10--5' contains '--' and is skipped."""
-        tbl = _fake_table([
-            ['d1', '-10--5', '...'],   # skipped
-            ['d2', '5', '...'],
-            ['d3', '10', '...'],
-        ])
-        assert gen._detect_depth_bin_width(tbl) == pytest.approx(5.0)
-
-    def test_empty_table_returns_zero(self, gen):
-        assert gen._detect_depth_bin_width(_fake_table([])) == 0.0
-
-    def test_missing_cell_skipped(self, gen):
-        tbl = _fake_table([
-            ['d1', None, '...'],
-            ['d2', '5', '...'],
-            ['d3', '10', '...'],
-        ])
-        assert gen._detect_depth_bin_width(tbl) == pytest.approx(5.0)
-
-    def test_non_numeric_skipped(self, gen):
-        tbl = _fake_table([
-            ['d1', 'nonsense', '...'],
-            ['d2', '5', '...'],
-            ['d3', '10', '...'],
-        ])
-        assert gen._detect_depth_bin_width(tbl) == pytest.approx(5.0)
-
-
-# ---------------------------------------------------------------------------
-# _parse_depth_value
+# _parse_depth_value: the model's class value (depth_simplify.depth_value)
 # ---------------------------------------------------------------------------
 
 class TestParseDepthValue:
-    def test_interval_uses_upper_bound(self, gen):
-        assert gen._parse_depth_value('0-10', bin_width=5.0) == 10.0
+    """Until 2026-11-12 the corridors used an interval's deeper end, added
+    the table's step to a single value and made negative depths positive."""
 
-    def test_interval_with_three_parts_uses_last(self, gen):
-        assert gen._parse_depth_value('a-b-7.5', bin_width=5.0) == 7.5
+    def test_interval_uses_the_shallower_end(self, gen):
+        assert gen._parse_depth_value('0-10') == 0.0
+        assert gen._parse_depth_value('48-51') == 48.0
 
-    def test_negative_interval_uses_less_negative_bound(self, gen):
-        """'-10--5' splits on '--' into ['-10', '5'] -> abs(-10) = 10."""
-        assert gen._parse_depth_value('-10--5', bin_width=5.0) == 10.0
+    def test_negative_interval_uses_the_shallower_end(self, gen):
+        assert gen._parse_depth_value('-10--5') == -10.0
 
-    def test_single_positive_adds_bin_width(self, gen):
-        assert gen._parse_depth_value('10', bin_width=5.0) == 15.0
-
-    def test_single_negative_adds_bin_width_to_abs(self, gen):
-        assert gen._parse_depth_value('-10', bin_width=5.0) == 15.0
-
-    def test_zero_bin_width(self, gen):
-        assert gen._parse_depth_value('10', bin_width=0.0) == 10.0
+    def test_single_values_are_taken_as_they_are(self, gen):
+        assert gen._parse_depth_value('10') == 10.0
+        assert gen._parse_depth_value('-10') == -10.0
+        assert gen._parse_depth_value('7.5') == 7.5
 
     def test_unparseable_returns_none(self, gen):
-        assert gen._parse_depth_value('nonsense', bin_width=5.0) is None
+        assert gen._parse_depth_value('nonsense') is None
+        assert gen._parse_depth_value('a-b-7.5') is None
 
     def test_empty_string_returns_none(self, gen):
-        assert gen._parse_depth_value('', bin_width=5.0) is None
+        assert gen._parse_depth_value('') is None
 
 
 # ---------------------------------------------------------------------------
-# _get_distribution_std
+# Corridor width and length: the drift model's
 # ---------------------------------------------------------------------------
 
-class TestGetDistributionStd:
-    def test_reads_text_from_widget(self, gen):
-        gen.plugin.main_widget.leNormStd1_1.text.return_value = '250'
-        assert gen._get_distribution_std() == 250.0
-
-    def test_empty_text_falls_back_to_default(self, gen):
-        gen.plugin.main_widget.leNormStd1_1.text.return_value = ''
-        assert gen._get_distribution_std() == 100.0
-
-    def test_zero_falls_back_to_default(self, gen):
-        """Zero std is treated as 'not set' and falls back to 100."""
-        gen.plugin.main_widget.leNormStd1_1.text.return_value = '0'
-        assert gen._get_distribution_std() == 100.0
-
-    def test_missing_widget_falls_back(self, gen):
-        """A ValueError / AttributeError bubble still returns the default."""
-        gen.plugin.main_widget.leNormStd1_1.text.return_value = 'not-a-number'
-        assert gen._get_distribution_std() == 100.0
+def _seg(sp, ep, std1=200.0, std2=200.0):
+    return {'Start_Point': sp, 'End_Point': ep,
+            'std1_1': std1, 'weight1_1': 100.0, 'std2_1': std2, 'weight2_1': 100.0}
 
 
-# ---------------------------------------------------------------------------
-# _get_repair_params / _get_drift_speed_ms
-# ---------------------------------------------------------------------------
+class TestModelWidthAndLength:
+    """Until 2026-11-12 every leg got the width of the leg shown on the
+    Distributions tab and the length came from repair keys read at the wrong
+    level of ``drift_values`` (always the defaults)."""
 
-class TestRepairAndDriftSpeed:
-    def test_repair_params_from_drift_values(self, gen):
-        gen.plugin.drift_values = {
-            'use_lognormal': 1, 'std': 0.8, 'loc': 0.1, 'scale': 0.9,
+    def test_legs_and_half_widths_follow_segment_data(self, gen):
+        from geometries.depth_simplify import lateral_spread_m
+        gen.plugin.segment_data = {
+            '1': _seg('11.0 56.0', '11.1 56.0', std1=200.0, std2=300.0),
+            '2': _seg('11.1 56.0', '11.2 56.1', std1=50.0, std2=50.0),
         }
-        params = gen._get_repair_params()
-        assert params == {
-            'use_lognormal': 1, 'std': 0.8, 'loc': 0.1, 'scale': 0.9,
-        }
+        legs, widths = gen._get_legs_and_half_widths()
+        assert [list(leg.coords) for leg in legs] == [[(11.0, 56.0), (11.1, 56.0)], [(11.1, 56.0), (11.2, 56.1)]]
+        seg1 = gen.plugin.segment_data['1']
+        assert widths[0] == pytest.approx(max(lateral_spread_m(seg1, 0), lateral_spread_m(seg1, 1)))
+        assert widths == pytest.approx([5 * 300.0, 5 * 50.0])
 
-    def test_repair_params_use_defaults_when_missing(self, gen):
-        gen.plugin.drift_values = {}
-        params = gen._get_repair_params()
-        # Exact default values from the source.
-        assert params['use_lognormal'] == 1
-        assert params['std'] == pytest.approx(0.95)
-        assert params['loc'] == pytest.approx(0.2)
-        assert params['scale'] == pytest.approx(0.85)
+    def test_without_segment_data_uses_route_layers_and_fallback(self, gen, monkeypatch):
+        from shapely.geometry import LineString
+        from geometries.depth_simplify import FALLBACK_SPREAD_M
+        gen.plugin.segment_data = {}
+        monkeypatch.setattr(gen, '_get_legs_from_routes', lambda: [LineString([(0, 0), (1, 0)])])
+        legs, widths = gen._get_legs_and_half_widths()
+        assert len(legs) == 1 and widths == [FALLBACK_SPREAD_M]
 
-    def test_drift_speed_converts_knots_to_ms(self, gen):
-        gen.plugin.drift_values = {'speed': 2.0}
-        # 2 kts -> 2 * 1852 / 3600 ~ 1.0289 m/s
-        assert gen._get_drift_speed_ms() == pytest.approx(2.0 * 1852 / 3600)
+    def test_length_is_the_model_reach(self, gen):
+        from compute.drift_reach import REACH_QUANTILE, drift_reach_m
+        gen.plugin.segment_data = {'1': _seg('11.0 56.0', '11.5 56.0')}
+        gen.plugin.drift_values = {'speed': 1.0, 'repair': {
+            'use_lognormal': True, 'std': 0.95, 'loc': 0.2, 'scale': 0.85, 'func': ''}}
+        assert gen._get_corridor_length() == pytest.approx(drift_reach_m(gen.plugin.drift_values, REACH_QUANTILE))
 
-    def test_drift_speed_default_1p94_kts(self, gen):
-        gen.plugin.drift_values = {}
-        # Default from source is 1.94 kts.
-        assert gen._get_drift_speed_ms() == pytest.approx(1.94 * 1852 / 3600)
+    def test_length_capped_at_ten_legs(self, gen):
+        from geometries.route_validation import leg_length_m
+        seg = _seg('11.0 56.0', '11.001 56.0')
+        gen.plugin.segment_data = {'1': seg}
+        gen.plugin.drift_values = {'speed': 1.0, 'repair': {
+            'use_lognormal': True, 'std': 0.95, 'loc': 0.2, 'scale': 0.85, 'func': ''}}
+        assert gen._get_corridor_length() == pytest.approx(10 * leg_length_m(seg))
 
 
 # ---------------------------------------------------------------------------
@@ -307,21 +230,15 @@ class TestGetLegsFromRoutes:
 
 class TestGetDepthObstacles:
     def test_only_depths_below_threshold_kept(self, gen):
-        """Depths > threshold are filtered out (even after the bin-width add)."""
+        """Depths > threshold are filtered out; a class is its shallower end."""
         tbl = _fake_table([
             ['d1', '5', 'POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))'],
-            ['d2', '50', 'POLYGON((2 2, 3 2, 3 3, 2 3, 2 2))'],
+            ['d2', '50-60', 'POLYGON((2 2, 3 2, 3 3, 2 3, 2 2))'],
             ['d3', '100', 'POLYGON((4 4, 5 4, 5 5, 4 5, 4 4))'],
         ])
         gen.plugin.main_widget.twDepthList = tbl
-        # Threshold large enough that d1 (5+45=50) passes but the others don't.
         out = gen._get_depth_obstacles(depth_threshold=50.0)
-        # bin_width = (50-5) = 45 (most-common diff among bare values 5, 50, 100)
-        # Actually bin_width is min diff -- let's just check that exactly one
-        # row qualifies.
-        assert len(out) == 1
-        poly, depth = out[0]
-        assert depth >= 5.0
+        assert sorted(depth for _poly, depth in out) == [5.0, 50.0]
 
     def test_multipolygon_split(self, gen):
         tbl = _fake_table([
@@ -329,7 +246,7 @@ class TestGetDepthObstacles:
                        '((2 2, 3 2, 3 3, 2 3, 2 2)))'],
         ])
         gen.plugin.main_widget.twDepthList = tbl
-        # Depth=5 + bin_width=0 = 5. Threshold=10.
+        # Depth 5 <= threshold 10.
         out = gen._get_depth_obstacles(depth_threshold=10.0)
         # MultiPolygon split into 2 sub-polygons.
         assert len(out) == 2
@@ -422,7 +339,7 @@ class TestGetAnchorZone:
             ['d2', '7', 'POLYGON((2 2, 3 2, 3 3, 2 3, 2 2))'],
         ])
         gen.plugin.main_widget.twDepthList = tbl
-        # Threshold = 100 -> both qualify regardless of bin_width adjustment.
+        # Threshold = 100 -> both qualify.
         zone = gen._get_anchor_zone(anchor_threshold=100.0)
         # Union covers both polygons -> area > 1 (sum of two unit squares = 2).
         assert zone.area >= 2.0 - 1e-6
@@ -472,20 +389,20 @@ class TestPrecollectData:
         ])
         gen.plugin.main_widget.twDepthList = depth_tbl
         gen.plugin.main_widget.twObjectList = obj_tbl
-        gen.plugin.qgis_geoms.vector_layers = []  # no legs
+        gen.plugin.qgis_geoms.vector_layers = []
+        gen.plugin.segment_data = {'1': _seg('11.0 56.0', '11.1 56.0', std1=50.0, std2=50.0)}
         gen.plugin.drift_values = {
             'anchor_d': 2.0, 'speed': 1.94,
-            'use_lognormal': 1, 'std': 0.95, 'loc': 0.2, 'scale': 0.85,
+            'repair': {'use_lognormal': True, 'std': 0.95, 'loc': 0.2, 'scale': 0.85, 'func': ''},
         }
-        gen.plugin.main_widget.leNormStd1_1.text.return_value = '50'
         gen.precollect_data(depth_threshold=10.0, height_threshold=10.0)
         d = gen._precollected_data
         assert d is not None
         assert 'depth_obstacles' in d and len(d['depth_obstacles']) == 1
         assert 'structure_obstacles' in d and len(d['structure_obstacles']) == 1
         assert 'anchor_zone' in d
-        assert d['lateral_std'] == 50.0
-        assert d['drift_speed'] == pytest.approx(1.94 * 1852 / 3600)
+        assert len(d['legs']) == 1 and d['half_widths'] == [pytest.approx(250.0)]
+        assert d['projection_dist'] == pytest.approx(gen._get_corridor_length())
 
 
 # ---------------------------------------------------------------------------

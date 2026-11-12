@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from compute.basic_equations import HOURS_PER_YEAR  # noqa: E402
 from compute.leg_labels import leg_display  # noqa: E402
 
 
@@ -127,27 +128,29 @@ class DriftingReportMixin:
             )
 
         md_lines: list[str] = []
-        # Apply reduction factors to match GUI display
-        pc_vals = data.get('pc', {}) if isinstance(data, dict) and isinstance(data.get('pc', {}), dict) else {}
-        allision_rf = float(pc_vals.get('allision_drifting_rf', 1.0))
-        grounding_rf = float(pc_vals.get('grounding_drifting_rf', 1.0))
+        # ``totals`` already carry the risk-reduction factors (applied per
+        # contribution in the model); ``totals_before_rf`` holds the sums before.
+        rf = rep.get('risk_factors') or {}
+        allision_rf = float(rf.get('allision', 1.0))
+        grounding_rf = float(rf.get('grounding', 1.0))
+        before = rep.get('totals_before_rf') or totals
 
-        final_allision = float(totals.get('allision', 0.0)) * allision_rf
-        final_grounding = float(totals.get('grounding', 0.0)) * grounding_rf
+        final_allision = float(totals.get('allision', 0.0))
+        final_grounding = float(totals.get('grounding', 0.0))
 
         md_lines.append("# Drifting Model Appendix Report")
         md_lines.append("")
         md_lines.append("## Summary")
         md_lines.append(f"- Total allision: {final_allision:.3e}")
         md_lines.append(f"- Total grounding: {final_grounding:.3e}")
-        md_lines.append(f"- Total allision (before RF): {float(totals.get('allision', 0.0)):.3e}")
-        md_lines.append(f"- Total grounding (before RF): {float(totals.get('grounding', 0.0)):.3e}")
+        md_lines.append(f"- Total allision (before RF): {float(before.get('allision', 0.0)):.3e}")
+        md_lines.append(f"- Total grounding (before RF): {float(before.get('grounding', 0.0)):.3e}")
         md_lines.append(f"- Allision reduction factor: {allision_rf:.3f}")
         md_lines.append(f"- Grounding reduction factor: {grounding_rf:.3f}")
         drift_p_val = float(drift.get('drift_p', 0.0)) if isinstance(drift, dict) else 0.0
         md_lines.append(f"- Aggregated blackout-weighted exposure (sum(base*rose)): {total_base_hours:.2f}")
         if drift_p_val > 0.0:
-            est_ship_hours = total_base_hours * (365.0 * 24.0) / drift_p_val
+            est_ship_hours = total_base_hours * HOURS_PER_YEAR / drift_p_val
             md_lines.append(f"- Estimated aggregated ship-hours on legs: {est_ship_hours:.2f}")
         md_lines.append("")
         md_lines.append("## Parameters")
@@ -316,27 +319,33 @@ class DriftingReportMixin:
                 "risk.  The formula is:")
             md_lines.append("")
             md_lines.append(
-                "    contrib = exposure_sum * (h_eff * len_frac) * edge_p_nr")
+                "    contrib = exposure_sum * edge_hole * edge_p_nr * risk_factor\n"
+                "    edge_hole = edge_h_eff * recarve_scale * (h_eff / hole_pct)")
             md_lines.append("")
             md_lines.append(
                 "where\n\n"
                 "- ``exposure_sum = Σ(base * rp)`` over the ship cells that fed this edge.\n"
-                "- ``h_eff`` is the polygon-level analytical hole probability after\n"
-                "  between-polygon shadow + anchor reduction (this is what preserves\n"
-                "  the AIS ship-density profile).\n"
+                "- ``edge_h_eff = reachable_width / leg_drift_width`` -- the edge's\n"
+                "  share of the drift width, with the ships spread evenly along the\n"
+                "  reference line (the leg, or its offset with *Start drifting from =\n"
+                "  Distribution centre*).  ``reachable_width`` is what is left of the\n"
+                "  edge after the 1D shadow-carve within the polygon and against\n"
+                "  closer obstacles.\n"
+                "- ``h_eff / hole_pct`` -- the share of the polygon's probability hole\n"
+                "  that survives the shadow of closer obstacles and anchoring on the\n"
+                "  way (``hole_pct`` unshadowed, ``h_eff`` after both).\n"
+                "- ``recarve_scale`` -- gives back the reach an edge lost in the\n"
+                "  carve against closer obstacles, which ``h_eff`` already counts\n"
+                "  (not a column: ``edge_hole`` includes it).\n"
                 "- ``len_frac = reachable_width / Σ reachable_widths`` -- the edge's\n"
-                "  share of the polygon, from a 1D shadow-carve within the polygon\n"
-                "  (a closer edge blocks the perpendicular-to-drift range it covers).\n"
-                "  Sum of ``len_frac`` across a polygon's edges = 1, so summing\n"
-                "  edge contributions reproduces the polygon-level ``h_eff * P_NR``.\n"
-                "- ``edge_h_eff = reachable_width / leg_drift_width`` -- the pure-\n"
-                "  geometric per-edge share under a uniform-ships assumption.  Kept\n"
-                "  for backtracing only; multiplying by it directly would ignore the\n"
-                "  ship-density profile and inflate obstacles that lie away from the\n"
-                "  traffic distribution mean.\n"
+                "  share of the polygon (sums to 1 over its edges); it splits the\n"
+                "  anchoring contribution over the edges.\n"
                 "- ``edge_dist_m`` is the along-drift distance from the leg to the\n"
                 "  edge midpoint; ``edge_p_nr`` is P(ship not repaired by that\n"
-                "  distance).  ``edge_hole = h_eff * len_frac`` is the effective share.")
+                "  distance).\n"
+                "- ``risk_factor`` -- the drifting risk-reduction factor of the\n"
+                "  accident type (Causation factors; 1 unless set), already in\n"
+                "  ``contrib`` and in every total of this report.")
             md_lines.append("")
 
             flat: list[tuple[str, str, str, dict[str, Any]]] = []

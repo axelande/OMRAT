@@ -101,35 +101,6 @@
             </item>
            </widget>
           </item>
-          <item row="4" column="0">
-           <widget class="QLabel" name="label_squatMode">
-            <property name="text">
-             <string>Squat:</string>
-            </property>
-            <property name="alignment">
-             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="1">
-           <widget class="QComboBox" name="cbSquatMode">
-            <item>
-             <property name="text">
-              <string>Use average speed</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>Use drift speed</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>Don't include</string>
-             </property>
-            </item>
-           </widget>
-          </item>
          </layout>
         </item>
         <item>

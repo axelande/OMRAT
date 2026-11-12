@@ -29,7 +29,6 @@ def task(qgis_app):
         'corridor test', gen,
         depth_threshold=-5.0,
         height_threshold=20.0,
-        target_prob=1e-3,
     )
     return t, gen
 
@@ -44,7 +43,6 @@ class TestInit:
         assert t.generator is gen
         assert t.depth_threshold == -5.0
         assert t.height_threshold == 20.0
-        assert t.target_prob == 1e-3
         assert t.exception is None
         assert t.error_msg is None
         assert t.corridors == []
@@ -58,7 +56,7 @@ class TestRunSuccess:
     def test_generator_called_with_stored_thresholds(self, task):
         t, gen = task
         assert t.run() is True
-        gen.generate_corridors.assert_called_once_with(-5.0, 20.0, 1e-3)
+        gen.generate_corridors.assert_called_once_with(-5.0, 20.0)
 
     def test_corridors_stored_on_task(self, task):
         t, _ = task
@@ -105,6 +103,7 @@ class TestRunFailureModes:
         from geometries.drift_corridor_task_v2 import DriftCorridorTask
         state = {'done': False}
         gen = MagicMock()
+
         def fake_gen(*a, **k):
             state['done'] = True
             return [{'id': 'x'}]

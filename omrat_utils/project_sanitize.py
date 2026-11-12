@@ -18,8 +18,8 @@ yet" and would otherwise fail validation:
 A third invariant is that ``traffic_data`` only has keys that exist in
 ``segment_data``: ``clean_traffic`` and ``get_no_ship_h`` index the leg
 for every traffic key, so a traffic block whose leg is gone makes the
-whole run fail with a bare ``KeyError`` (``testEO08v2.omrat``,
-2026-09-18, reported as ``'7'``).  Orphan blocks are dropped here.
+whole run fail with a bare ``KeyError`` (shown to the user as e.g.
+``'7'``).  Orphan blocks are dropped here.
 
 Both the writer (``GatherData.get_all_for_save``) and the reader
 (``Storage._normalize_legacy_to_schema``) call ``sanitize_project`` so a

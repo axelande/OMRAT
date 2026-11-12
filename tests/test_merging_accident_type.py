@@ -54,56 +54,70 @@ def _traffic(freq: float = 1000.0) -> dict:
     }
 
 
-def _shallow_pair() -> dict:
-    """Two legs sharing a start point, diverging by about 17 degrees.
-
-    Well inside ``MERGING_ANGLE_DEG`` (30), so the pair classifies as
-    merging rather than crossing.
-    """
-    return {
-        '1': _seg("15.0 55.0", "15.0 56.0"),      # due north
-        '2': _seg("15.0 55.0", "15.30 55.97"),    # north-north-east
+def _merging_junction() -> tuple[dict, dict]:
+    """Legs 1 (from the south) and 2 (from the west) both continue onto leg 3 (north)."""
+    from geometries.junctions import build_junctions
+    segments = {
+        '1': _seg("15.0 54.0", "15.0 55.0"),
+        '2': _seg("14.0 55.0", "15.0 55.0"),
+        '3': _seg("15.0 55.0", "15.0 56.0"),
     }
+    js = build_junctions(segments)
+    j = next(iter(js.values()))
+    j.transitions = {'1': {'3': 1.0}, '2': {'3': 1.0}, '3': {}}
+    j.source = 'user'
+    return segments, js
 
 
-def _steep_pair() -> dict:
-    """Two legs sharing a start point and meeting at right angles."""
-    return {
-        '1': _seg("15.0 55.0", "15.0 56.0"),   # due north
-        '2': _seg("15.0 55.0", "16.0 55.0"),   # due east
+def _crossing_junction() -> tuple[dict, dict]:
+    """An X: leg 1 continues north onto 3, leg 2 continues east onto 4."""
+    from geometries.junctions import build_junctions
+    segments = {
+        '1': _seg("15.0 54.0", "15.0 55.0"),
+        '2': _seg("14.0 55.0", "15.0 55.0"),
+        '3': _seg("15.0 55.0", "15.0 56.0"),
+        '4': _seg("15.0 55.0", "16.0 55.0"),
     }
+    js = build_junctions(segments)
+    j = next(iter(js.values()))
+    j.transitions = {'1': {'3': 1.0}, '2': {'4': 1.0}, '3': {}, '4': {}}
+    j.source = 'user'
+    return segments, js
 
 
 LI = [{'min': 50, 'max': 150}]
 
 
-def _run(segments, *, pc_crossing=1.3e-4, pc_merging=1.3e-4):
+def _run(case, *, pc_crossing=1.3e-4, pc_merging=1.3e-4):
+    segments, junctions = case
     runner = _StubRunner()
     traffic = {k: _traffic() for k in segments}
     return runner._calc_crossing_collisions(
         traffic_data=traffic, segment_data=segments,
         leg_keys=list(segments.keys()),
         pc_crossing=pc_crossing, pc_merging=pc_merging,
-        length_intervals=LI,
+        length_intervals=LI, junctions=junctions,
     )
 
 
 # ---------------------------------------------------------------------------
-# Angle classification
+# Classification by route (KNOWN_ISSUES 30): same out-leg = merging,
+# interleaving paths = crossing
 # ---------------------------------------------------------------------------
 
 class TestClassification:
-    def test_shallow_angle_counts_as_merging_only(self):
-        totals = _run(_shallow_pair())
+    def test_routes_onto_one_leg_count_as_merging_only(self):
+        totals = _run(_merging_junction())
         assert totals['merging'] > 0.0
         assert totals['crossing'] == 0.0
 
-    def test_right_angle_counts_as_crossing_only(self):
-        totals = _run(_steep_pair())
+    def test_crossing_paths_count_as_crossing_only(self):
+        totals = _run(_crossing_junction())
         assert totals['crossing'] > 0.0
         assert totals['merging'] == 0.0
 
-    def test_threshold_is_the_documented_30_degrees(self):
+    def test_threshold_constant_kept_for_compare_explain(self):
+        # No longer classifies (routes do); compare_explain mirrors the constant.
         assert ShipCollisionModelMixin.MERGING_ANGLE_DEG == 30.0
 
 
@@ -115,13 +129,13 @@ class TestCausationFactors:
     def test_merging_uses_its_own_factor(self):
         """Doubling pc_merging doubles the merging total and leaves
         crossing untouched."""
-        base = _run(_shallow_pair(), pc_merging=1.3e-4)
-        doubled = _run(_shallow_pair(), pc_merging=2.6e-4)
+        base = _run(_merging_junction(), pc_merging=1.3e-4)
+        doubled = _run(_merging_junction(), pc_merging=2.6e-4)
         assert isclose(doubled['merging'] / base['merging'], 2.0, rtol=1e-12)
 
     def test_crossing_factor_does_not_affect_merging(self):
-        base = _run(_shallow_pair(), pc_crossing=1.3e-4)
-        other = _run(_shallow_pair(), pc_crossing=9.9e-3)
+        base = _run(_merging_junction(), pc_crossing=1.3e-4)
+        other = _run(_merging_junction(), pc_crossing=9.9e-3)
         assert isclose(base['merging'], other['merging'], rtol=1e-12)
 
     def test_explicit_merging_factor_is_respected(self):
@@ -154,8 +168,8 @@ class TestTotals:
         assert result['total'] == 1.0 + 2.0 + 4.0 + 8.0 + 16.0
 
     def test_merging_is_not_double_counted_in_crossing(self):
-        totals = _run(_shallow_pair())
-        # The whole pair went to merging; nothing leaked into crossing.
+        totals = _run(_merging_junction())
+        # Both routes went to merging; nothing leaked into crossing.
         assert totals['crossing'] == 0.0
 
 

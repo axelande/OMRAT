@@ -1021,16 +1021,19 @@ def _parse_lonlat(text: str | None) -> tuple[float, float] | None:
 
 
 def _seg_bearing(seg: dict) -> float | None:
-    """Compass bearing (0=N, 90=E, CW) of a route leg from Start_Point to End_Point."""
+    """Compass bearing (0=N, 90=E, CW) of a route leg from Start_Point to End_Point.
+
+    Measured in a projection centred on the start point (raw lon/lat
+    degrees until 2026-11-12, KNOWN_ISSUES 36).
+    """
+    from geometries.model_projection import projected_bearing
     sp = _parse_lonlat(str(seg.get('Start_Point', '') or seg.get('Start Point', '')))
     ep = _parse_lonlat(str(seg.get('End_Point', '') or seg.get('End Point', '')))
     if sp is None or ep is None:
         return None
-    dx = ep[0] - sp[0]   # eastward (longitude difference)
-    dy = ep[1] - sp[1]   # northward (latitude difference)
-    if dx == 0.0 and dy == 0.0:
+    if ep[0] == sp[0] and ep[1] == sp[1]:
         return None
-    return float(np.degrees(np.arctan2(dx, dy)) % 360)
+    return float(projected_bearing(sp, ep))
 
 
 def _build_powered_layer(

@@ -33,6 +33,7 @@ values are the lower bound of their band (``3`` = 3-6 m).
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -67,11 +68,22 @@ def _num(value: Any) -> float:
         return math.nan
 
 
+_INTERVAL = re.compile(r'^\s*(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*$')
+
+
 def depth_value(value: Any) -> float:
-    """Class value of a depth cell; ``"48-51"`` reads as 48 like the save path does."""
+    """Class value of a depth cell: the number, or the *shallower* end of an
+    interval -- ``"48-51"`` -> 48, ``"-10--5"`` -> -10 (``nan`` if neither).
+
+    The one rule for a depth class: compute, the save path, the depth layer
+    on the map (GEBCO fetch and project load) and the Drift Analysis
+    corridors all use it, so a ship grounds on the same water everywhere.
+    """
     v = _num(value)
-    if math.isnan(v) and isinstance(value, str) and '-' in value.strip()[1:]:
-        v = _num(value.strip().split('-')[0])
+    if math.isnan(v) and isinstance(value, str):
+        m = _INTERVAL.match(value)
+        if m:
+            v = min(float(m.group(1)), float(m.group(2)))
     return v
 
 
@@ -80,8 +92,15 @@ def class_values(depths: Iterable[Sequence[Any]]) -> list[float]:
     return sorted({v for row in depths if len(row) > 1 and math.isfinite(v := depth_value(row[1]))})
 
 
-def max_traffic_draught(traffic_data: dict[str, Any] | None) -> float | None:
-    """Deepest finite draught of a cell that carries ships, or None."""
+def max_traffic_draught(traffic_data: dict[str, Any] | None, with_squat: bool = False,
+                        type_names: Sequence[str] | None = None) -> float | None:
+    """Deepest finite draught of a cell that carries ships, or None.
+
+    ``with_squat`` adds each cell's squat at its speed (``compute/squat.py``),
+    as the grounding models do when a Squat box is ticked.
+    """
+    from compute.squat import squat_for_row
+    names = list(type_names or [])
     deepest: float | None = None
     for dirs in (traffic_data or {}).values():
         if not isinstance(dirs, dict):
@@ -89,6 +108,7 @@ def max_traffic_draught(traffic_data: dict[str, Any] | None) -> float | None:
         for block in dirs.values():
             freq = block.get('Frequency (ships/year)') if isinstance(block, dict) else None
             draught = block.get('Draught (meters)') if isinstance(block, dict) else None
+            speed = block.get('Speed (knots)') if isinstance(block, dict) else None
             if not isinstance(freq, list) or not isinstance(draught, list):
                 continue
             for i, row in enumerate(freq):
@@ -100,7 +120,15 @@ def max_traffic_draught(traffic_data: dict[str, Any] | None) -> float | None:
                         d = _num(draught[i][j])
                     except (IndexError, TypeError):
                         continue
-                    if math.isfinite(d) and d > 0 and (deepest is None or d > deepest):
+                    if not (math.isfinite(d) and d > 0):
+                        continue
+                    if with_squat:
+                        try:
+                            v = _num(speed[i][j]) if isinstance(speed, list) else 0.0
+                        except (IndexError, TypeError):
+                            v = 0.0
+                        d += squat_for_row(names, i, v)
+                    if deepest is None or d > deepest:
                         deepest = d
     return deepest
 

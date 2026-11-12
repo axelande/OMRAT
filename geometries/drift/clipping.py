@@ -3,10 +3,10 @@
 Corridor clipping functions for obstacle intersection.
 
 Clips corridors at obstacles by creating and subtracting blocking zones,
-and filters to keep only reachable parts from the upwind edge.
+and splits them into the anchorable and the deep part.
 """
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -198,96 +198,3 @@ def split_corridor_by_anchor_zone(
         pass  # keep blue/green as-is on failure
 
     return blue, green
-
-
-def keep_reachable_part(clipped: Polygon, original_corridor: Polygon,
-                        drift_angle_deg: float, log_prefix: str = "") -> Polygon:
-    """
-    Keep only the part of the clipped corridor that is reachable from the upwind edge.
-
-    Ships start from the upwind edge and drift downwind. If obstacles create
-    separate regions, we only want the region(s) connected to the starting edge.
-
-    Args:
-        clipped: The corridor after subtracting obstacles
-        original_corridor: The original corridor before clipping
-        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
-        log_prefix: Prefix for log messages (empty string to disable logging)
-
-    Returns:
-        The reachable part of the corridor
-    """
-    if clipped.is_empty:
-        return clipped
-
-    # Extract all polygon parts
-    parts = extract_polygons(clipped)
-    if len(parts) <= 1:
-        return clipped  # Single part, nothing to filter
-
-    # Import logging only if needed
-    if log_prefix:
-        from qgis.core import QgsMessageLog, Qgis
-
-    # Determine the "upwind" edge of the original corridor
-    # Upwind is opposite to drift direction
-    upwind_edge = _get_upwind_edge(original_corridor.bounds, drift_angle_deg)
-
-    # Keep parts that touch the upwind edge
-    reachable_parts = []
-    for part in parts:
-        if part.intersects(upwind_edge):
-            reachable_parts.append(part)
-
-    if not reachable_parts:
-        # If no parts touch upwind edge, keep largest part as fallback
-        if log_prefix:
-            QgsMessageLog.logMessage(
-                f"{log_prefix}No parts touch upwind edge, keeping largest",
-                "OMRAT", Qgis.MessageLevel.Warning
-            )
-        return max(parts, key=lambda p: p.area)
-
-    if log_prefix and len(reachable_parts) < len(parts):
-        QgsMessageLog.logMessage(
-            f"{log_prefix}Kept {len(reachable_parts)}/{len(parts)} parts touching upwind edge",
-            "OMRAT", Qgis.MessageLevel.Info
-        )
-
-    return make_valid(unary_union(reachable_parts))
-
-
-def _get_upwind_edge(bounds: tuple[float, float, float, float],
-                     drift_angle_deg: float) -> Polygon:
-    """
-    Create a thin rectangle along the upwind edge of the corridor bounds.
-
-    Args:
-        bounds: (minx, miny, maxx, maxy) of the corridor
-        drift_angle_deg: Nautical compass angle (0=N, 90=E, 180=S, 270=W)
-
-    Returns:
-        Thin box polygon along the upwind edge
-    """
-    minx, miny, maxx, maxy = bounds
-    margin = max(maxx - minx, maxy - miny) * 0.01  # Small margin for intersection test
-
-    angle = drift_angle_deg % 360
-
-    # For each drift direction, upwind is the opposite edge
-    if angle < 22.5 or angle >= 337.5:  # N drift -> upwind is South
-        return box(minx - margin, miny - margin, maxx + margin, miny + margin)
-    elif 22.5 <= angle < 67.5:  # NW drift -> upwind is SE
-        return box(maxx - margin, miny - margin, maxx + margin, miny + margin)
-    elif 67.5 <= angle < 112.5:  # W drift -> upwind is East
-        return box(maxx - margin, miny - margin, maxx + margin, maxy + margin)
-    elif 112.5 <= angle < 157.5:  # SW drift -> upwind is NE
-        return box(maxx - margin, maxy - margin, maxx + margin, maxy + margin)
-    elif 157.5 <= angle < 202.5:  # S drift -> upwind is North
-        return box(minx - margin, maxy - margin, maxx + margin, maxy + margin)
-    elif 202.5 <= angle < 247.5:  # SE drift -> upwind is NW
-        return box(minx - margin, maxy - margin, minx + margin, maxy + margin)
-    elif 247.5 <= angle < 292.5:  # E drift -> upwind is West
-        return box(minx - margin, miny - margin, minx + margin, maxy + margin)
-    else:  # NE drift (292.5 to 337.5) -> upwind is SW
-        return box(minx - margin, miny - margin, minx + margin, miny + margin)

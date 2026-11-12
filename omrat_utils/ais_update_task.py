@@ -264,9 +264,8 @@ class AisUpdateTask(QgsTask):
         Distributions tab first, write, then reload the tab *without* a
         flush.  The tab writes its widgets into ``distributions.last_id``
         on the next leg switch, so widgets still holding the pre-update
-        values put the old weights back over the AIS result (B156
-        LEG_1_1, 2026-10-07: AIS mean / std with weight 0, so no curve on
-        the tangent line).
+        values put the old weights back over the AIS result (AIS mean /
+        std with weight 0, so no curve on the tangent line).
         """
         dists = getattr(omrat, 'distributions', None)
         if dists is not None:

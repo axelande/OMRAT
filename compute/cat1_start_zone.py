@@ -7,7 +7,7 @@ the origin that picture is wrong: the ships are still arriving from the
 previous leg, and their lateral position is not yet described by this
 leg's fitted distribution.  A wind farm lying next to a junction then
 collects the far tail of the distribution of a leg whose ships never
-sail there (ESCOW case study, LEG_1_2_b East going, 2026-10-01).
+sail there (seen in a wind farm case study, 2026-10-01).
 
 With the setting on, a ray whose first edge crossing lies within the
 first ``pct`` % of the leg is dropped.  Rays that cross an edge further

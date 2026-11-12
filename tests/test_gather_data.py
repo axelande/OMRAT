@@ -206,6 +206,23 @@ class TestCopyDepthsAndObjects:
             ['o0', '20', 'POLYGON((5 5,6 5,6 6,5 6,5 5))'],
         ]
 
+    def test_intervals_saved_as_their_shallower_end(self, gd_minimal):
+        """A GEBCO interval is saved as the class value compute uses; a
+        negative depth was saved as '' by ``split('-')[0]`` before 2026-11-12."""
+        plugin = gd_minimal.p
+        values = {}
+        for r, depth in enumerate(['0-10', '-5', '7.5', '-10--5']):
+            values.update({(r, 0): f'd{r}', (r, 1): depth, (r, 2): 'POLYGON((0 0,1 0,1 1,0 1,0 0))'})
+        plugin.main_widget.twDepthList.rowCount.return_value = 4
+        plugin.main_widget.twDepthList.columnCount.return_value = 3
+        plugin.main_widget.twDepthList.item.side_effect = (
+            lambda r, c: SimpleNamespace(text=lambda r=r, c=c: values[(r, c)]))
+        plugin.main_widget.twObjectList.rowCount.return_value = 0
+        plugin.main_widget.twObjectList.columnCount.return_value = 0
+        gd_minimal.data = {'depths': [], 'objects': []}
+        gd_minimal.copy_depths_and_objects()
+        assert [d[1] for d in gd_minimal.data['depths']] == ['0', '-5', '7.5', '-10']
+
     def test_incomplete_rows_skipped(self, gd_minimal):
         """Rows with fewer than 3 cells are dropped by the guard inside
         copy_depths_and_objects."""

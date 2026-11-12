@@ -8,8 +8,10 @@ powered models, both evaluated with shadow-aware ray casting:
   ``mass`` is the fraction of the lateral distribution the obstacle
   intercepts along the leg (Hansen eq. 4.15).  No distance decay.
 * **Category II** (missed turn): ships fail to turn at the leg's end and
-  continue straight.  ``N_II = Pc_II * Q * mass * exp(-d_mean / (ai * V))``
-  (Hansen eq. 4.16-4.17).
+  continue straight.  ``N_II = Pc_II * Q * sum_r m_r exp(-d_r / (ai * V))``
+  over the rays that hit the obstacle (Hansen eq. 4.16-4.17, summed ray by
+  ray since 2026-11-09 -- one mean distance per obstacle understated it,
+  KNOWN_ISSUES 26).
 
 The two categories cover disjoint stretches of water (the leg itself vs.
 the extension past the turning point), so their sum never double counts.
@@ -20,21 +22,52 @@ Each has its own causation factor: ``pc['grounding_cat1']`` /
 
 import math
 
-from numpy import exp
 from typing import Any, Iterator
 
+from compute import passenger_reduction
 from compute.iwrap_defaults import IWRAP_PC_DEFAULTS
 from compute.cat1_start_zone import start_zone_fraction, start_zone_settings  # noqa: E402
 from compute.ray_sampling import ray_sampling_settings  # noqa: E402
+from compute.squat import (  # noqa: E402
+    KEY_POWERED as SQUAT_POWERED_KEY, squat_for_row, squat_on, type_names as squat_type_names,
+)
 from compute.speed_restriction import speed_matrix, turning_point  # noqa: E402
 from geometries.get_powered_overlap import (
-    SimpleProjector as _PoweredProjector,
     _build_legs_and_obstacles,
-    _parse_point,
     _run_all_computations,
+    cat2_probability,
+    model_projector,
 )
 
 CATEGORIES: tuple[str, str] = ('cat1', 'cat2')
+
+
+def grounding_draught_bins(data: dict[str, Any], squat_key: str = SQUAT_POWERED_KEY) -> list[float]:
+    """The depth bins a grounding run casts its rays for, shallowest first.
+
+    As ``run_powered_grounding_model``: the traffic's draughts after the
+    run's gap fill, plus squat when the Causation factors box ``squat_key``
+    is ticked, each mapped to the deepest depth class not deeper than it
+    (``_depth_bin_key``).  A ship too shallow for every class grounds
+    nowhere and gives no bin.  The powered grounding View lets the user pick
+    one of these (the deepest by default) instead of a fixed 15 m; the
+    drifting grounding View uses the deepest with ``squat_key`` =
+    ``squat_drifting``.
+    """
+    import copy
+    from compute.traffic_gaps import fill_traffic_gaps
+
+    work = dict(data)
+    work['traffic_data'] = copy.deepcopy(data.get('traffic_data') or {})
+    try:
+        fill_traffic_gaps(work)
+    except Exception:  # nosec B110 - the stored draughts are used as they are
+        pass
+    pc_vals = data.get('pc') if isinstance(data.get('pc'), dict) else {}
+    names = squat_type_names(work) if squat_on(pc_vals, squat_key) else None
+    draughts = PoweredModelMixin._collect_draught_set(work['traffic_data'], names)
+    depths = PoweredModelMixin._build_unique_depths(data.get('depths') or [])
+    return sorted({b for b in (_depth_bin_key(d, depths) for d in draughts) if b is not None})
 
 
 def _depth_bin_key(draught: float, unique_depths: list[float]) -> float | None:
@@ -61,6 +94,15 @@ def _extract_positive(array, row_i: int, col_j: int, default: float) -> float:
     return default
 
 
+def _cell_squat(names: list[str], spd_arr, row_i: int, col_j: int) -> float:
+    """Barras squat of one traffic cell at its leg speed (``compute/squat.py``); 0 without a speed."""
+    try:
+        speed = spd_arr[row_i][col_j]
+    except (IndexError, TypeError):
+        return 0.0
+    return squat_for_row(names, row_i, speed)
+
+
 def known_height(value: float) -> bool:
     """A ship height the clearance check can use: finite and above 0.
 
@@ -85,19 +127,20 @@ def _extract_nonneg(array, row_i: int, col_j: int, default: float) -> float:
 def _edge_shares(edges: dict | None, recovery: float | None) -> dict[int, float]:
     """Fraction of an obstacle's hit probability landing on each boundary edge.
 
-    ``edges`` is the ``{edge_idx: {mass, mean_dist}}`` block the ray caster
-    attaches to every obstacle summary.  Each edge is weighted like the
-    obstacle itself -- ``mass * exp(-d / recovery)`` for Cat II, plain
-    ``mass`` when *recovery* is ``None`` (Cat I) -- and the weights are
-    normalised so the shares sum to one.  The per-edge values in the result
-    layer therefore always add up to the obstacle's ``by_obstacle`` figure.
+    ``edges`` is the ``{edge_idx: {mass, mean_dist, ray_masses, ray_dists}}``
+    block the ray caster attaches to every obstacle summary.  Each edge is
+    weighted like the obstacle itself -- ``sum m_r exp(-d_r / recovery)`` for
+    Cat II (:func:`cat2_probability`), plain ``mass`` when *recovery* is
+    ``None`` (Cat I) -- and the weights are normalised so the shares sum to
+    one.  The per-edge values in the result layer therefore always add up to
+    the obstacle's ``by_obstacle`` figure.
     """
     raw: dict[int, float] = {}
     for e_idx, e in (edges or {}).items():
         mass = e["mass"]
         if mass <= 0:
             continue
-        raw[int(e_idx)] = mass if recovery is None else mass * exp(-e["mean_dist"] / recovery)
+        raw[int(e_idx)] = mass if recovery is None else cat2_probability(e, recovery)
     total = sum(raw.values())
     if total <= 0:
         return {}
@@ -107,8 +150,9 @@ def _edge_shares(edges: dict | None, recovery: float | None) -> dict[int, float]
 def _iter_hit_probs(comp: dict, recovery: float) -> Iterator[tuple[str, tuple, float, dict[int, float]]]:
     """Yield ``(category, (kind, obs_id), p_hit, edge_shares)`` per obstacle hit.
 
-    * ``'cat2'``: ``p_hit = mass * exp(-d_mean / recovery)`` -- skipped when
-      the recovery distance ``ai * V`` is not positive.
+    * ``'cat2'``: ``p_hit = sum_r m_r exp(-d_r / recovery)`` over the
+      obstacle's rays (:func:`cat2_probability`) -- skipped when the
+      recovery distance ``ai * V`` is not positive.
     * ``'cat1'``: ``p_hit = mass`` -- the ship is already on course for the
       obstacle, so there is no distance term.
 
@@ -117,10 +161,9 @@ def _iter_hit_probs(comp: dict, recovery: float) -> Iterator[tuple[str, tuple, f
     information for that obstacle.
     """
     for obs_key, s in comp["summaries"].items():
-        mass, d_mean = s["mass"], s["mean_dist"]
-        if mass <= 0 or d_mean <= 0 or recovery <= 0:
+        if s["mass"] <= 0 or s["mean_dist"] <= 0 or recovery <= 0:
             continue
-        yield 'cat2', obs_key, mass * exp(-d_mean / recovery), _edge_shares(s.get("edges"), recovery)
+        yield 'cat2', obs_key, cat2_probability(s, recovery), _edge_shares(s.get("edges"), recovery)
     for obs_key, s in ((comp.get("cat1") or {}).get("summaries") or {}).items():
         mass = s["mass"]
         if mass <= 0:
@@ -196,6 +239,32 @@ def _empty_report(total_key: str) -> dict[str, Any]:
     }
 
 
+def powered_type_scale(data: dict) -> list[float] | None:
+    """Per ship-type row multiplier on powered grounding / allision, or None.
+
+    ``1 / F`` for passenger ships and fast ferries (``compute.passenger_reduction``,
+    IWRAP's reduction factor); ``None`` when both factors are 1.
+    """
+    pc_vals = data.get('pc') if isinstance(data.get('pc'), dict) else {}
+    if not passenger_reduction.is_active(pc_vals):
+        return None
+    n_rows = None
+    for leg in (data.get('traffic_data') or {}).values():
+        for block in (leg.values() if isinstance(leg, dict) else []):
+            freq = block.get('Frequency (ships/year)') if isinstance(block, dict) else None
+            if freq:
+                n_rows = len(freq)
+                break
+        if n_rows:
+            break
+    types = (data.get('ship_categories') or {}).get('types')
+    return passenger_reduction.powered_scales(types, pc_vals, n_rows)
+
+
+def _row_scale(scale: list[float] | None, row: int) -> float:
+    return scale[row] if scale and 0 <= row < len(scale) else 1.0
+
+
 def _pc_pair(pc_vals: dict, kind: str) -> tuple[float, float]:
     """``(Cat II factor, Cat I factor)`` for ``kind`` in ``('grounding', 'allision')``.
 
@@ -229,23 +298,33 @@ class PoweredModelMixin:
             pass
         return total
 
-    def _collect_draught_set(self, traffic_data: dict) -> set[float]:
+    @staticmethod
+    def _collect_draught_set(traffic_data: dict, squat_names: list[str] | None = None) -> set[float]:
+        """Every grounding draught in the traffic (one ray cast per depth bin they fall in).
+
+        ``squat_names`` (the project's type names; ``None`` = no squat) adds
+        each cell's squat at its speed, as :meth:`_grounding_draught` does.
+        """
         draught_set: set[float] = set()
         for leg_dirs in traffic_data.values():
             for dir_data in leg_dirs.values():
-                for row in dir_data.get('Draught (meters)', []):
+                spd_arr = dir_data.get('Speed (knots)', [])
+                for loa_i, row in enumerate(dir_data.get('Draught (meters)', [])):
                     if not hasattr(row, '__iter__'):
                         continue
-                    for d_val in row:
+                    for type_j, d_val in enumerate(row):
                         try:
                             v = float(d_val) if d_val != '' else 0.0
-                            if v > 0 and math.isfinite(v):
-                                draught_set.add(v)
                         except (ValueError, TypeError):
-                            pass
+                            continue
+                        if v > 0 and math.isfinite(v):
+                            if squat_names is not None:
+                                v += _cell_squat(squat_names, spd_arr, loa_i, type_j)
+                            draught_set.add(v)
         return draught_set or {5.0}
 
-    def _build_unique_depths(self, depths_list: list) -> list[float]:
+    @staticmethod
+    def _build_unique_depths(depths_list: list) -> list[float]:
         depth_values: list[float] = []
         for dep in depths_list:
             try:
@@ -288,8 +367,10 @@ class PoweredModelMixin:
         self, traffic_data: dict, segment_data: dict,
         bin_results: dict, unique_depths: list[float],
         pc_grounding: float, pc_grounding_cat1: float,
+        squat_names: list[str] | None = None,
     ) -> _ContribAccumulator:
         pc_by_cat = {'cat2': pc_grounding, 'cat1': pc_grounding_cat1}
+        scale = getattr(self, '_powered_type_scale', None)
         acc = _ContribAccumulator()
         for leg_key, leg_dirs in traffic_data.items():
             seg_info = segment_data.get(leg_key, {})
@@ -298,6 +379,7 @@ class PoweredModelMixin:
                 ai = ai_per_dir[min(dir_idx, 1)]
                 freq_arr = dir_data.get('Frequency (ships/year)', [])
                 drau_arr = dir_data.get('Draught (meters)', [])
+                leg_spd_arr = dir_data.get('Speed (knots)', [])
                 spd_arr = speed_matrix(dir_data, turning_point(dir_idx))
                 for loa_i, freq_row in enumerate(freq_arr):
                     if not hasattr(freq_row, '__iter__'):
@@ -309,7 +391,10 @@ class PoweredModelMixin:
                             q = 0.0
                         if q <= 0:
                             continue
+                        q *= _row_scale(scale, loa_i)   # rows are ship types
                         draught = _extract_positive(drau_arr, loa_i, type_j, 5.0)
+                        if squat_names is not None:
+                            draught += _cell_squat(squat_names, leg_spd_arr, loa_i, type_j)
                         speed_ms = _extract_positive(spd_arr, loa_i, type_j, 10.0) * 1852.0 / 3600.0
                         for comp in bin_results.get(_depth_bin_key(draught, unique_depths), []):
                             if comp["seg_id"] != leg_key or comp["dir_idx"] != dir_idx:
@@ -371,6 +456,7 @@ class PoweredModelMixin:
         obj_heights: dict, pc_allision: float, pc_allision_cat1: float,
     ) -> _ContribAccumulator:
         pc_by_cat = {'cat2': pc_allision, 'cat1': pc_allision_cat1}
+        scale = getattr(self, '_powered_type_scale', None)
         acc = _ContribAccumulator()
         for comp in computations:
             seg_id, dir_idx = comp["seg_id"], comp["dir_idx"]
@@ -393,6 +479,7 @@ class PoweredModelMixin:
                         q = 0.0
                     if q <= 0:
                         continue
+                    q *= _row_scale(scale, loa_i)   # rows are ship types
                     speed_ms = _extract_positive(spd_arr, loa_i, type_j, 10.0) * 1852.0 / 3600.0
                     ship_h = _extract_nonneg(hgt_arr, loa_i, type_j, 0.0)
                     dir_key = f"{seg_id}:{dir_idx}"
@@ -440,7 +527,7 @@ class PoweredModelMixin:
         N_I = Pc_I * Q * mass
         Category II: ships fail to turn at a bend and continue straight,
         potentially running aground on shallow depth areas beyond it.
-        N_II = Pc_II * Q * mass * exp(-d_mean / (ai * V))
+        N_II = Pc_II * Q * sum_r m_r exp(-d_r / (ai * V))
         The returned total is N_I + N_II; the report keeps the split under
         ``totals['cat1']`` / ``totals['cat2']`` and ``by_category``.
         """
@@ -454,24 +541,29 @@ class PoweredModelMixin:
             return self._emit_empty_grounding(total)
 
         pc_grounding, pc_grounding_cat1 = _pc_pair(pc_vals, 'grounding')
+        self._powered_type_scale = powered_type_scale(data)
         try:
-            first_seg = segment_data[list(segment_data.keys())[0]]
-            lon0, lat0 = _parse_point(first_seg["Start_Point"])
-            proj = _PoweredProjector(lon0, lat0)
+            # Centred on the model: an origin at the first leg made the result
+            # depend on the leg order (KNOWN_ISSUES 27).
+            proj = model_projector(segment_data)
         except Exception:  # nosec B110 B112
             return self._emit_empty_grounding(total)
 
-        draught_set = self._collect_draught_set(traffic_data)
+        # Squat at the ship's speed on the leg (Causation factors tick box,
+        # compute/squat.py): the ship grounds on depths below draught + squat.
+        squat_names = squat_type_names(data) if squat_on(pc_vals, SQUAT_POWERED_KEY) else None
+        draught_set = self._collect_draught_set(traffic_data, squat_names)
         unique_depths = self._build_unique_depths(depths_list)
         bin_results = self._precompute_bin_results(draught_set, unique_depths, data, proj)
         acc = self._sum_grounding_contribs(
             traffic_data, segment_data, bin_results, unique_depths,
-            pc_grounding, pc_grounding_cat1,
+            pc_grounding, pc_grounding_cat1, squat_names=squat_names,
         )
         self._finalize_grounding(acc, pc_grounding, pc_grounding_cat1, segment_data)
         if isinstance(self.powered_grounding_report, dict):
             self.powered_grounding_report['cat1_start_zone'] = start_zone_settings(pc_vals)
             self.powered_grounding_report['ray_sampling'] = ray_sampling_settings()
+            self.powered_grounding_report['squat'] = squat_names is not None
         return acc.total
 
     def run_powered_allision_model(self, data: dict[str, Any]) -> float:
@@ -481,7 +573,7 @@ class PoweredModelMixin:
         N_I = Pc_I * Q * mass
         Category II: ships fail to turn at a bend and continue straight,
         potentially hitting structures (objects) beyond it.
-        N_II = Pc_II * Q * mass * exp(-d_mean / (ai * V))
+        N_II = Pc_II * Q * sum_r m_r exp(-d_r / (ai * V))
         The returned total is N_I + N_II; the report keeps the split under
         ``totals['cat1']`` / ``totals['cat2']`` and ``by_category``.
         """
@@ -495,10 +587,9 @@ class PoweredModelMixin:
             return self._emit_empty_allision(total)
 
         pc_allision, pc_allision_cat1 = _pc_pair(pc_vals, 'allision')
+        self._powered_type_scale = powered_type_scale(data)
         try:
-            first_seg = segment_data[list(segment_data.keys())[0]]
-            lon0, lat0 = _parse_point(first_seg["Start_Point"])
-            proj = _PoweredProjector(lon0, lat0)
+            proj = model_projector(segment_data)
             legs, all_obstacles, _, _, _ = _build_legs_and_obstacles(
                 data, proj, mode="allision", max_draft=0)
         except Exception:  # nosec B110 B112

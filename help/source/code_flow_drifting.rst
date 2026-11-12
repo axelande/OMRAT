@@ -19,7 +19,17 @@ Entry point
 
 :meth:`DriftingModelMixin.run_drifting_model` is phase 1 of
 :class:`~compute.calculation_task.CalculationTask` (see
-:ref:`code-flow`).  It takes a single ``data`` dict and writes
+:ref:`code-flow`), run when **Drifting** is ticked in the Calculation
+matrix.  Before any phase, ``CalculationTask._prepare_traffic`` runs
+:func:`compute.traffic_pipeline.prepare_traffic_for_run` on the run's
+copy of the data: missing speeds / draughts are filled
+(``compute/traffic_gaps.py``), ``Scaling (%)`` is applied, suppressed
+legs' traffic is moved, and speed restriction zones replace
+``Speed (knots)`` by the time-equivalent speed along the leg.  The drift
+model therefore sees the filled, scaled and restricted traffic (a slower
+speed means more hours on the leg).
+
+It takes a single ``data`` dict and writes
 
 * ``self.drifting_allision_prob``
 * ``self.drifting_grounding_prob``
@@ -27,9 +37,13 @@ Entry point
 * ``self.allision_result_layer``, ``self.grounding_result_layer``
 * ``LEPDriftAllision.setText(...)`` / ``LEPDriftingGrounding.setText(...)``
 
+Without traffic or legs, without obstacles, or when the user cancels
+during the shadow / bucket phases, it returns through
+``_emit_zero_drifting`` (a zero report, not ``None``).
+
 .. container:: source-code-ref pipeline
 
-   **Entry:** ``compute/drifting_model.py:2071`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L2071>`__
+   **Entry:** ``compute/drifting_model.py:2222`` -- `run_drifting_model() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L2222>`__
 
 
 Top-level call tree
@@ -41,16 +55,17 @@ Top-level call tree
      |
      +-- _build_transformed(data)                                         # UTM projection + geom prep
      |     +-- prepare_traffic_lists(data)                                # compute/data_preparation.py
+     |     |     +-- clean_traffic(data)                                  # one line per leg x direction
      |     +-- split_structures_and_depths(data)
      |     +-- transform_to_utm(lines, structure+depth wkts)
      |     +-- shapely.make_valid  (per obstacle)
      |
-     +-- _compute_reach_distance(data, longest_length)                    # drift-speed * T99 of repair dist
+     +-- _compute_reach_distance(data, longest_length)                    # compute/drift_reach.py, 99 % repaired
      |
-     +-- merge depths by unique level (optional optimisation)             # shapely.unary_union per level
+     +-- _merge_depths_by_threshold(data, depths, drift)                  # shapely.unary_union per level
      |
-     +-- _precompute_spatial(...)                                         # = "spatial" progress phase
-     |     +-- compute_min_distance_by_object(...)                        # geometries/get_drifting_overlap.py
+     +-- _precompute_spatial(..., data)                                   # = "spatial" progress phase
+     |     +-- compute_min_distance_by_object(..., distance_lines)        # geometries/drift_overlap_geometry.py
      |     +-- compute_probability_holes_analytical(...)                  # geometries/analytical_probability.py
      |           +-- ThreadPoolExecutor (per leg x direction)
      |                 +-- _compute_single_direction_analytical(...)
@@ -60,24 +75,28 @@ Top-level call tree
      |                             +-- dist.cdf(array)                    # batched scipy CDF
      |
      +-- _precompute_shadow_layer(...)                                    # = "shadow" progress phase (0..50%)
-     |     +-- ThreadPoolExecutor (per leg x direction)
-     |           +-- _shadow_task(leg_idx, d_idx)
-     |                 +-- _create_drift_corridor(...)
+     |     +-- _compute_global_shadow_bounds(...)
+     |     +-- _precompute_leg_lateral_params(..., use_offset)
+     |     +-- _run_shadow_pool  -> ThreadPoolExecutor (per leg x direction)
+     |           +-- _shadow_task(leg_idx, d_idx) -> _build_shadow_entry(...)
+     |                 +-- _compute_drift_corridor_and_bounds(...)
+     |                 |     +-- _create_drift_corridor(...)
      |                 +-- _ahead_of_leg(line, angle, corridor)          # corridor on the drift side of the leg
      |                 +-- _corridor_shadow(poly, ahead, ...)            # obstacle clipped to it first
      |                 |     +-- _build_blocker_shadow(..., shadow_memo)
      |                 |           +-- extract_polygons(geom)
      |                 |           +-- create_obstacle_shadow(p, compass, bounds)  # memo only when unclipped
-     |                 +-- _edge_geom_for(poly)
+     |                 +-- _build_edge_geom_for_poly(poly, ...)
      |                       +-- _extract_obstacle_segments(poly)
-     |                       +-- _edge_weighted_holes(...)                # batched drift filter + shapely
-     |                       |     +-- segment_corridor_overlap_length(...)
+     |                       +-- segment_corridor_overlap_length(...)   # facing-edge filter
+     |                       +-- compute_edge_reachable_widths_1d(...)  # 1D shadow-carve
      |                       +-- directional_distances_to_points(...)    # vectorised drift distance
      |                       +-- get_not_repaired(...)                   # analytical ndtr / Weibull
      |
      +-- _precompute_bucket_memo(...)                                     # = "shadow" progress phase (50..100%)
-     |     +-- ThreadPoolExecutor (per (leg, dir, ship-bucket))
-     |           +-- _compute_bucket(...)
+     |     +-- _collect_bucket_obs(...)  -> _collect_cell_obstacles(...)
+     |     +-- _run_bucket_parallel  -> ThreadPoolExecutor (per (leg, dir, ship-bucket))
+     |           +-- _compute_bucket_entries(...)
      |                 +-- geom.difference(blocker_union)
      |                 +-- _analytical_hole_for_geom(reach, ...)
      |                       +-- extract_polygons + _extract_polygon_rings
@@ -86,16 +105,20 @@ Top-level call tree
      |
      +-- _iterate_traffic_and_sum(...)                                    # = "cascade" progress phase (60..90%)
      |     +-- clean_traffic(data)
-     |     +-- for each leg, ship cell, direction:
+     |     +-- for each leg: _process_leg_cells(...)
+     |           for each ship cell, direction:
      |           _process_cell_direction(...)
-     |             +-- lookup bucket_memo entry
-     |             +-- per-entry: accumulate allision/grounding/anchoring
-     |             +-- _update_report(...)
-     |             +-- _update_anchoring_report(...)
-     |             +-- _add_direct_segment_contrib(...)
+     |             +-- _collect_cell_obstacles(...) + _lookup_bucket_entries(...)
+     |             +-- _recarve_edges_inter_obstacle(...)
+     |             +-- _apply_hit_entry(...) / _apply_anchoring_entry(...)
+     |                   +-- _update_report(...) / _update_anchoring_report(...)
+     |                   +-- _add_direct_segment_contrib(...), _record_edge_meta(...)
      |
-     +-- create_result_layers(report, ...)                                # = "layers" phase
-     +-- _auto_generate_drifting_report(data)                             # writes Markdown
+     +-- _apply_drifting_risk_factors(...)
+     +-- _store_depth_meta(...)
+     +-- _finalize_drifting(...)                                          # = "layers" phase
+           +-- _auto_generate_drifting_report(data)                       # writes Markdown
+           +-- create_result_layers(report, ...)
 
 
 The sections below open each box above, in the order the code executes.
@@ -106,11 +129,11 @@ The sections below open each box above, in the order the code executes.
 
 :meth:`DriftingModelMixin._build_transformed` is a one-time geometry
 prep step that runs entirely on the calculation thread.  It returns
-eight parallel lists used by every downstream helper.
+nine parallel lists used by every downstream helper.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1123`` -- `_build_transformed() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1123>`__
+   **Source:** ``compute/drifting_model.py:1174`` -- `_build_transformed() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1174>`__
 
 Calls performed:
 
@@ -118,12 +141,23 @@ Calls performed:
    ``(lines, distributions, weights, line_names)``.
 
    * ``lines`` is a list of :class:`shapely.geometry.LineString` in
-     EPSG:4326 (one per leg).
+     EPSG:4326, one per leg **and traffic direction**
+     (:func:`clean_traffic`): direction 1 is drawn ``Start_Point ->
+     End_Point``, direction 2 as the reversed line.  Every later
+     ``leg_idx`` indexes this list.
    * ``distributions`` is ``list[list[scipy.stats.rv_frozen]]`` -- one
-     list per leg with *up to three* superposed distributions parsed
-     from ``mean1_1``/``std1_1``/``weight1_1`` ... etc.
-   * ``weights`` is the matching list of floats summing to 1.
-   * ``line_names`` are the human labels shown in reports.
+     list per line with three normals parsed from
+     ``mean{d}_{i}``/``std{d}_{i}``/``weight{d}_{i}`` plus the uniform
+     part (``u_min{d}``/``u_max{d}``/``u_p{d}``); unused components are
+     placeholders with weight 0.  Direction 2 is read with
+     ``get_distribution(..., mirror=True)``: means negated and the
+     uniform bounds flipped, so its lane lies on its own side of the leg
+     (before 2026-11-10 it was read unmirrored and sailed on the wrong
+     side).
+   * ``weights`` is the matching list of weights as stored (normalised
+     later, where they are used).
+   * ``line_names`` are the labels ``"Leg <seg>-<direction>"``; the
+     cascade takes the ``Segment_Id`` from them.
 
 2. :func:`compute.data_preparation.split_structures_and_depths(data)` -
    converts the ``depths`` / ``objects`` lists of
@@ -132,7 +166,7 @@ Calls performed:
    so every entry has a single :class:`shapely.geometry.Polygon`.
 
 3. :func:`compute.data_preparation.transform_to_utm(lines, obstacle_geoms)` -
-   picks the UTM zone best covering the combined bbox, transforms
+   picks the UTM zone of the mean centroid of all legs and obstacles, transforms
    every leg and obstacle once via QGIS
    :class:`~qgis.core.QgsCoordinateTransform` when running inside
    QGIS, or :mod:`pyproj` otherwise.  All subsequent geometry math is
@@ -158,33 +192,49 @@ back.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:80`` -- `_compute_reach_distance() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L80>`__
+   **Source:** ``compute/drifting_model.py:83`` -- `_compute_reach_distance() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L83>`__
 
-Logic:
+Logic (:func:`compute.drift_reach.drift_reach_m` with
+``REACH_QUANTILE = 0.99``; the repair-time quantiles live only in
+``compute/drift_reach.py``, which the depth simplification tool also
+uses):
 
-* If ``drift.repair.dist_type == 'weibull'``, uses
-  ``scipy.stats.weibull_min(...)``.ppf(0.99).
-* Else if ``drift.repair.use_lognormal``, uses
-  ``scipy.stats.lognorm(...).ppf(0.99)``.
-* Multiplies by the drift speed (m/s) to get metres.
+* :func:`~compute.drift_reach.repair_time_quantile_h` reads
+  ``drift.repair``: ``dist_type == 'weibull'`` ->
+  ``scipy.stats.weibull_min(...).ppf(0.99)``, ``'normal'`` ->
+  ``scipy.stats.norm(...).ppf(0.99)``, else ``use_lognormal`` ->
+  ``scipy.stats.lognorm(...).ppf(0.99)``, else a user CDF expression
+  (``func``) solved by bisection.
+* Multiplies the hours by the drift speed (knots x 1852) to get metres.
 * Caps at ``10 x longest_leg_length`` so that a poorly-parameterised
-  repair distribution can't make the reach distance degenerate.
+  repair distribution can't make the reach distance degenerate; the cap
+  is also the value when no quantile can be computed.
 
 
 Depth merging (optional)
 ========================
 
-Before the spatial precompute, :meth:`run_drifting_model` examines the
-set of depth polygons.  If there are more polygons than unique depth
-values, the method merges all polygons with depth <= boundary into one
-cumulative polygon per boundary via :func:`shapely.unary_union`.  The
-result is:
+Before the spatial precompute, :meth:`_merge_depths_by_threshold`
+examines the set of depth polygons.  If there are more polygons than
+unique depth values plus one, the method merges all polygons with
+depth <= boundary into one cumulative polygon per boundary via
+:func:`shapely.unary_union`.  The result is:
 
 * ``merged_depths_gdfs`` / ``merged_depths_meta`` - a much smaller set
   of obstacles used by the expensive spatial phase.
-* ``threshold_to_idx`` - maps any draught or anchor threshold to the
-  index of the correct merged polygon.  The cascade uses this to look
-  up grounding / anchoring obstacles per ship cell in O(1).
+* ``threshold_to_idx`` - maps any draught or anchor threshold ``T`` to
+  the index of the merged polygon of the highest boundary *below*
+  ``T``.  The thresholds are the cells' ``draught`` (which includes the
+  squat when **Add squat to the draught in drifting grounding** is
+  ticked, ``pc['squat_drifting']``, ``compute/squat.py``) and
+  ``anchor_d x anchor_draught`` (the static draught, without squat), all
+  rounded to two decimals.  The cascade uses this to look up grounding /
+  anchoring obstacles per ship cell in O(1).
+
+Without merging every depth polygon is checked per cell: depth <
+draught -> grounding, depth < ``anchor_d`` x static draught ->
+anchoring.  Either way the anchoring area of a ship contains its
+grounding area.
 
 This is the single biggest source of speedup for projects with dense
 bathymetry (tens of depth contours map to just a handful of unique
@@ -199,7 +249,7 @@ geometry only.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1251`` -- `_precompute_spatial() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1251>`__
+   **Source:** ``compute/drifting_model.py:1302`` -- `_precompute_spatial() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1302>`__
 
 Returns four lists, each indexed ``[leg_idx][math_dir_idx][obstacle_idx]``:
 
@@ -207,15 +257,23 @@ Returns four lists, each indexed ``[leg_idx][math_dir_idx][obstacle_idx]``:
   each structure (or ``None`` if the obstacle is out of reach in that
   direction).  Computed by
   :func:`geometries.get_drifting_overlap.compute_min_distance_by_object`.
+  With **Start drifting from: Distribution center**
+  (``drift['start_from'] = 'distribution_center'``,
+  ``compute/drift_start.py``) the distance is measured from
+  ``distance_lines``: each line offset by the weighted mean of its
+  lateral distribution (:func:`~compute.drift_start.mixture_mean`); an
+  object behind that line keeps its distance from the leg.  This sets
+  the obstacle order and the obstacle-level :math:`P_{NR}` distance.
 * ``depth_min_dists`` - same for depth (grounding / anchoring)
   polygons.
-* ``struct_probability_holes`` - :math:`h_X` = probability of drifting
-  far enough in the obstacle's direction to hit it, from a random
-  start on the leg.  Computed by
-  :func:`geometries.analytical_probability.compute_probability_holes_analytical`
-  (default) or
-  :func:`geometries.calculate_probability_holes.compute_probability_holes`
-  (Monte Carlo, opt-in via ``data['use_analytical'] = False``).
+* ``struct_probability_holes`` - :math:`h_X` = the share of the lateral
+  traffic distribution whose drift path (within the reach distance)
+  crosses the obstacle, averaged along the leg.  Computed by
+  :func:`geometries.analytical_probability.compute_probability_holes_analytical`.
+  This is the only path: the Monte Carlo estimator
+  (:func:`geometries.calculate_probability_holes.compute_probability_holes`)
+  is kept as a cross-check for tests and examples, and a stale
+  ``use_analytical`` key in a project file is ignored.
 * ``depth_probability_holes`` - same for depth polygons.
 
 Inside the analytical path
@@ -228,7 +286,11 @@ with ``cpu_count() - 1`` workers.  Each worker calls
 calls :func:`compute_probability_analytical`:
 
 1. Slice the leg into 100 cross-sections (``s_values`` = midpoints of
-   100 equal intervals along the leg).
+   100 equal intervals along the leg; the bucket carve in Phase 3 uses
+   200).  The lateral range is :math:`\pm 5\sigma_w`, with
+   :math:`\sigma_w` the weight-averaged standard deviation of the
+   components; an object farther from the line than the reach distance
+   plus that range gets a hole of 0 without integration.
 2. For every edge of the obstacle and every slice, solve for the
    ``y``-range of ``perp_offset`` values whose drift ray crosses that
    edge.  This is done in one batched numpy call
@@ -256,19 +318,23 @@ For every ``(leg, direction)`` pair, build:
 
 * the drift corridor polygon,
 * the quad-sweep shadow for every reachable obstacle,
-* per-edge geometry (edge length fractions of the corridor overlap,
-  along-drift distance of each edge, :math:`P_{NR}` at that distance).
+* per-edge geometry (each facing edge's reachable width across the
+  drift, along-drift distance of each edge, :math:`P_{NR}` at that
+  distance).
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:751`` -- `_precompute_shadow_layer() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L751>`__
+   **Source:** ``compute/drifting_model.py:797`` -- `_precompute_shadow_layer() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L797>`__
 
 Pre-computation outside the thread pool:
 
-1. Build ``leg_precomputed[leg_idx]`` with ``dists_dir``, ``w_dir``
+1. Build ``leg_precomputed[leg_idx]``
+   (:meth:`_precompute_leg_lateral_params`) with ``dists_dir``, ``w_dir``
    (normalised weights), ``lateral_spread`` = 5 x weighted std of the
    leg's lateral distribution, and a :class:`drifting.engine.LegState`
-   for the scalar fallback path.
+   whose ``mean_offset_m`` is the mixture mean with **Start drifting
+   from: Distribution center** (0 otherwise); the edge distances are
+   measured from the line offset by it.
 2. Compute a **global shadow bounds**: the bbox of all legs + all
    obstacle geometries, padded by ``max(1 km, reach_distance)``.  This
    is passed to every call to :func:`create_obstacle_shadow`, which
@@ -277,12 +343,16 @@ Pre-computation outside the thread pool:
    legs, because the extrude distance (and thus the shadow shape) is
    now the same for every call.
 
-Per-task work (``_shadow_task(leg_idx, d_idx)``):
+Per-task work (``_shadow_task(leg_idx, d_idx)`` ->
+:meth:`_build_shadow_entry`), dispatched by :meth:`_run_shadow_pool`:
 
 1. Build the drift corridor via
+   :meth:`_compute_drift_corridor_and_bounds` ->
    :func:`compute.drift_corridor_geometry._create_drift_corridor`: two
-   rectangles (leg rect + drifted rect) unioned, falling back to
-   convex hull if union produces a MultiPolygon.
+   rectangles (leg rect + drifted rect, half-width ``lateral_spread``,
+   or 2 500 m when the leg has no lateral distribution, drifted by
+   ``reach_distance``) unioned, falling back to convex hull if union
+   produces a MultiPolygon.
 2. For every structure and every depth (filtered via
    ``struct_min_dists`` / ``depth_min_dists`` to those within
    ``reach_distance``):
@@ -294,14 +364,17 @@ Per-task work (``_shadow_task(leg_idx, d_idx)``):
       :meth:`_build_blocker_shadow`.  Without the clip a merged depth
       polygon that also reached into the corridor shadowed the structures
       from water far *behind* the leg, which drifting ships never cross
-      (KNOWN_ISSUES 11, fixed 2026-10-20).  An obstacle wholly inside
+      (fixed 2026-10-20).  An obstacle wholly inside
       keeps the cross-leg memo; a clipped part is never memoised.
-   b. Build per-edge geometry -> inner ``_edge_geom_for(poly)``.
+   b. Build per-edge geometry -> :meth:`_build_edge_geom_for_poly`
+      (on the whole obstacle, against the whole corridor).
 
 3. Return ``(key, entry)`` where ``entry`` has
    ``corridor``, ``bounds``, ``dists_list``, ``weights_arr``,
-   ``lateral_spread``, ``shadow`` (dict of ``(type, idx) -> Polygon``),
-   and ``edge_geom`` (dict of ``(type, idx) -> list[edge-dict]``).
+   ``lateral_spread``, ``leg_state_tmp``, ``shadow`` (dict of
+   ``(type, idx) -> Polygon``, keys ``('allision', i)`` / ``('depth', i)``),
+   and ``edge_geom`` (dict of ``(type, idx) -> list[edge-dict]``, same
+   keys).
 
 Futures are collected with :func:`concurrent.futures.as_completed`,
 progress is reported every ~5 % of completed tasks, and a cancellation
@@ -309,7 +382,7 @@ check aborts the remaining work if the user clicks stop.
 
 .. container:: source-code-ref pipeline
 
-   **Shadow cache helper:** ``compute/drifting_model.py:130`` -- `_build_blocker_shadow() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L130>`__
+   **Shadow cache helper:** ``compute/drifting_model.py:97`` -- `_build_blocker_shadow() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L97>`__
 
 :meth:`_build_blocker_shadow`
 -----------------------------
@@ -345,13 +418,14 @@ Implementation:
 5. Cache and return.
 
 
-Inner :func:`_edge_geom_for` -- per-edge h_eff with 1D shadow-carve
--------------------------------------------------------------------
+:meth:`_build_edge_geom_for_poly` -- per-edge h_eff with 1D shadow-carve
+--------------------------------------------------------------------------
 
-Works per obstacle inside ``_shadow_task``.  The result
-(``[{'seg_idx', 'edge_h_eff', 'reachable_width_m', 'edge_dist',
-'edge_p_nr'}, ...]``) is used by the cascade to compute each polygon
-edge's contribution INDEPENDENTLY.  Each edge is treated as a physical
+Works per obstacle inside ``_build_shadow_entry``.  The result
+(``[{'seg_idx', 'edge_h_eff', 'len_frac', 'reachable_width_m',
+'reachable_intervals', 'edge_dist', 'edge_p_nr'}, ...]``) is used by the
+cascade to compute each polygon edge's contribution INDEPENDENTLY.  Each
+edge is treated as a physical
 "hazard wall" that a drifting ship strikes as its first-contact
 obstacle; ships that would strike a *closer* edge of the same polygon
 never reach a farther edge behind it.
@@ -360,17 +434,23 @@ The formula per edge is
 :math:`edge\_h\_eff = reachable\_width / leg\_drift\_width`,
 where ``leg_drift_width`` is the leg's projection onto the axis
 perpendicular to the drift direction (E-W for southward drift) and
-``reachable_width`` is the perpendicular-to-drift extent of the edge
-that is **not already covered by a closer edge of the same polygon**.
-Between-polygon shadowing (from other closer obstacles) is applied
-separately in :meth:`_apply_hit_entry` via
-:math:`shadow\_ratio = h\_eff / hole\_pct`, so the full per-edge
-contribution is
+``reachable_width`` is the perpendicular-to-drift extent of the edge,
+clipped to the leg's own perpendicular-to-drift extent (ships are taken
+as spread evenly along the leg, as in IWRAP), that is **not already
+covered by a closer edge of the same polygon**.
+Between-polygon shadowing (from other closer obstacles) and the anchoring
+reduction are applied separately in :meth:`_apply_hit_entry` via
+:math:`shadow\_ratio = h\_eff / hole\_pct` (clamped to [0, 1]), so the
+full per-edge contribution is
 
 .. math::
 
-   contrib = base \cdot rp \cdot (edge\_h\_eff \cdot shadow\_ratio)
-             \cdot edge\_p\_nr(edge\_dist)
+   contrib = base \cdot rp \cdot (edge\_h\_eff \cdot recarve\_scale
+             \cdot shadow\_ratio) \cdot edge\_p\_nr(edge\_dist)
+
+(``recarve_scale`` is explained in Phase 4).  ``len_frac`` =
+``reachable_width`` / sum over the polygon's edges is used only to spread
+the anchoring contribution over the edges.
 
 Case studies
 ~~~~~~~~~~~~
@@ -431,11 +511,14 @@ Algorithm
    a list of ``((x0,y0), (x1,y1))`` tuples with CCW-normalised
    orientation so the outward normal is well-defined.
 2. Drop segments whose outward normal doesn't oppose the drift
-   direction (pre-filter via
-   :func:`segment_corridor_overlap_length`).  The survivors are the
-   "facing" edges of the polygon for this compass direction.
+   direction, that lie behind the leg or that miss the drift corridor
+   (:func:`segment_corridor_overlap_length`).  The survivors are the
+   "facing" edges of the polygon for this compass direction.  When the
+   corridor misses every facing edge, the direction-only part of that
+   filter is used instead, so the per-edge distances still apply.
 3. Sort surviving edges by along-drift distance (closest first) and
-   run a 1D interval subtraction on the perpendicular-to-drift axis:
+   run a 1D interval subtraction on the perpendicular-to-drift axis,
+   after clipping every edge to the leg's own perpendicular range:
    each edge's remaining ranges (after subtracting already-covered
    ranges from closer edges) become its ``reachable_intervals``, and
    their combined length is ``reachable_width``.  Implemented in
@@ -443,10 +526,12 @@ Algorithm
 4. Collect endpoints of edges with ``reachable_width > 0`` and call
    :func:`geometries.get_drifting_overlap.directional_distances_to_points`
    **once** on the flat ``(2N, 2)`` array.  The reference line is the
-   leg centerline by default; set
-   ``drift['use_leg_offset_for_distance'] = True`` to measure from the
-   leg shifted by the traffic-distribution mean instead.  The lateral
-   standard deviation is *not* used -- only the mean.
+   leg centerline by default; with **Start drifting from: Distribution
+   center** (``drift['start_from'] = 'distribution_center'``) it is the
+   leg shifted by ``LegState.mean_offset_m`` (the traffic-distribution
+   mean); an endpoint behind that offset line keeps its distance from the
+   leg line.  The lateral standard deviation is *not* used -- only the
+   mean.  (The old ``use_leg_offset_for_distance`` key is no longer read.)
 5. For each edge, average its two endpoint distances ->
    ``edge_dist``.  Compute
    :math:`edge\_h\_eff = reachable\_width / leg\_drift\_width` and
@@ -457,12 +542,17 @@ Back-tracing
 ~~~~~~~~~~~~
 
 The drifting report emits ``edge_calc_meta`` per
-``(obstacle, edge, leg_direction)``.  Every entry stores ``hole_pct``,
-``h_eff``, ``reachable_width_m``, ``edge_h_eff``, ``shadow_ratio``,
+``(obstacle, edge, leg_direction)`` for grounding and allision.  Every
+entry stores ``obs_type``, ``hole_pct``, ``h_eff``,
+``reachable_width_m``, ``edge_h_eff``, ``len_frac``,
 ``edge_dist_m``, ``edge_p_nr``, ``edge_hole``, ``exposure_sum``,
 ``cell_count`` and ``contrib_sum``, so users can back-trace every
-edge's contribution to the formula above.  The Markdown appendix
-renders the top 50 contributing edges as a table.
+edge's contribution to the formula above (``edge_hole`` =
+``edge_h_eff x recarve_scale x shadow_ratio``).  The Markdown appendix
+(*Per-Edge Calculation Trace*) renders the top 50 contributing edges as
+a table.  Note that its header text still states
+``contrib = exposure_sum * (h_eff * len_frac) * edge_p_nr``; the cascade
+multiplies ``edge_hole`` as above, which is the value in the table.
 
 
 Phase 3: :meth:`_precompute_bucket_memo` (``shadow``, 50--100 %)
@@ -477,7 +567,21 @@ turns the later traffic cascade into pure arithmetic.
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1090`` -- `_precompute_bucket_memo() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1090>`__
+   **Source:** ``compute/drifting_model.py:1141`` -- `_precompute_bucket_memo() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1141>`__
+
+The buckets are collected by :meth:`_collect_bucket_obs` (every ship
+cell with speed and frequency > 0, every direction, obstacle list from
+:meth:`_collect_cell_obstacles`) and evaluated by
+:meth:`_run_bucket_parallel` -> :meth:`_compute_bucket_entries`.
+
+The obstacle list of a cell holds every structure in reach, the
+grounding area(s) for its draught (squat included) and the anchoring area
+for ``anchor_d`` x its static draught (:meth:`_anchoring_obstacle`).  A
+leg that lies (partly) **inside** the anchoring area anchors from
+distance 0, with the share of the leg inside the area as its hole
+(:meth:`_leg_share_inside`, cached per run): a drift path only meets an
+anchoring area by crossing one of its edges, so before 2026-11-09 such a
+leg got no anchoring at all.
 
 Per bucket:
 
@@ -488,17 +592,22 @@ Per bucket:
    ``('allision', i)`` for structures and ``('depth', i)`` for both
    grounding and anchoring obstacles.  Grounding obstacles were looked
    up as ``('grounding', i)`` before 2026-10-20, so a shoal never
-   shielded a structure behind it (KNOWN_ISSUES 12).
+   shielded a structure behind it.
 3. For each obstacle:
 
    * Carve ``reach = geom.difference(blocker_union)`` - the part of
-     the obstacle still reachable past closer blockers.
+     the obstacle still reachable past closer blockers (skipped when the
+     blockers do not touch it: ``h_reach = hole_pct``).
    * ``h_reach`` = :meth:`_analytical_hole_for_geom(reach, ...)` -
      the probability hole of the carved region, computed via the same
      :func:`compute_probability_analytical` used in Phase 1.
    * ``h_in_anchor`` = probability hole of the carved region that
-     ALSO intersects the anchoring region - so anchoring ships are
-     subtracted out correctly.
+     ALSO lies in the anchoring region of the closer anchoring
+     obstacles - their swept shadows *and* the anchoring polygons
+     themselves, because a grounding area usually lies inside its own
+     anchoring area (a shallower contour inside a deeper one) - so
+     anchoring ships are subtracted out correctly.  Anchoring entries
+     get no ``h_in_anchor``.
 
 4. Result: ``memo[(leg, dir, bucket_key)] = [{'obs_type', 'obs_idx',
    'dist', 'hole_pct', 'h_reach', 'h_in_anchor'}, ...]``.
@@ -515,54 +624,73 @@ bucket memo.  The outer structure is:
 ::
 
    for leg_idx, line in enumerate(transformed_lines):
-       for cell in ship_cells[leg_idx]:
-           for d_idx in range(8):
-               a_delta, g_delta, an_delta = _process_cell_direction(...)
+       _process_leg_cells(...):
+           for cell in ship_cells[leg_idx]:
+               for d_idx in range(8):
+                   a_delta, g_delta, an_delta = _process_cell_direction(...)
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1454`` -- `_iterate_traffic_and_sum() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1454>`__
+   **Source:** ``compute/drifting_model.py:1517`` -- `_iterate_traffic_and_sum() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1517>`__
 
-Each ship cell contributes:
+Each ship cell (skipped when its speed or frequency is <= 0) contributes:
 
 .. math::
 
    \mathrm{base}_{i,k} =
-     \frac{L_i}{v_k \cdot 1852/3600} \cdot f_{i,k}
+     \frac{L_i}{v_k \cdot 1852} \cdot f_{i,k}
      \cdot \frac{\lambda_{bo}(\mathrm{ship\_type})}{365.25 \cdot 24}
 
-and the per-direction contribution is:
+with :math:`L_i` the leg's ``line_length`` (metres), :math:`v_k` in
+knots (so the first factor is hours on the leg),
+:math:`\lambda_{bo}` = ``drift['blackout_by_ship_type'][ship_type]``
+(``drift['drift_p']`` for a type without an entry; the defaults are 1.0
+per year and 0.1 for passenger ships, ro-ro / ro-pax, cruise ships and
+high speed craft / fast ferries, matched on the ship-type name by
+``default_blackout_by_ship_type``).  The per-direction contribution is:
 
 .. math::
 
    \Delta = \mathrm{base}_{i,k} \cdot r_{p,d} \cdot h_{\mathrm{eff}}
             \cdot P_{NR}(d_{\mathrm{edge}})
 
+with :math:`r_{p,d}` = ``drift['rose'][angle]`` divided by the sum of the
+rose (directions with :math:`r_{p,d} = 0` are skipped).
+
 :meth:`_process_cell_direction` does the inner work:
 
 .. container:: source-code-ref pipeline
 
-   **Source:** ``compute/drifting_model.py:1753`` -- `_process_cell_direction() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1753>`__
+   **Source:** ``compute/drifting_model.py:1884`` -- `_process_cell_direction() <https://github.com/axelande/OMRAT/blob/main/compute/drifting_model.py#L1884>`__
 
-1. Build the obstacle list for this cell (respecting draught +
-   anchor threshold), compute ``bucket_key`` from the tuple of sorted
-   ``(type, idx)`` pairs.
-2. Look up ``entries = bucket_memo[(leg_idx, d_idx, bucket_key)]``.
+1. Build the obstacle list for this cell (:meth:`_collect_cell_obstacles`:
+   grounding by ``draught`` incl. squat, anchoring by ``anchor_d`` x
+   ``anchor_draught``, a leg inside the anchoring area from distance 0),
+   compute ``bucket_key`` from the tuple of sorted ``(type, idx)`` pairs.
+2. Look up ``entries = bucket_memo[(leg_idx, d_idx, bucket_key)]``
+   (:meth:`_lookup_bucket_entries`).
    On a memo miss (rare), fall back to the pre-computed ``hole_pct``
    without any shadow carving.
 3. For each entry:
 
-   * Compute ``h_eff = max(0, h_reach - anchor_p * h_in_anchor)``.
+   * Compute ``h_eff = max(0, h_reach - anchor_p * h_in_anchor)``
+     (anchoring entries: ``h_eff = h_reach``).
    * Re-carve the obstacle's edges against the perpendicular intervals
-     the closer obstacles occupy (``covered_perp``).  This only decides
+     the closer obstacles occupy (``covered_perp``,
+     :meth:`_recarve_edges_inter_obstacle`).  This only decides
      *which* edges are still hit: the shadow is already in ``h_reach``,
      so the surviving edges are scaled back to the uncarved share
      (``recarve_scale``).  Applying both had cut a half-shadowed
-     structure to a quarter (KNOWN_ISSUES 13).
-   * If the obstacle has precomputed per-edge geometry, sum
-     ``contrib = base * r_p * edge_h_eff * recarve_scale * (h_eff / hole_pct)
-     * edge_p_nr`` across edges.  Otherwise fall back to the
-     obstacle-level ``contrib = base * r_p * h_eff * P_NR(dist)``.
+     structure to a quarter (fixed 2026-10-20).  Anchoring areas do not
+     claim ``covered_perp`` (anchoring is probabilistic, not a wall).
+   * Grounding / allision (:meth:`_apply_hit_entry`): if the obstacle has
+     precomputed per-edge geometry, sum
+     ``contrib = base * r_p * edge_h_eff * recarve_scale *
+     (h_eff / hole_pct) * edge_p_nr`` across edges.  Otherwise fall back
+     to the obstacle-level ``contrib = base * r_p * h_eff * P_NR(dist)``.
+   * Anchoring (:meth:`_apply_anchoring_entry`):
+     ``contrib = base * r_p * anchor_p * h_eff``, spread over the edges by
+     ``len_frac`` (no :math:`P_{NR}`).
    * Call :meth:`_update_report` / :meth:`_update_anchoring_report`
      to record the per-leg-direction breakdown.
    * Call :meth:`_add_direct_segment_contrib` to record the
@@ -577,34 +705,40 @@ Progress is reported approximately every 1 % of cascade completion.
 Completion (``layers``, 90--100 %)
 ===================================
 
-After the cascade finishes :meth:`run_drifting_model` does three
-things on the calculation thread:
+After the cascade finishes :meth:`run_drifting_model` does the
+following on the calculation thread:
 
-1. Applies the user's risk-reduction factors
-   (``pc.allision_drifting_rf``, ``pc.grounding_drifting_rf``) to the
-   totals and stores the final numbers on ``self``.
-2. Calls :func:`geometries.result_layers.create_result_layers` to
-   build two :class:`~qgis.core.QgsVectorLayer` objects that colour
-   each obstacle polygon by its contribution to the total risk.  Layer
-   creation is graduated by Jenks natural breaks (or single-class
-   fallback).
-3. Calls :meth:`_auto_generate_drifting_report` which delegates to
-   :meth:`DriftingReportBuilderMixin.write_drifting_report_markdown`
-   (mixin from ``compute/drifting_report_builder.py``).  The report
-   writes a Markdown file with:
+1. :meth:`_apply_drifting_risk_factors` records the user's
+   risk-reduction factors (``pc.allision_drifting_rf``,
+   ``pc.grounding_drifting_rf``) as ``report['risk_factors']`` and stores
+   the totals on ``self``.  The factors themselves are applied to every
+   allision / grounding contribution in :meth:`_apply_hit_entry`, so
+   ``report['totals']``, every breakdown map, ``by_cell_*``, the result
+   layers and the run's ``.drifting.json`` hold reduced values;
+   ``report['totals_before_rf']`` keeps the sums before the factors.
+2. :meth:`_store_depth_meta` keeps the depth list (merged or not) and the
+   per-original-id depth list for the result layers.
+3. :meth:`_finalize_drifting` updates the two result line-edits:
 
-   * Totals per accident type,
-   * Per leg-direction tables,
-   * Per obstacle tables (with drill-down to per-segment
-     contributions),
-   * Debug obstacle blocks when ``drift.debug_trace = True``.
+   .. code-block:: python
 
-Finally the two result line-edits are updated:
+      self.p.main_widget.LEPDriftAllision.setText(f"{self.drifting_allision_prob:.3e}")
+      self.p.main_widget.LEPDriftingGrounding.setText(f"{self.drifting_grounding_prob:.3e}")
 
-.. code-block:: python
-
-   self.p.main_widget.LEPDriftAllision.setText(f"{self.drifting_allision_prob:.3e}")
-   self.p.main_widget.LEPDriftingGrounding.setText(f"{self.drifting_grounding_prob:.3e}")
+   then calls :meth:`_auto_generate_drifting_report`, which delegates to
+   :meth:`DriftingReportMixin.write_drifting_report_markdown`
+   (``compute/drifting_report.py``).  It writes only when ``LEReportPath``
+   is a file path (or empty: ``drifting_report.md`` in the working
+   folder); when it is a folder the run-history save writes the combined
+   report instead.  The report has a summary, the parameters, per
+   leg-direction and per obstacle tables, a ship-category breakdown and
+   the per-edge trace (see *Back-tracing* above).
+4. Finally :func:`geometries.result_layers.create_result_layers`
+   (``add_to_project=False``) builds two
+   :class:`~qgis.core.QgsVectorLayer` objects with one line feature per
+   obstacle edge, styled graduated on ``total_edge_probability``
+   (five equal-interval classes green -> red plus a grey *Not hit*
+   class; a single symbol when all values are equal).
 
 
 Function reference
@@ -618,43 +752,82 @@ A flat list of every function reached from
 
 * ``run_drifting_model`` - orchestrator (this chapter).
 * ``_build_transformed`` - UTM projection + make_valid.
-* ``_compute_reach_distance`` - T99 repair distance in metres.
+* ``_compute_reach_distance`` - 99 % repair distance in metres
+  (``compute/drift_reach.py``), capped at 10 x the longest leg.
 * ``_merge_depths_by_threshold`` - optional per-threshold merge of
   depth polygons that share unique depth values; many traffic
   draughts then index into the same merged geometry.
 * ``_precompute_spatial`` - min-distances + probability holes.
 * ``_precompute_shadow_layer`` - corridor/shadow/edge geom per
-  ``(leg, dir)``.  Now slimmer: pre-computes are pulled out into
+  ``(leg, dir)``.  Pre-computes are pulled out into
   :meth:`_compute_global_shadow_bounds` (uniform extrude bounds for
   the shadow memo) and :meth:`_precompute_leg_lateral_params`
   (per-leg lateral-distribution scalars + ``LegState``).
 * ``_run_shadow_pool`` - dispatch the per-(leg, dir) worker across
   threads (or sequentially for tiny inputs); reports progress and
-  honours cancellation.  Extracted from
-  ``_precompute_shadow_layer``.
-* ``_precompute_bucket_memo`` - shadow cascade per ship bucket.
-* ``_iterate_traffic_and_sum`` - traffic cascade.
-* ``_process_cell_direction`` - per cell x direction contribution.
+  honours cancellation.
+* ``_build_shadow_entry`` - one ``(leg, dir)`` entry: corridor,
+  shadows, edge geometry.
+* ``_compute_drift_corridor_and_bounds`` - corridor (2 500 m half-width
+  fallback) and its bounds.
+* ``_ahead_of_leg`` - the corridor on the drift side of the leg
+  centreline.
+* ``_corridor_shadow`` - shadow of the part of an obstacle ahead of the
+  leg.
 * ``_build_blocker_shadow`` - cached per-obstacle quad-sweep union.
-* ``_edge_weighted_holes`` - distribute hole across polygon edges by
-  corridor overlap length.
+* ``_build_edge_geom_for_poly`` - facing edges, 1D shadow-carve, edge
+  distances and :math:`P_{NR}`.
+* ``_precompute_bucket_memo`` - shadow cascade per ship bucket
+  (``_collect_bucket_obs``, ``_run_bucket_parallel``,
+  ``_compute_bucket_entries``).
 * ``_analytical_hole_for_geom`` - probability hole for a carved
   geometry; wraps :func:`compute_probability_analytical`.
+* ``_iterate_traffic_and_sum`` - traffic cascade
+  (``_process_leg_cells`` handles the cells of one leg).
+* ``_process_cell_direction`` - per cell x direction contribution.
+* ``_collect_cell_obstacles`` / ``_anchoring_obstacle`` /
+  ``_leg_share_inside`` - the obstacles one cell can meet; anchoring
+  from distance 0 for a leg inside the anchoring area.
+* ``_lookup_bucket_entries`` - bucket memo lookup with fallback.
+* ``_recarve_edges_inter_obstacle`` / ``_merge_perp_intervals`` -
+  "ship grounds once" across obstacles.
+* ``_apply_hit_entry`` / ``_apply_anchoring_entry`` - grounding /
+  allision and anchoring contributions.
 * ``_update_report`` / ``_update_anchoring_report`` /
-  ``_add_direct_segment_contrib`` - report bookkeeping (in
-  :class:`DriftingReportBuilderMixin`).
+  ``_add_direct_segment_contrib`` / ``_record_edge_meta`` - report
+  bookkeeping (in :class:`DriftingReportBuilderMixin`,
+  ``compute/drifting_report_builder.py``).
+* ``_apply_drifting_risk_factors`` / ``_store_depth_meta`` /
+  ``_finalize_drifting`` / ``_emit_zero_drifting`` - completion.
 * ``_auto_generate_drifting_report`` - writes Markdown report.
+
+``compute/drift_reach.py``, ``compute/drift_start.py``, ``compute/squat.py``
+-----------------------------------------------------------------------------
+
+* ``drift_reach_m`` / ``repair_time_quantile_h`` / ``REACH_QUANTILE`` -
+  reach distance from the repair-time distribution.
+* ``uses_distribution_center`` / ``mixture_mean`` - **Start drifting
+  from** (``drift['start_from']``) and the offset of the distance line.
+* ``squat_on`` / ``squat_for_row`` / ``cb_for_type_name`` - Barras
+  squat :math:`C_b V^2 / 100` added to the grounding draught in
+  :func:`clean_traffic` when ``pc['squat_drifting']`` is ticked
+  (default on).
 
 ``compute/data_preparation.py``
 -------------------------------
 
 * ``prepare_traffic_lists`` - builds ``(lines, distributions, weights,
-  line_names)`` for every leg.
+  line_names)`` for every leg and direction.
 * ``split_structures_and_depths`` - parses WKT, splits MultiPolygons.
 * ``transform_to_utm`` - picks UTM zone; uses QGIS or pyproj.
-* ``clean_traffic`` - flattens ``traffic_data`` into per-leg cell
-  lists.
-* ``get_distribution`` - parses a segment's lateral distributions.
+* ``clean_traffic`` - flattens ``traffic_data`` into cell lists per leg
+  and direction (direction 2 on the reversed line); each cell carries
+  ``draught`` (+ squat when ticked) and ``anchor_draught`` (static).
+* ``get_distribution`` - parses a segment's lateral distributions;
+  ``mirror=True`` puts direction 2 on the reversed line's axis.
+* ``fill_traffic_gaps`` (``compute/traffic_gaps.py``) and
+  ``prepare_traffic_for_run`` (``compute/traffic_pipeline.py``) run before
+  the model, see *Entry point*.
 
 ``compute/basic_equations.py``
 ------------------------------
@@ -665,7 +838,9 @@ A flat list of every function reached from
 * ``powered_na`` - shared helper used by the powered model.
 * ``get_drifting_prob`` / ``get_drift_time`` - legacy scalar helpers.
 * ``SHIP_TYPE_NAMES`` / ``default_blackout_by_ship_type`` - per-type
-  blackout rate table.
+  blackout rate table (1.0 per year; 0.1 for passenger ships, ro-ro /
+  ro-pax, cruise ships and high speed craft / fast ferries, matched on
+  the project's ship-type names).
 
 ``compute/drift_corridor_geometry.py``
 --------------------------------------
@@ -677,6 +852,8 @@ A flat list of every function reached from
   the hot path.
 * ``segment_corridor_overlap_length`` - drift-direction pre-filter
   then corridor intersection in one shapely pass.
+* ``compute_edge_reachable_widths_1d`` - 1D shadow-carve of the facing
+  edges on the perpendicular-to-drift axis, clipped to the leg's range.
 * ``_compass_idx_to_math_idx`` - 0..7 compass -> math direction.
 
 ``geometries/analytical_probability.py``
@@ -705,8 +882,10 @@ helpers so existing callers don't need to update imports.
 ``geometries/drift_overlap_geometry.py`` -- pure-data helpers (no Qt /
 matplotlib):
 
-* ``create_polygon_from_line`` - leg buffered by the weighted lateral
-  distribution.
+* ``create_polygon_from_line`` - leg shifted perpendicular to itself by
+  the weighted mean of the lateral distribution (to its left; a
+  northward shift before 2026-11-10) and buffered by 4.89 x the weighted
+  standard deviation.
 * ``extend_polygon_in_directions`` - sweep that polygon in 8 drift
   directions; returns one corridor polygon per direction.
 * ``compare_polygons_with_objs`` -- per ``(polygon, gdf, obj)`` overlap
@@ -716,9 +895,11 @@ matplotlib):
 * ``compute_coverages_and_distances`` - flat per-(polygon, gdf, obj)
   coverage + distance arrays.
 * ``compute_min_distance_by_object`` - per
-  ``(leg, dir, obstacle)`` minimum along-drift distance.
+  ``(leg, dir, obstacle)`` minimum along-drift distance, from
+  ``distance_lines`` when given (Start drifting from: Distribution
+  center).
 * ``directional_distances_to_points`` - vectorised per-point along-
-  drift distance (used by ``_edge_geom_for``).
+  drift distance (used by ``_build_edge_geom_for_poly``).
 * ``directional_min_distance_reverse_ray`` - wraps the helper above
   to return the min across a polygon's vertices.
 
@@ -772,18 +953,23 @@ and named in the ``ax1`` / ``ax2`` titles (``leg_display_name``).
 ``geometries/calculate_probability_holes.py``
 ---------------------------------------------
 
-Monte-Carlo alternative to the analytical path, used when
-``data['use_analytical'] = False``.  Same pipeline shape with
-``ThreadPoolExecutor`` parallelism, but every ``p_hole`` is
-estimated by sampling rather than integrated analytically.
+Monte-Carlo alternative to the analytical path, kept only as an
+independent cross-check for tests and examples: **Run model** never
+calls it (a ``use_analytical`` key left in a project file is ignored).
+Same pipeline shape with ``ThreadPoolExecutor`` parallelism, but every
+``p_hole`` is estimated by sampling rather than integrated analytically.
 
 
 Debug trace
 ===========
 
-Setting ``data['drift']['debug_trace'] = True`` enables a per-obstacle
-debug path in :meth:`_iterate_traffic_and_sum` that records
-``exposure_factor``, ``base``, ``rp``, ``freq``, ``dist``, ``h_eff``,
-and the accumulated contribution into ``report['debug_obstacles']``.
-The debug block is embedded in the auto-generated Markdown report,
-giving a line-by-line breakdown of every obstacle / leg / direction.
+Setting ``data['drift']['debug_trace'] = True`` (not exposed in the UI)
+enables a per-obstacle debug path, set up in
+:meth:`_iterate_traffic_and_sum` and fed by :meth:`_apply_hit_entry` /
+:meth:`_apply_anchoring_entry` through :meth:`_debug_add_trace`, that
+records contribution-weighted sums of ``exposure_factor``, ``base``,
+``rp``, ``freq``, ``dist``, ``h_eff`` and the accumulated contribution
+into ``report['debug_obstacles']``, keyed
+``"<leg:dir:angle>|<obstacle>|<type>"``.  It is not printed in the
+Markdown report; it stays in the drifting report dict, which a saved run
+writes to ``<stem>.drifting.json``.

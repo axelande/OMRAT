@@ -115,3 +115,93 @@ def test_structure_over_half_the_path_halves_the_allision(template, alone):
 def test_structure_over_the_whole_path_shields_the_structure(template):
     near = box(11.04, 56.018, 11.06, 56.022)
     assert _allision_of_structure_1(template, [STRUCTURE, near], []) == 0.0
+
+
+# Anchorable water (30 m < 7 x 10 m) all around the leg and the structure,
+# with its edge far out of reach in the drift direction (KNOWN_ISSUES 24).
+SEA = box(10.90, 55.90, 11.20, 57.50)
+
+
+def test_leg_inside_anchorable_water_anchors_anchor_p_of_the_ships(template, alone):
+    """No edge to cross, but every ship drifts in anchorable water: x (1 - anchor_p)."""
+    value = _allision_of_structure_1(template, [STRUCTURE], [(30, SEA)])
+    assert value == pytest.approx(0.3 * alone, rel=1e-3)
+
+
+def test_anchoring_does_not_depend_on_a_small_hole(template, alone):
+    """Before the fix a 400 m2-size hole near the leg was what switched anchoring on."""
+    from shapely.geometry import Polygon
+    hole = box(11.049, 56.004, 11.051, 56.0042)
+    sea_with_hole = Polygon(SEA.exterior.coords, [hole.exterior.coords])
+    value = _allision_of_structure_1(template, [STRUCTURE], [(30, sea_with_hole)])
+    assert value == pytest.approx(0.3 * alone, rel=1e-3)
+
+
+def test_leg_inside_merged_anchorable_water(template, alone):
+    """Same with several depth areas of one class (the merged-threshold path)."""
+    parts = [box(10.90, 55.90, 11.20, 56.02), box(10.90, 56.02, 11.20, 56.40), box(10.90, 56.40, 11.20, 57.50)]
+    value = _allision_of_structure_1(template, [STRUCTURE], [(30, p) for p in parts])
+    assert value == pytest.approx(0.3 * alone, rel=1e-3)
+
+
+class TestRiskReductionFactors:
+    """``pc['allision_drifting_rf']`` / ``grounding_drifting_rf`` reach every
+    number of the report, not only the run total and ``by_cell`` (until
+    2026-11-12 the sidecar totals -- read by the Compare tab -- the per-object
+    / per-leg maps and the result layers were unreduced)."""
+
+    def _report(self, template, a_rf, g_rf):
+        from compute.basic_equations import default_blackout_by_ship_type
+        from compute.run_calculations import Calculation
+        tpl = copy.deepcopy(template)
+        tpl.setdefault('pc', {}).update({'allision_drifting_rf': a_rf, 'grounding_drifting_rf': g_rf})
+        # Same set-up as ``_run``, with a shoal in front for some grounding.
+        k = list(tpl['segment_data'])[0]
+        seg = copy.deepcopy(tpl['segment_data'][k])
+        seg.update({'Start_Point': '11.000000 56.000000', 'End_Point': '11.100000 56.000000', 'Width': '5000',
+                    'mean1_1': 0.0, 'std1_1': 500.0, 'mean2_1': 0.0, 'std2_1': 500.0,
+                    'weight1_1': 100, 'weight2_1': 100})
+        td = copy.deepcopy(tpl['traffic_data'][k])
+        for blk in td.values():
+            n, m = len(blk['Frequency (ships/year)']), len(blk['Frequency (ships/year)'][0])
+            blk['Frequency (ships/year)'] = [[1000.0 if (i, j) == (5, 5) else 0.0 for j in range(m)]
+                                             for i in range(n)]
+            blk['Draught (meters)'] = [[10.0] * m for _ in range(n)]
+            blk['Speed (knots)'] = [[12.0] * m for _ in range(n)]
+        tpl['segment_data'] = {k: seg}
+        tpl['traffic_data'] = {k: td}
+        tpl['junctions'] = {}
+        tpl['objects'] = [['1', '10', STRUCTURE.wkt]]
+        tpl['depths'] = [['1', '30', box(12.0, 57.0, 12.01, 57.01).wkt], ['2', '5', FRONT_HALF.wkt]]
+        tpl['drift'].update({
+            'speed': 1.0, 'anchor_p': 0.7, 'anchor_d': 7.0,
+            'rose': {str(a): (1.0 if a == 0 else 0.0) for a in range(0, 360, 45)},
+            'repair': {'func': '', 'std': 0.97, 'loc': 0.2, 'scale': 0.5, 'use_lognormal': True},
+            'blackout_by_ship_type': default_blackout_by_ship_type(),
+        })
+        calc = Calculation(_mock_parent())
+        calc.set_progress_callback(lambda completed, total, msg: True)
+        allision, grounding = calc.run_drifting_model(tpl)
+        return allision, grounding, calc.drifting_report
+
+    def test_every_number_carries_the_factor(self, template):
+        a1, g1, plain = self._report(template, 1.0, 1.0)
+        a, g, rep = self._report(template, 0.5, 0.25)
+        assert a1 > 0 and g1 > 0
+        assert a == pytest.approx(0.5 * a1) and g == pytest.approx(0.25 * g1)
+        assert rep['totals']['allision'] == pytest.approx(a)
+        assert rep['totals']['grounding'] == pytest.approx(g)
+        assert rep['totals_before_rf']['allision'] == pytest.approx(a1)
+        assert rep['totals_before_rf']['grounding'] == pytest.approx(g1)
+        assert rep['risk_factors'] == {'allision': 0.5, 'grounding': 0.25}
+        # breakdowns follow the totals
+        assert sum(o['allision'] for o in rep['by_object'].values()) == pytest.approx(a)
+        assert sum(o['grounding'] for o in rep['by_object'].values()) == pytest.approx(g)
+        assert sum(rep['by_cell_allision'].values()) == pytest.approx(a)
+        assert sum(rep['by_cell_grounding'].values()) == pytest.approx(g)
+        assert sum(r['contrib_allision'] for r in rep['by_leg_direction'].values()) == pytest.approx(a)
+        # exposure is not a probability: unchanged
+        assert (sum(r['base_hours'] for r in rep['by_leg_direction'].values())
+                == pytest.approx(sum(r['base_hours'] for r in plain['by_leg_direction'].values())))
+        # anchoring has no risk-reduction factor
+        assert rep['totals']['anchoring'] == pytest.approx(plain['totals']['anchoring'])

@@ -6,7 +6,7 @@ User Guide
 
 This chapter walks through the plugin **tab by tab**, explaining what
 every button and field does.  It assumes you've already installed
-OMRAT (:ref:`installation`) and opened the dock widget (:ref:`quickstart`).
+OMRAT (:ref:`installation`) and opened the OMRAT window (:ref:`quickstart`).
 
 Need a term defined?  See :ref:`concepts`.  Need a specific workflow
 ("I have AIS data, how do I ...")?  See :ref:`workflows`.
@@ -19,21 +19,30 @@ Need a term defined?  See :ref:`concepts`.  Need a specific workflow
 The dock widget
 =================
 
-OMRAT's entire UI lives in one dockable widget.  The top of the widget
-has a **menu bar** (File, Settings, Consequence, Help) and the main
+OMRAT's entire UI lives in one window, called the OMRAT dock in this
+guide.  The top of the window has a **menu bar** (File, Settings,
+Consequence, Help) and the main
 area has a stack of seven **tabs** -- Routes, Traffic Data, Depths,
 Objects, Run Analysis, Drift Analysis and Compare:
 
 .. figure:: _static/screenshots/ui_dock_tabs_annotated.png
    :width: 100%
-   :alt: Annotated OMRAT dock widget showing menu and tabs
+   :alt: Annotated OMRAT window showing menu and tabs
 
-   The dock widget.  Menu at top, tabs in the middle, progress and
+   The OMRAT window.  Menu at top, tabs in the middle, progress and
    messages at the bottom.
 
 The workflow is to fill tabs left-to-right, then press **Run model**
 on the Run Analysis tab.  You can come back and tweak any tab and
 rerun.
+
+The dock is a window of its own, not docked into the QGIS main window;
+the OMRAT toolbar icon opens it, or brings it to the front when it is
+already open.  It opens as large as the tabs need, but never larger than
+the screen.  On a small (laptop or remote-desktop) screen the contents
+scroll while the menu bar stays at the top.  Over a spin box or drop-down
+list you have not clicked, the mouse wheel scrolls the page instead of
+changing the value; click the box first to change it with the wheel.
 
 
 Routes tab
@@ -54,7 +63,10 @@ Each segment has:
 * **Width** -- the length (metres) of the dashed **tangent line** drawn
   across the leg.  The tangent line is also the *passage line* the AIS
   query samples when you click **Update AIS**, so the width bounds
-  which ships are counted.  The lateral spread used in the risk
+  which ships are counted.  Search-and-rescue *aircraft* (MMSI
+  ``111MIDxxx``, which send AIS at 100-250 kn) are never counted; before
+  2026-11-09 they were, as "Search and Rescue vessel" -- run **Update all
+  distributions** on older projects.  The lateral spread used in the risk
   calculation itself comes from the distribution panel lower down the
   same tab.
 * **Tangent (%)** -- where along the leg the tangent line sits, in
@@ -62,9 +74,9 @@ Each segment has:
   :ref:`moving-the-tangent-line`.
 * **Dirs** -- the two direction labels auto-derived from the segment's
   compass bearing (``"North going"`` / ``"South going"``, etc.).
-* **bearing** -- stored compass bearing in degrees.
 * **ai1**, **ai2** -- IWRAP "position check interval" in seconds for
-  directions 1 and 2.  Used by the powered-grounding / allision
+  directions 1 and 2 (**Mean time between checks** in the lateral
+  distribution panel, default 180).  Used by the powered-grounding / allision
   calculations (:math:`N_{II} = P_c Q \cdot m \cdot \exp(-d/(a_i V))`).
   A value of 0 switches Category II off for that direction.  On IWRAP
   export the value goes to the direction's ``grounding_check_time``;
@@ -86,13 +98,20 @@ right away.  The other columns keep Qt's usual double-click.
 Digitising a route
 ------------------
 
-#. Click **Add Route** to start digitising.
+#. Click **Add** (next to the route table) to start digitising.
 #. Click on the map to set the first waypoint.
 #. Click again to create a leg; each subsequent click adds a segment.
-#. Click **Stop Route** when done.
+#. Click **Stop** when done.
 
 Segments are automatically assigned an ID (``1``, ``2``, ...) and a
-default width of 5000 m.
+default width of 5000 m.  The leg name ``LEG_<route>_<n>`` comes from
+the **Route** and **Next leg no.** boxes above the table; **Stop**
+moves on to the next route number and restarts the leg number at 1.  A
+click close to an existing waypoint snaps to it, so the new leg joins
+that waypoint (a junction).  A new leg drawn straight across an existing
+leg splits both at the crossing point, so that they meet at a waypoint.
+**Remove** deletes the legs selected in the route table, with their
+traffic.
 
 Editing a segment
 -----------------
@@ -102,11 +121,19 @@ the map using QGIS's standard vertex-editing tools.  OMRAT listens to
 the geometry-change signal and:
 
 * Updates the Start_Point / End_Point values in the table,
-* Recomputes direction labels and stored ``bearing``,
+* Recomputes the direction labels (``Dirs``),
 * Recomputes ``line_length`` (metres) via UTM projection.
 
 The recomputed values are included in project save and in IWRAP XML
 export, so map geometry and exported model stay in sync.
+
+Legs hang on shared waypoints: dragging a vertex that several legs share
+moves every leg on that waypoint, and dropping it onto another waypoint
+joins the two.  If the edit makes the leg cross other legs without a
+shared waypoint, OMRAT asks right away whether to split them at the
+crossings (**Split now** / **Not now**).  Crossing collisions are only
+computed where legs share a waypoint, so an unsplit crossing counts as
+zero; **Update all distributions** and **Run model** ask again.
 
 .. _moving-the-tangent-line:
 
@@ -194,9 +221,10 @@ How to read them:
   uniform part, from the lateral distribution panel), not the raw AIS
   histogram.
 * **Short dashed ticks mark the powered model's ray span.**  Two per
-  direction, in the curve's colour, at :math:`\mu \pm 6\sigma` of the
-  first normal component: that is where the Category I and II rays
-  start and stop (see :ref:`ray-sampling`).  A tick beyond the end of
+  direction, in the curve's colour: the lowest :math:`\mu - 6\sigma` and
+  the highest :math:`\mu + 6\sigma` of the direction's components (and
+  the uniform part's bounds).  That is where the Category I and II rays
+  start and stop; the rays cover the whole curve (see :ref:`ray-sampling`).  A tick beyond the end of
   the tangent line, joined to it by a thin dashed extension, means the
   rays reach past the drawn lane.
 * **Each direction bulges towards the side its ships sail to.**
@@ -217,9 +245,10 @@ width or tangent position, **Update AIS**, **Copy traffic**, a vertex
 drag and a project load.  A leg without a distribution (all weights 0)
 has no curves.  Dragging a curve does nothing; it snaps back.
 
-In the **Layers** panel the *Tangent Line* layer has three legend entries:
-*Tangent line*, *Lateral distribution, direction 1 (drawn direction)* and
-*Lateral distribution, direction 2 (reverse)*.  Restyle them there like
+In the **Layers** panel the *Tangent Line* layer has five legend entries:
+*Tangent line*, *Lateral distribution, direction 1 (drawn direction)*,
+*Lateral distribution, direction 2 (reverse)* and *Ray span (powered
+model), direction 1* / *direction 2*.  Restyle them there like
 any rule-based layer; the style is saved in the project with the other
 layer styles.
 
@@ -777,12 +806,15 @@ across the outbound legs.  There is no separate "add crossing" action
 in the UI:
 
 * Snap two leg endpoints together (or share a common waypoint when
-  digitising) and OMRAT registers a junction automatically on save.
+  digitising) and OMRAT registers a junction automatically.
 * Legs that cross *in the middle* (true X intersections, no shared
-  endpoint) are detected when you click **Update all distributions**;
-  you'll be prompted to split each crossing into four sub-legs that
-  meet at a new junction.  Splitting also offers to copy the parent
-  legs' traffic onto the sub-legs.
+  endpoint) count as zero crossing collisions until they are split.
+  OMRAT asks to split each crossing into four sub-legs that meet at a
+  new junction wherever such a crossing can appear: when a dragged leg
+  end makes legs cross, after **Connect** in the Waypoint editor, during
+  **Update all distributions**, and before **Run model** (see
+  :ref:`Run model checks <run-model-checks>`).  The sub-legs keep the traffic of the leg
+  they were split from.
 * Open **Settings -> Junction transition matrix...** to inspect or
   edit how traffic distributes at each junction.  Rows default from
   geometry (deflection-angle heuristic) and are overwritten by AIS
@@ -866,11 +898,14 @@ Saving the route
 ----------------
 
 **File -> Save** writes the whole model back to the ``.omrat`` file it
-was loaded from or last saved to; the file name is shown in the dock
+was loaded from or last saved to; the file name is shown in the window
 title.  For a model that has no file yet it behaves like **Save
 as...**, which always asks for a file name (pre-filled with the current
-one, so "save a copy next to it" is a two-click job).  **Clear model**
-forgets the file, so the next Save asks again.
+one, so "save a copy next to it" is a two-click job).  Closing the dock
+clears the model and forgets the file, so the next Save asks again.
+**Load** on a model that already holds data asks whether to **Clear &
+Load** (start from the loaded file only) or **Merge** the file into the
+current model.
 
 The ``.omrat`` snapshot that **Run Model** writes next to each run is
 read-only on purpose, so it remains a faithful record of that run.  If
@@ -894,8 +929,8 @@ Layer styling
 OMRAT's layers are memory layers rebuilt from the project file, so a
 QGIS project (``.qgz``) does not keep them.  Instead the QGIS style of
 each layer type is saved *inside* the ``.omrat`` file when you press
-Save and re-applied on Load: legs, the tangent lines, the depth layer
-and the structures.  Change colours, widths or labels in the QGIS
+Save and re-applied on Load: legs, the tangent lines, the depth layer,
+the structures and the speed restriction zones.  Change colours, widths or labels in the QGIS
 Layers panel as usual; the style of the first leg (or structure)
 layer is used for all legs (structures).  A leg drawn after Load picks
 up the stored style too.  A style change counts as an unsaved change.
@@ -906,9 +941,9 @@ covered.
 
 The on-canvas leg layers in the QGIS Layers panel are *memory layers*
 and disappear when you close QGIS.  The persistent source of truth is
-the project file: **File -> Save .omrat** writes the route (start /
-end / width / dirs / bearing) plus traffic / depths / objects /
-distributions to a single JSON file.  **File -> Open .omrat** rebuilds
+the project file: **File -> Save** writes the route (start /
+end / width / dirs) plus traffic / depths / objects /
+distributions to a single JSON file.  **File -> Load** rebuilds
 the leg layers from that JSON, so there is no separate "save layer"
 step.
 
@@ -927,9 +962,6 @@ What flows downstream
      - Drifting base exposure, ship-ship collision candidate count.
    * - ``ai1``, ``ai2``
      - Powered grounding + allision (:math:`\exp(-d/(a_i V))`).
-   * - ``bearing``
-     - Crossing-collision geometry to detect leg pairs that share a
-       waypoint.
 
 
 Traffic Data tab
@@ -957,10 +989,10 @@ then use the third to pick which variable to edit:
    the collision width :math:`B_{ij}` in the head-on / overtaking
    geometric probability and for the collision diameter
    :math:`D_{ij}` in the
-   crossing and bend formulas.  When a cell has no AIS observation,
-   the model falls back to an L/B ratio estimate from the LOA bin
-   midpoint (``ShipCollisionModel.estimate_beam``), so a hand-entered
-   project still gets sensible beams.
+   crossing and bend formulas.  When a cell has no AIS observation (or
+   a beam of 0), the model falls back to an L/B ratio estimate from the
+   LOA bin midpoint (``ShipCollisionModelMixin.estimate_beam``, L / 6.5),
+   so a hand-entered project still gets sensible beams.
 
 Editing, and copying to and from Excel
 --------------------------------------
@@ -987,14 +1019,14 @@ and either separator is accepted when you type or paste.
   number >= 0 keeps its old value.  The message bar reports how many
   cells were pasted and how many of them *changed* -- pasting back an
   unedited copy says ``0 changed``.
-* **Delete** clears the selected cells: ``0`` ships/year for
-  Frequency, ``100`` for Scaling, and "no observation" for Speed,
-  Draught and heights.
+* **Delete** (or right-click **Clear**) clears the selected cells:
+  ``0`` ships/year for Frequency, ``100`` for Scaling, and "no
+  observation" for Speed, Draught and heights.
 
 A blank cell under Speed, Draught or heights means the AIS refresh saw
 no ships there (stored as ``inf``); type a value to set one.  Cells you
-do not change keep their stored value exactly -- the table shows two
-decimals, but the full value is kept.
+do not change keep their stored value exactly -- the table shows at
+most two decimals, but the full value is kept.
 
 .. _traffic-gaps:
 
@@ -1041,9 +1073,11 @@ Matrix shape
 ------------
 
 * **Rows** -- ship types (configurable under **Settings -> Ship
-  Categories**; defaults to the 21 IMO types used by IWRAP).
-* **Columns** -- LOA bins (also configurable; defaults to 15 bins
-  from <50 m to >350 m).
+  Categories**; defaults to the 21 AIS ship-type categories, from
+  *Fishing* and *Towing* to *Passenger*, *Cargo*, *Tanker* and *Other
+  Type*.  The IWRAP export groups them into IWRAP's 14 types).
+* **Columns** -- LOA bins (also configurable; defaults to 15 bins:
+  0-25 m, 25-50 m, ... 325-350 m in 25 m steps, and 350-500 m).
 
 Variables
 ---------
@@ -1060,11 +1094,12 @@ Variables
      - Every accident type (exposure).
    * - Speed (knots)
      - knots
-     - Powered grounding/allision, head-on + overtaking + crossing
-       collisions, drifting exposure.
+     - Powered grounding/allision (Category II), every ship-ship
+       collision type, drifting exposure, squat.
    * - Draught (meters)
      - m
-     - Powered grounding depth binning, drifting grounding filter.
+     - Powered grounding depth binning, drifting grounding filter,
+       anchoring depth.
    * - Ship heights (meters)
      - m
      - Powered allision (clearance check: short ships pass under
@@ -1102,14 +1137,17 @@ checkbox to expand the controls, untick again to fold them away.
   the per-cell values directly.  Typing a value into a cell
   **auto-unticks** that ship-type row -- the typed number is treated
   as your explicit override and survives future global changes.
-* **Reset all to 100 %** clears every override: all checkboxes
+* **Reset all to 100%** clears every override: all checkboxes
   re-tick, the global snaps to ``100``, every cell goes back to
   ``100``.
 
 The scaling matrix is per-leg / per-direction, but the global
 broadcast covers every leg + direction at once.  AIS refresh and
 IWRAP import only overwrite Frequency -- never Scaling -- so a saved
-``+30 %`` survives every traffic update.
+``+30 %`` survives every traffic update.  IWRAP has no scaling of its
+own, so the IWRAP export writes the frequencies with **Scaling (%)**
+applied, as the calculation uses them; the export message says how many
+cells were scaled.
 
 Importing from AIS
 ------------------
@@ -1118,10 +1156,11 @@ If you have access to an AIS database:
 
 #. **Settings -> AIS connection settings** -- enter host, port,
    database, schema, user, password.
-#. Select a segment in the route table.
-#. Click **Update AIS**.  The plugin queries the database for every
-   vessel passage that crossed the segment's buffer and populates the
-   traffic table automatically.
+#. Click the **Update AIS** button in the leg's row of the route table
+   (or **Update all distributions** for every leg).  The plugin queries
+   the database for every vessel passage that crossed the leg's passage
+   line (the tangent line) and populates the traffic table and the
+   lateral distributions automatically.
 
 The query time is shown in the QGIS log panel.
 
@@ -1144,7 +1183,7 @@ live in (the table name defaults to ``ship_type_map``), click
 **Save**.  The dialog previews the table and **Export CSV...** writes
 it back out for editing.  The CSV needs an ``mmsi`` and/or ``imo`` column and a
 ``ship_type`` column holding the OMRAT category index (0-20), an AIS
-type code (30-89) or a name such as ``Tanker``, ``Cargo`` or
+type code (30-99) or a name such as ``Tanker``, ``Cargo`` or
 ``Passenger``; an optional ``note`` column is stored as is.  OMRAT
 creates the table when missing and replaces its rows on every import.
 
@@ -1202,7 +1241,10 @@ What the page holds, top to bottom:
   - traffic scaling other than 100 %;
   - each suppressed leg and where its ships go, and a direction whose
     ships have no target (they are left out of the calculation);
-  - locked legs, which **Update all distributions** leaves as they are.
+  - locked legs, which **Update all distributions** leaves as they are;
+  - legs in a speed restriction zone (a lower speed in the calculation),
+    and zones that would stop **Run model** (see
+    :ref:`speed-restriction-zones`).
 
   *What was checked* lists every check and how many it found.
 * **Map** -- every leg with one band per direction, on the side the
@@ -1230,7 +1272,8 @@ What the page holds, top to bottom:
 *As stored* is what the Traffic Data tab holds.  *In the calculation*
 repeats what Run model does to its own copy: every cell times its
 **Scaling (%)**, then suppressed legs left out and their ships added to
-the target legs.  Ships are counted at each leg's own passage line, so
+the target legs, then the speeds of the legs in speed restriction
+zones lowered.  Ships are counted at each leg's own passage line, so
 one ship that sails three legs is counted on each of them -- adding up
 the legs does not give a number of ships, and the report never does.
 
@@ -1251,9 +1294,13 @@ Depths tab
 
 Each row has:
 
-* **id** -- a short label (auto-generated ``d1`` ... or user-set).
-* **depth** -- the water depth at this polygon (metres below chart
-  datum).
+* **Id** -- a running number (``1``, ``2``, ...).
+* **Depth** -- the water depth at this polygon (metres below chart
+  datum).  A row from **Fetch GEBCO depth** holds its depth interval
+  (``10-20``); the calculation, the depth layer's colours, the drift
+  analysis corridors and the saved file all use the shallower end
+  (``10``), so a ship grounds on the whole class as soon as its draught
+  reaches the class's shallowest water.
 * **Polygon** -- the WKT geometry, in lon/lat (EPSG:4326).
 
 Adding depths
@@ -1261,10 +1308,12 @@ Adding depths
 
 Three ways:
 
-* **Add manually** -- enter a depth value, draw a polygon on the map.
-* **Load** -- pick a polygon layer; OMRAT imports every polygon and
-  uses the ``depth`` attribute (or the first numeric attribute) as the
-  depth value.
+* **Add manually** -- the button turns into **Save**; draw a polygon on
+  the map, press **Save**, then type the depth in the table (the row
+  starts at 10 m).
+* **Load** -- pick a polygon shapefile; OMRAT imports every polygon
+  (reprojected to EPSG:4326) and uses its ``depth`` attribute as the
+  depth value (0 when the layer has no such attribute).
 * **Remove** -- delete the selected row.
 * **Fetch GEBCO depth** -- requires an OpenTopography API key, pasted
   into the **API Key** field on this same tab (not in Settings).
@@ -1277,11 +1326,17 @@ How depths drive the calculation
 --------------------------------
 
 * **Drifting grounding:** a polygon's depth is compared against each
-  ship's draught.  Only polygons shallower than the ship's draught
-  are grounding hazards for that ship.
+  ship's draught (plus its squat, when ticked under
+  `Causation factors`_).  Only polygons shallower than that are
+  grounding hazards for that ship.
 * **Drifting anchoring:** a polygon is an anchoring zone if its depth
   is less than ``anchor_d * draught`` (configurable under Drift
-  settings).
+  settings).  A leg that already lies in such water anchors from the
+  start: whatever its drifting ships could hit inside the anchoring zone
+  is reduced by the anchoring probability, scaled by the share of the leg
+  inside the zone.  (Until 2026-11-09 a drifting ship could only anchor
+  where it crossed *into* the zone, so such a leg got no anchoring at
+  all.)
 * **Powered grounding:** two categories.  A shallow polygon *inside*
   the leg's lateral spread is a Category-I hazard
   (:math:`N_I = P_{c,I} Q m`, no distance term); the shallowest depth
@@ -1345,16 +1400,21 @@ Objects tab
 Structures are bridges, wind-turbine foundations, platforms, piers.
 Each row has:
 
-* **id** -- label.
-* **height** -- height of the structure above waterline (metres).
+* **Id** -- a running number.
+* **Height** -- height of the structure above waterline (metres).
   Ships shorter than this pass under without colliding.
 * **Polygon** -- the WKT footprint.
 
 Adding structures
 -----------------
 
-* **Add manually** -- enter a height, draw a polygon on the map.
-* **Load** -- pick a polygon layer with a ``height`` attribute.
+* **Add manually** -- as for depths: draw a polygon, press **Save**,
+  then type the height in the table.
+* **Load** -- pick a polygon shapefile.  The height is read from an
+  attribute named ``height`` (any case; files made for older versions
+  with an ``object`` attribute still work, and 0 is used when the layer
+  has neither); check the **Height** column afterwards.  Every polygon
+  becomes its own row and its own layer, as when a project is loaded.
 * **Remove** -- delete the selected row.
 
 How objects drive the calculation
@@ -1412,11 +1472,16 @@ Fields
    * - ``std{d}_{i}``
      - Standard deviation of normal component ``i``.
    * - ``weight{d}_{i}``
-     - Weight of normal component ``i`` (weights normalised to 1).
+     - Weight of normal component ``i`` (the weights, ``% Uniform``
+       included, are normalised by their sum).
    * - ``u_min{d}`` / ``u_max{d}``
      - Uniform component bounds, metres.
    * - ``u_p{d}``
-     - Weight of the uniform component.
+     - Weight of the uniform component (**% Uniform**).
+   * - ``ai{d}``
+     - **Mean time between checks** (seconds, default 180) for the powered
+       Category II model; ``0`` switches Category II off for that
+       direction.
 
 The plot at the bottom of the tab shows the combined PDF with the
 sum of (up to 3) normals + 1 uniform.
@@ -1427,10 +1492,14 @@ Why this matters
 The lateral distribution enters the calculations in three places:
 
 #. **Powered grounding / allision** -- defines the "lateral spread" of
-   rays cast across the leg (:math:`N_\mathrm{rays} = 500` rays at
-   ``mean +/- 4 std``).
-#. **Ship-ship collisions** -- defines :math:`(\mu, \sigma)` of each
-   direction for the Gaussian-overlap probability.
+   rays cast across the leg: the rays cover the whole mixture, from the
+   lowest ``mean - 6 std`` to the highest ``mean + 6 std`` of the
+   components and the uniform bounds, with 1000 rays for one component
+   (up to 3000 for a wide mixture), each carrying its share of the ships
+   (:ref:`ray-sampling`).
+#. **Ship-ship collisions** -- the head-on / overtaking geometric
+   probability is summed over every pair of components of the two
+   mixtures (normal and uniform parts alike).
 #. **Drifting** -- defines the corridor width (``5 * sigma``) and
    feeds the analytical probability-hole integral.
 
@@ -1450,14 +1519,22 @@ Drift Analysis tab
 
 This tab does **not** compute the risk -- it draws drift corridors
 for visual inspection.  Use it to sanity-check whether the corridors
-actually reach the obstacles you expect them to hit.
+actually reach the obstacles you expect them to hit.  The corridors
+have the drifting model's width (from each leg's lateral distribution)
+and length (the drift distance by which 99 % of the ships are
+repaired, at most 10 times the longest leg); see
+:ref:`drifting`.
 
 Fields
 ------
 
-* **Depth threshold** -- hide depth polygons shallower than this (so
-  the corridor isn't cluttered by the near-shore bathymetry).
-* **Height threshold** -- same for structures.
+* **Depth threshold (m)** (default 10) -- depth areas this shallow or
+  shallower are grounding obstacles: they cut the corridor and cast a
+  shadow behind them.  Think of it as the draught of the ship you are
+  checking; the anchoring area drawn is ``anchor_d`` (Drift settings)
+  times this value.
+* **Height threshold (m)** (default 10) -- structures with a height up
+  to this value are allision obstacles and cast a shadow.
 * **Run analysis** -- kicks off
   :class:`~geometries.drift_corridor_task_v2.DriftCorridorTask` in a
   background thread.
@@ -1465,10 +1542,11 @@ Fields
 Output
 ------
 
-Per leg, per wind-rose direction, a polygon layer is added to the
-map showing where a drifting ship from that leg in that direction
-could reach, minus the footprints of any obstacles it would ground
-or collide on.
+One polygon layer per leg (*Drift Corridors - Leg 1*, ...) is added to
+the map.  It holds one corridor per drift direction of the wind rose
+(8 per leg, styled by direction), showing where a drifting
+ship from that leg could reach, minus the footprints of any obstacles it
+would ground or collide on.  A new run replaces the previous layers.
 
 .. figure:: _static/screenshots/ui_drift_corridor.png
    :width: 90%
@@ -1494,13 +1572,28 @@ Run Analysis tab
 
    The Run Analysis tab.
 
-Fill in **Name of the model** and **File path** (the ``...`` button
+Fill in **Name of the Run** and **File path** (the ``...`` button
 opens a folder picker), then click **Run model**.  The button stays
 disabled until both are set.  It kicks off a
 :class:`~compute.calculation_task.CalculationTask` that runs the
 drifting, ship-ship collision, powered grounding and powered allision
 models in sequence, followed by the oil-spill consequence step.  The
 task runs in the background so QGIS stays responsive.
+
+.. _run-model-checks:
+
+Before it starts, **Run model** checks two things:
+
+* **Speed restriction zones.**  Enabled zones that overlap or are
+  invalid stop the run, with a message on what to fix
+  (:ref:`speed-restriction-zones`).
+* **Legs that cross without a shared waypoint**, when ship-ship
+  collisions are part of the run.  Crossing collisions are only computed
+  where legs share a waypoint, so such a crossing would count as zero.
+  A warning lists them: **Split and run** splits the legs at the
+  crossings first (the sub-legs keep their traffic), **Run anyway**
+  runs the model as it is, **Cancel** stops.  Crossings with a
+  suppressed leg are not listed.
 
 .. _calculation-matrix:
 
@@ -1526,26 +1619,33 @@ and its tooltip lists them.  The selection lasts for the QGIS session.
 
 Results land in two tables: **Accident probabilities** (one row per
 accident type, with a **View** drill-down button) and
-**Catastrophe-level exceedance (events/year)**.  **Previous runs**
-above them lists every run in the history; select one and click
-**Add selected run results to map** to load its GeoPackage.
+**Catastrophe-level exceedance (events/year)**.  Both show *saved runs*:
+the run ticked as **Baseline** in **Previous runs** above them, and the
+runs selected there (see :ref:`previous-runs-table`).  A finished run
+is saved and selected automatically, so its numbers appear right away.
+Select one run and click **Add selected run results to map** to load
+its GeoPackage.
 
 Below the nine accident rows the table carries three bold summary
 rows: **All grounding** (drifting + powered grounding), **All
 allision** (drifting + powered allision) and **All collisions** (the
-five ship-ship types).  They recompute whenever the rows above change
-and get their own probability / delta cells when previous runs are
-compared.
+five ship-ship types), in every run column.
 
 The **Show as** selector to the right of the table caption switches the
 presentation between **Frequency (per year)** -- the annual accident
 frequency in scientific notation -- and **Years between incidents**,
-i.e. the return period ``1 / frequency``.  The choice applies to the
-accident table, its summary rows, the per-run comparison columns and
-the catastrophe-exceedance table below, and is remembered between
-sessions.  Only the presentation changes: the stored totals, the run
-history and the ``Δ %`` columns are always computed from the frequency.
-A zero frequency shows as ``∞`` in years mode.
+i.e. the return period ``1 / frequency``.  The choice applies to both
+tables and is remembered between sessions.  The run history always
+stores the frequency; the **Change (%)** columns are computed in the
+unit shown, so a frequency that doubles is ``+100.0%`` as a frequency
+and ``-50.0%`` in years.  A zero frequency shows as ``∞`` in years mode
+(its change is ``—``).
+
+**Copy to Excel.**  Select cells and press **Ctrl+C**, or right-click
+either table and choose **Copy table with headers**.  Numbers are
+copied as plain numbers with your system's decimal separator (the value
+in the unit shown, the change as a number of percent), so Excel reads
+them as numbers; the **View** column is left out.
 
 The **View** button on a ship-ship collision row opens a per-leg (or
 per-leg-pair) table with the absolute probability and a **% of total**
@@ -1565,34 +1665,37 @@ events/year or roughly one event every 9 years).
    :header-rows: 1
    :widths: 30 70
 
-   * - Field
+   * - Row
      - Meaning
-   * - **LEPDriftAllision**
+   * - **Drifting allision**
      - Drifting + hitting a structure.
-   * - **LEPDriftingGrounding**
+   * - **Drifting grounding**
      - Drifting + running aground on a depth polygon.
-   * - **LEPPoweredGrounding**
-     - Under power, failing to turn, hitting a depth polygon.
-   * - **LEPPoweredAllision**
-     - Under power, failing to turn, hitting a structure.
-   * - **LEPHeadOnCollision**
-     - Two ships on the same leg in opposite directions.
-   * - **LEPOvertakingCollision**
+   * - **Powered allision**
+     - Under power, hitting a structure: Category I (the structure lies
+       inside the lane) plus Category II (the ship fails to turn at a
+       waypoint and runs on into it).
+   * - **Powered grounding**
+     - The same for depth polygons shallower than the draught.
+   * - **Overtaking collision**
      - Same leg, same direction, different speeds.
-   * - **LEPCrossingCollision**
-     - Two legs sharing a waypoint and meeting at more than 30
-       degrees.
-   * - **LEPMergingCollision**
-     - Two legs sharing a waypoint and meeting at 30 degrees or
-       less -- streams converging onto nearly the same course.  Same
-       equations as crossing, its own causation factor.
-   * - **LEPBendCollision**
-     - One leg changing direction at a waypoint: a ship fails to
-       turn and hits traffic that did.
+   * - **Head-on collision**
+     - Two ships on the same leg in opposite directions.
+   * - **Crossing collision**
+     - Two routes through a waypoint whose paths cross (four
+       different legs).  See :ref:`junctions`.
+   * - **Merging collision**
+     - Two routes through a waypoint that leave on the same leg --
+       streams joining.  Same equations as crossing, its own causation
+       factor.
+   * - **Bend collision**
+     - The two opposite routes of a turn at a waypoint (leg A to leg B
+       and leg B to leg A) meeting there, at 180 degrees minus the turn
+       angle -- IWRAP's bend rule.
 
 .. note:: Changed in v0.14.0
 
-   ``LEPMergingCollision`` used to be fed the *bend* total, and
+   The **Merging collision** row used to be fed the *bend* total, and
    merging itself was summed into crossing.  They are now three
    distinct rows.  See :ref:`merging-collisions` and the
    crossing-formula warning in :ref:`collisions`.
@@ -1694,18 +1797,30 @@ Drift settings
 
    * - Field
      - Meaning
-   * - ``drift_p``
-     - Blackout rate per ship-year (default 1.0).  Multiplied by a
-       per-type override from ``blackout_by_ship_type`` -- e.g. RoRo =
-       0.1.
-   * - ``anchor_p``
+   * - ``drift_p`` (**Drift probability (/year)**)
+     - Blackout rate per ship-year (default 1.0).  The **Blackout per
+       ship type** table overrides it per type: by default 0.1 for
+       passenger ships, ro-ro / ro-pax, cruise ships and fast ferries
+       (high speed craft), 1.0 for the rest.
+   * - ``anchor_p`` (**Probability of anchoring (%)**)
      - Probability of a successful anchor given the ship is in an
-       anchoring-depth region (default 0.7).
-   * - ``anchor_d``
-     - Anchor-depth factor.  A ship with draught :math:`T` can anchor
-       in water shallower than :math:`\mathrm{anchor\_d} \cdot T`.
-   * - ``speed``
-     - Drift speed in knots.
+       anchoring-depth region (default 70 %).
+   * - ``anchor_d`` (**Max depth (Ship draught)**)
+     - Anchor-depth factor (default 7).  A ship with draught :math:`T`
+       can anchor in water shallower than
+       :math:`\mathrm{anchor\_d} \cdot T` (the draught without squat,
+       see `Causation factors`_).
+   * - ``speed`` (**Average drift speed (knots)**)
+     - Drift speed in knots (default 1.0).
+   * - **Start drifting from**
+     - Where the drift distance to an obstacle is measured from.
+       *Leg center* (default): the leg line.  *Distribution center*: a
+       line parallel to the leg through the mean of the direction's
+       lateral distribution, one per direction, so a lane on the
+       starboard side starts closer to the obstacles on that side.  Only
+       the distance (and so the chance of being repaired in time) changes;
+       which ships reach an obstacle still follows the whole lateral
+       distribution.  See :ref:`drifting-level1b`.
    * - Wind **rose**
      - Probability per compass direction, entered as eight percentages
        that should sum to 100.  Type the values freely, then press
@@ -1716,11 +1831,23 @@ Drift settings
        the other seven fields as soon as one lost focus, which made
        entering a whole rose by hand hard.)
    * - **Repair time**
-     - Lognormal / Weibull / Normal CDF parameters for the
-       time-to-repair distribution used to compute :math:`P_{NR}`.
+     - The time-to-repair distribution used to compute :math:`P_{NR}`:
+       **Lognormal** (standard deviation, location, scale) or **User
+       defined**, an expression of the time ``x`` in hours that gives
+       the share of ships repaired (``exp`` and ``log`` allowed, e.g.
+       ``stats.norm(loc=0, scale=1).cdf(x)``).
+       The plot shows the selected model and
+       follows every edit; for the lognormal it runs past the time by which
+       99 % of the ships are repaired (dashed line), which is how far the
+       drift corridors reach.  **Test eval** checks the selected model and
+       explains any problem in a message.
+
+Squat is set in **Settings > Causation Factors** (see below), not here.
 
 All numeric fields in this dialog accept both ``.`` and ``,`` as the
 decimal mark (``12,5`` and ``12.5`` are the same value).
+
+.. _causation-factors:
 
 Causation factors
 -----------------
@@ -1734,12 +1861,23 @@ Causation factors
 
 Eleven fields: powered, drifting, head-on, overtaking, crossing,
 **merging**, bend, grounding and allision (Cat II, missed turn) and
-grounding and allision **Cat I** (obstacle already in the lane).  The
+grounding and allision **Cat I** (obstacle already in the lane), plus
+the passenger ship / fast ferry reduction (below).  The
 merging factor was added in v0.14.0 and defaults to the crossing value
 -- IWRAP publishes no separate figure for it (see
 :ref:`merging-collisions`).  The two Cat I factors were added in
 v0.15.0 together with the Category-I powered model and default to the
 same figures as their Cat II counterparts, as IWRAP does.
+
+Under the bend factor sits **Smallest angle between routes at a
+waypoint** (default 10 degrees, 1 to 45).  Crossing, merging and bend
+are counted only for two routes whose arrival courses differ by at least
+this angle and at most 180 degrees minus it, because the crossing formula
+divides by the sine of the angle.  A turn smaller than the angle gives no
+bend.  10 degrees is the range of validity of the crossing equations in
+Friis-Hansen (2008) and the limit IWRAP uses; keep it there when you
+compare with IWRAP, since the export does not carry it.  See
+:ref:`angle-limit-at-waypoints`.
 
 Below the factors sits the **Category I start zone** group: a checkbox
 and a percentage (default on, 10 %).  With it on, Category I ignores
@@ -1749,6 +1887,32 @@ grounding and allision alike.  It exists because the ships' lateral
 positions right after a junction are not yet described by the new leg's
 fitted distribution; see :ref:`cat1-start-zone` for the reasoning and a
 worked example.  Turn it off to reproduce IWRAP's plain Category I.
+
+The **Squat** group has two boxes, both on by default: *Add squat to the
+draught in drifting grounding* and *in powered grounding* (Category I and
+II).  When ticked, a ship grounds on every depth area shallower than its
+draught plus its squat at its speed on the leg (for drifting: the speed
+it has when the blackout happens).  Squat is Barras' open-water formula
+:math:`S = C_B V^2 / 100` (V in knots, S in metres), with the block
+coefficient :math:`C_B` from the ship type (0.82 tankers, 0.80 bulk, 0.72
+cargo, 0.70 passenger, 0.67 container, 0.65 ro-ro and fast ferries, 0.75
+when the type is not recognised): a 0.72 m squat for a cargo ship at 10
+knots, 2.9 m at 20 knots.  Anchoring and the allision height clearance use
+the draught without squat.  Untick both to compare with IWRAP (the export
+writes no squat).
+
+Last comes **Passenger ship and fast ferry reduction**: IWRAP's reduction
+factor :math:`F`, one for passenger ships and one for fast ferries (high
+speed craft).  In a collision the causation factor is divided by
+:math:`\sqrt{F}` for every such ship in the encounter (a passenger ship
+meeting a cargo ship with :math:`F = 20`: :math:`P_c / \sqrt{20}`; two
+passenger ships :math:`P_c / 20`); their powered grounding and allision
+frequency is divided by :math:`F`.  Drifting is not affected.  Both factors
+default to 20, IWRAP's default; 1 means no reduction.  A project that
+already stores a value keeps it, so a project saved while the default was
+1 still shows 1.  Ro-pax types count as passenger ships.  The IWRAP export writes the
+values as set and the import reads them, so both tools apply the reduction
+once.
 
 .. _speed-restriction-zones:
 
@@ -1914,9 +2078,8 @@ AIS connection
    :alt: AIS connection settings dialog
 
    Connection parameters for an AIS PostgreSQL/PostGIS database.
-   Values are stored in the project file; the password is stored in
-   plain text, so treat ``.omrat`` files as sensitive if you fill
-   this in.
+   Values are stored in your QGIS user settings on this computer, not
+   in the ``.omrat`` file; the password is stored there in plain text.
 
 This dialog only stores credentials.  **Database setup wizard...** on
 the same menu walks you through creating the database and ingesting
@@ -1944,9 +2107,10 @@ layout and the CSV rules.
 File menu
 =========
 
-* **Save** / **Load** -- writes / reads the project as a single JSON
-  file with extension ``.omrat``.  Every tab's contents is included.
-  See :ref:`reference-data-format` for the full schema.
+* **Save** / **Save as...** / **Load** -- writes / reads the project as
+  a single JSON file with extension ``.omrat``.  Every tab's contents is
+  included.  See *Saving the route* above and
+  :ref:`reference-data-format` for the full schema.
 * **Export to IWRAP XML** / **Import from IWRAP XML** -- exchange with
   the IALA IWRAP reference tool.  Useful for cross-validating OMRAT
   results against IWRAP on the same project.  IWRAP has no suppressed
@@ -1955,12 +2119,42 @@ File menu
   legs are left out and their traffic is added to the target legs.  A
   warning lists what is moved before anything is written, and you can
   cancel.  Your OMRAT project is not changed.
-* **Manage previous runs...** -- browse, re-load and delete entries
-  in the run history.
+
+  What the export writes so that IWRAP runs the model OMRAT runs (and what
+  the import reads back):
+
+  - the **lanes on the correct side**: IWRAP measures each direction's
+    lateral offset from its own heading, positive to starboard;
+  - the **junction transition matrices** as IWRAP's leg-to-leg routing at
+    every waypoint, as *manually specified overall percentages* (IWRAP's
+    Waypoint Editor, Leg/Leg Traffic);
+  - **length classes** mapped onto IWRAP's fourteen (``0-25`` ...
+    ``325-350`` m); a class IWRAP lacks, such as 350-400 m, is merged into
+    the nearest one and the confirmation message lists it;
+  - the project's **passenger ship / fast ferry reduction** factors (see
+    `Causation factors`_; default 20, as in IWRAP);
+  - missing draught, speed and beam **filled** the way a calculation fills
+    them, instead of 0 ("not given" in IWRAP);
+  - both IWRAP **blackout** classes from the per-type blackout rates;
+  - each leg's **powered width** (``max_width_powered``) wide enough for
+    every ray OMRAT's powered model casts (twice the largest ray offset,
+    never narrower than the leg width): IWRAP counts powered grounding
+    and allision only within half of it from the leg.
+
+  Fixed 2026-11-09; projects imported from IWRAP files before that have
+  both lanes on the wrong side and should be imported again.  The
+  modelling differences that remain between the two tools are listed in
+  :ref:`iwrap-differences`.
+* **Traffic report...** -- the HTML overview of the traffic on every
+  leg (:ref:`traffic-report`).
+* **Manage previous runs...** -- browse the whole run history, move
+  runs to another project and delete entries (see *Manage previous
+  runs* below).
 
 Two further menus sit alongside it: **Consequence** (the four
 oil-spill inputs described in :ref:`consequence`) and **Help**, which
-opens this documentation in a browser.
+opens this documentation in a browser and has a **Report a bug
+(GitHub issues)** link.
 
 
 Run history (Previous runs)
@@ -1973,9 +2167,9 @@ OMRAT keeps a history of every **Run model** invocation in two places:
   spatial result layers for that run.
 * one **lightweight metadata row** in the master history database
   (``omrat_history.sqlite`` under the user app-data folder) holding the
-  run name, timestamp, elapsed duration, every total probability,
-  and a pointer (``output_dir`` + ``output_filename``) to the per-run
-  file.
+  run name, timestamp, elapsed duration, every total probability, the
+  project and the OMRAT version, and a pointer (``output_dir`` +
+  ``output_filename``) to the per-run file.
 
 This split keeps the master DB small even after many runs, and gives
 you one easy-to-archive ``.gpkg`` per run.
@@ -1989,7 +2183,7 @@ The master database location:
 Output folder + Run model gating
 --------------------------------
 
-**Run model** is **disabled** until *both* **Name of the model** and
+**Run model** is **disabled** until *both* **Name of the Run** and
 **File path** are filled in.  Use the **File path** ``...`` button on
 the Run Analysis tab to pick a folder -- the chosen path is
 remembered between sessions.  If you trigger the run some other way
@@ -2016,8 +2210,8 @@ its rows (``Ctrl+A``) and use **Set project...** once.
 Naming a run
 ------------
 
-The **Name of the model** field on the Run Analysis tab becomes the
-run's name AND the filename prefix for all three artefacts written to
+The **Name of the Run** field on the Run Analysis tab becomes the
+run's name AND the filename prefix for the artefacts written to
 the output folder:
 
 * ``<name>_<YYYYMMDD_HHMMSS>.gpkg`` -- the result layers.
@@ -2025,16 +2219,21 @@ the output folder:
   inputs the calculation actually consumed.
 * ``<name>_results_<YYYYMMDD_HHMMSS>.md`` -- a Markdown report
   covering every accident type.
+* ``<name>_<YYYYMMDD_HHMMSS>.collision.json``, ``.drifting.json``,
+  ``.powered.json`` and ``.consequence.json`` -- the per-leg, per-object
+  and oil-spill results that **View** and the **Compare** tab read.
 
 Note: result layers are no longer auto-added to the QGIS canvas at
 the end of a run.  Use **Add selected run results to map** (see
 below) when you want to look at them.
 
+.. _previous-runs-table:
+
 The Previous runs table
 ------------------------
 
 The **Previous runs** table on the Run Analysis tab shows **Name**,
-**Main**, **Date**, **Duration**, **Version** (the OMRAT version that
+**Baseline**, **Date**, **Duration**, **Version** (the OMRAT version that
 produced the run) and **Project**.  The **Project** selector above the
 table shows one project at a time, with the number of runs in each, or
 **All projects**; the **Project** column only appears for **All
@@ -2045,26 +2244,38 @@ selected automatically after a calculation finishes.
 
 For runs recorded before the version was stored, **Version** is read
 once from the run's ``.omrat`` snapshot; it shows a dash when the
-snapshot is older than the version stamp or no longer on disk.  Selecting rows adds columns to the
-**Accident probabilities** table below:
+snapshot is older than the version stamp or no longer on disk.
 
-* **Single selection** -- one probability column for that run plus a
-  ``Δ %`` column against the baseline.
-* **Multi-selection** -- one probability + ``Δ %`` column pair per
-  selected run, side by side.
+The **Accident probabilities** and **Catastrophe-level exceedance**
+tables below show the baseline and the selected runs side by side::
 
-The **Main** checkbox chooses the baseline: tick exactly one run and
-every ``Δ %`` column is computed against it (header ``Δ vs main
-(<run name>) %``).  The choice is remembered between sessions and is
-cleared automatically if that run is deleted from the history.  With
-no main run ticked the baseline is the currently displayed run if
-there is one, otherwise the first selected run, and the header says
-which (``Δ vs current %`` or ``Δ vs <run name> %``).
+    Accident type | Run A (baseline) | Run B | Change (%) | Run C | Change (%) | View
+
+* **Baseline** -- tick one run in the **Baseline** column.  It is shown
+  once, with its values only, as the first run column, whether or not
+  its row is selected.  Ticking another run moves the tick; unticking
+  removes it.
+* **Selected runs** -- every other selected run gets its value column
+  and a **Change (%)** column against the baseline (hover a header to
+  see which runs it compares).  Columns follow the order of the list,
+  newest first.
+* **No baseline ticked** -- the selected runs show their values only;
+  the line next to the table caption reminds you to tick one.
+* There is no column for the live model: the table only shows saved
+  runs.  A run you just finished is saved and selected, so it is there.
+
+Each project list remembers its own baseline: the one ticked while the
+**Project** selector shows *Alpha* comes back whenever *Alpha* is shown,
+and **All projects** has a baseline of its own (handy for comparing
+runs across projects).  The choice is kept between sessions and
+forgotten when the run is deleted from the history or moved to another
+project.  A run that recorded no value for a part (left out in the
+Calculation matrix) shows an empty cell there, and its change ``—``.
 
 Below the table is an **Add selected run results to map** button.
 Click it with a single row selected to load that run's per-run
-GeoPackage as new layers in the QGIS Layers panel, styled
-graduated red->green like the live-run output.  Multiple selection
+GeoPackage as new layers in the QGIS Layers panel, styled with the
+graduated green-yellow-red ramp described below.  Multiple selection
 disables this button -- pick one run at a time when loading on the
 canvas.
 
@@ -2084,9 +2295,10 @@ Manage previous runs
 --------------------
 
 **File -> Manage previous runs...** opens the whole history in one
-window, across all projects: name, project, date, duration, version,
-output folder and whether the result GeoPackage is still on disk
-(click a header to sort; newest first by default).  The line at the top
+window, across all projects (a **Project** selector narrows it to one):
+name, project, date, duration, version, output folder and whether the
+result GeoPackage is still on disk (click a header to sort; newest first
+by default).  The line at the top
 gives the number of runs, projects and missing result files, and the
 path of the history file.  From there you can:
 
@@ -2100,8 +2312,9 @@ path of the history file.  From there you can:
 Result-layer attributes
 -----------------------
 
-Loading a run onto the canvas adds up to six layers (any layer whose
-total is zero is skipped):
+Loading a run onto the canvas adds up to six layers, named after the
+run (``<run> - Drifting Allision`` and so on); a layer without features
+is skipped:
 
 .. list-table::
    :header-rows: 1
@@ -2110,7 +2323,7 @@ total is zero is skipped):
    * - Layer
      - Geometry
      - Key attributes
-   * - Allision Results (drifting)
+   * - Drifting Allision
      - Line
      - One feature per boundary edge of each structure.
        ``obstacle_id``, ``segment_idx``, ``total_edge_probability``
@@ -2120,11 +2333,11 @@ total is zero is skipped):
        ``edge_dist_m``, ``reach_width_m``, ``edge_p_nr``,
        ``edge_h_eff``, and one column per contributing leg named as in the route table (``LEG_1_2_b``; ``leg_<id>`` only for a leg that no longer exists) for each contributing
        leg.
-   * - Grounding Results (drifting)
+   * - Drifting Grounding
      - Line
-     - Same shape as Allision Results, with ``value`` holding the
+     - Same shape as Drifting Allision, with ``value`` holding the
        contour's depth.
-   * - Powered Allision Results
+   * - Powered Allision
      - Line
      - Structure boundary edges again, coloured by the powered
        (Cat I + Cat II) probability the ray caster placed on that edge:
@@ -2133,13 +2346,13 @@ total is zero is skipped):
        ``object_probability`` and edges no ship can reach are zero.
        ``obstacle_id``, ``segment_idx``, ``value``, plus a ``LEG_<route>_<n>_<direction>`` (e.g. ``LEG_1_2_b_East_going``; ``leg_<id>_<dir>`` only for a leg that no longer exists)
        column per contributing leg direction holding that edge's share.
-   * - Powered Grounding Results
+   * - Powered Grounding
      - Line
      - Same shape, over depth-contour edges.
-   * - Ship-Ship Collision (per leg)
+   * - Collision Lines
      - Line
      - ``leg_id`` (segment id), ``leg_name`` (route-table name), ``head_on``, ``overtaking``, ``combined``.
-   * - Ship-Ship Collision (waypoints)
+   * - Collision Points
      - Point
      - ``waypoint``, ``crossing``, ``merging``, ``bend``,
        ``combined`` (the sum of the three).
@@ -2175,8 +2388,8 @@ sub-tabs:
   single change.
 * **Settings & inputs** -- the *settings* table lists every scalar under
   the ``drift``, ``pc`` (causation factors), ``traffic_scaling``,
-  ``consequence`` and ``ship_categories`` blocks that differs, plus
-  per-leg **Width**.  The *inputs* table lists what decides where
+  ``consequence``, ``ship_categories`` and ``speed_restriction_zones``
+  blocks that differs, plus per-leg **Width**.  The *inputs* table lists what decides where
   accidents happen:
 
   - legs present in one run only, moved start or end points (with the
@@ -2232,8 +2445,11 @@ Leg geometry                                start / end points, leg length
 Lateral distributions                       means, standard deviations, weights, uniform part
 Traffic volume                              ships per year, scaling
 Ship properties                             speed, beam, draught, height, length classes
+Speed restriction zones                     the ``speed_restriction_zones`` block
 Junction transition matrices                the ``junctions`` block
-Causation factors                           the five collision factors in ``pc``
+Causation factors                           the five collision factors, the passenger ship /
+                                            fast ferry reduction and the smallest route
+                                            angle at a waypoint (``pc``)
 Legs added / removed                        legs present in one run only
 Other leg inputs                            any other leg field the model might read
 ==========================================  ==========================================
@@ -2246,8 +2462,8 @@ groups could be switched from A to B.  The values do not depend on an
 arbitrary order and add up exactly to B - A.  When two groups only
 matter together, their joint effect is split between them.  With
 ``k`` differing groups the dialog needs ``2^k`` runs, plus one for run B
-itself (B156 with and without the park: four groups, 17 runs, about
-half a minute).  With more than six groups it averages over ``2k``
+itself (a layout with and without a wind farm: four groups, 17 runs,
+about half a minute).  With more than six groups it averages over ``2k``
 fixed orders, which still adds up exactly.  The calculation runs in the
 background, and reopening the dialog for the same two files is instant.
 
@@ -2268,15 +2484,13 @@ The dialog has three parts:
 
    - suppressed legs and where their ships went;
    - crossing and merging changing in opposite directions because moved
-     traffic meets another flow at a new angle (pairs at 30 degrees or
-     less are merging);
+     traffic joins another flow (routes leaving on the same leg merge,
+     routes whose paths cross cross);
    - legs whose lateral distribution narrowed or widened, with the
      effect per leg;
    - junctions that lost their AIS counts, i.e. fell back to the
      geometric default after a leg at them was edited.  This is
      usually not part of the scenario;
-   - leg pairs that moved onto, or across, the 30-degree merging /
-     crossing limit;
    - inputs that differ but do not enter the collision model (``ai``,
      leg width, structures, depth areas).  Structures affect collisions
      only through the route and traffic changes made around them;
@@ -2299,8 +2513,8 @@ panel.  Each group holds the model's **Depth Areas**, **Structures**,
 **Legs** and **Tangent Lines** built from the ``.omrat`` snapshot, and
 -- when ``<name>.gpkg`` exists next to the snapshot -- that run's
 result layers on top.  Legs, tangent lines and result layers are
-tinted red for A and blue for B.  **Clear model** removes the groups
-again.
+tinted red for A and blue for B.  Clearing the model (closing the dock,
+or **Clear & Load** when loading a project) removes the groups again.
 
 **Add difference layers to QGIS (B - A)** answers "where on the map did
 the risk move?".  It joins the two runs' result GeoPackages feature by
@@ -2336,12 +2550,14 @@ Tips and best practices
 * **Use Drift Analysis** before Run model on a new project -- if
   corridors don't reach the obstacles you care about, your result
   will be near zero and you'll waste time investigating why.
-* **Result layers colour-code by contribution.**  Red polygons are
-  your "risk hotspots" and usually the right place to look if the
+* **Result layers colour-code by contribution.**  Red edges and points
+  are your "risk hotspots" and usually the right place to look if the
   total seems implausibly high.
 * **Keep your repair-time distribution realistic.**  If it says
   90 % of blackouts are repaired in 10 minutes, grounding risk will
   be near zero regardless of traffic.
-* **Save often.**  The full result (including the debug-trace
-  breakdown per obstacle, if enabled) is serialised with **File ->
-  Save**, so a finished run is reproducible.
+* **Save often.**  **File -> Save** keeps the inputs; the results are
+  not in the ``.omrat`` file.  Every **Run model** writes its own
+  read-only input snapshot next to its results (GeoPackage, Markdown
+  report, JSON files), so a finished run stays reproducible and can be
+  compared later.

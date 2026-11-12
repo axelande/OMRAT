@@ -18,7 +18,7 @@ Data model
 ``{'from_dir': 0|1, 'leg': '<id>', 'dir': 0|1, 'share': <percent>}``.
 
 ``from_dir`` / ``dir`` are direction indices (``Dirs[0]`` is the drawn
-direction, see CLAUDE.md "Leg direction convention").  ``share`` is the
+direction, ``Start_Point -> End_Point``).  ``share`` is the
 percentage of the suppressed leg's ``from_dir`` traffic that sails
 ``leg``.  The legs of one detour in series each get the full share
 (e.g. 100 % on every leg); alternative routes split it (80 % / 20 %).
@@ -477,12 +477,23 @@ def after_split(segment_data: dict[str, Any], parent: str, sub_ids: list[str]) -
 # Export (IWRAP has no suppressed legs)
 # ---------------------------------------------------------------------------
 
-def prepare_export_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list]]:
-    """``(copy, summary)``: a deep copy of ``data`` with the redirects
-    applied and the suppressed legs removed, exactly as the calculation
-    sees it.  ``data`` itself is left untouched."""
+def prepare_export_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(copy, summary)``: a deep copy of ``data`` as the calculation sees
+    its traffic, for the IWRAP export.  ``data`` itself is left untouched.
+
+    In the run's order (``compute.traffic_pipeline``): ``Scaling (%)`` baked
+    into the frequencies (``bake_traffic_scaling``: the cells are set to 100
+    afterwards, so preparing a prepared copy again changes nothing), then the
+    redirects applied and the suppressed legs removed.  The gap fill follows
+    in ``generate_iwrap_xml``; speed restriction zones are not exported.
+    ``summary`` is the redirect summary plus ``scaled_cells``.
+    """
+    from compute.traffic_scaling import bake_traffic_scaling
+
     out = copy.deepcopy(data)
-    summary = apply_traffic_redirects(out)
+    scaled = bake_traffic_scaling(out)
+    summary: dict[str, Any] = dict(apply_traffic_redirects(out))
+    summary['scaled_cells'] = scaled
     return out, summary
 
 

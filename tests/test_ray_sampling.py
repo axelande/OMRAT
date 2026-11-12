@@ -37,8 +37,10 @@ def test_constants_and_offsets():
 
 def test_settings_and_description():
     s = ray_sampling_settings()
-    assert s == {'span_sigma': 6.0, 'n_rays': 1000}
-    assert describe_ray_sampling() == '+/- 6 sigma, 1000 rays'
+    assert s == {'span_sigma': 6.0, 'n_rays': 1000, 'max_rays': 3000, 'mixture': True}
+    assert describe_ray_sampling() == ('whole lateral distribution, +/- 6 sigma of every component, '
+                                       '1000-3000 rays')
+    # Reports written before 2026-11-09 (first component only) keep their wording.
     assert describe_ray_sampling({'span_sigma': 4, 'n_rays': 500}) == '+/- 4 sigma, 500 rays'
 
 
@@ -46,16 +48,21 @@ SEG = {'mean1_1': -400.0, 'std1_1': 150.0, 'weight1_1': 100,
        'mean2_1': 300.0, 'std2_1': 250.0, 'weight2_1': 100}
 
 
-def test_span_marks_use_the_first_component_like_the_caster():
+def test_span_marks_cover_the_whole_mixture_like_the_caster():
     assert span_marks(SEG, 0) == pytest.approx((-1300.0, 500.0))
     assert span_marks(SEG, 1) == pytest.approx((-1200.0, 1800.0))
     assert span_marks(SEG, 0, span_sigma=4) == pytest.approx((-1000.0, 200.0))
     assert span_marks({'mean1_1': 0.0, 'std1_1': 0.0}, 0) is None
     assert span_marks({}, 0) is None
     assert span_marks(None, 0) is None
-    # A second component does not move the marks: the caster never reads it.
+    # A second component widens the marks: the caster casts it too (KNOWN_ISSUES 25).
     seg2 = dict(SEG, mean1_2=-3000.0, std1_2=500.0, weight1_2=50)
-    assert span_marks(seg2, 0) == span_marks(SEG, 0)
+    assert span_marks(seg2, 0) == pytest.approx((-6000.0, 500.0))
+    # So does the uniform part.
+    seg3 = dict(SEG, u_min1=-200.0, u_max1=2500.0, u_p1=5)
+    assert span_marks(seg3, 0) == pytest.approx((-1300.0, 2500.0))
+    # No weights: the first component, as the caster falls back to it.
+    assert span_marks({'mean1_1': -400.0, 'std1_1': 150.0}, 0) == pytest.approx((-1300.0, 500.0))
 
 
 def test_tick_profiles_inside_and_beyond_the_lane():
@@ -84,3 +91,43 @@ def test_ticks_rise_towards_the_side_the_ships_sail_to():
     assert p1[1] == pytest.approx((0.0, -1200.0))
     assert p1[2][0] < 0                                  # rises westwards
     assert np.isclose(p1[2][1], -1200.0)
+
+
+# ---------------------------------------------------------------------------
+# mixture_rays: the powered model's rays over the whole lateral distribution
+# ---------------------------------------------------------------------------
+
+def test_one_component_is_sampled_exactly_as_before():
+    from scipy.stats import norm
+    from compute.ray_sampling import mixture_rays
+    offs, pdf, masses = mixture_rays([('n', -3526.0, 1100.0, 1.0)])
+    old = ray_offsets(-3526, 1100)
+    assert offs.shape == old.shape and np.allclose(offs, old)
+    assert np.allclose(masses, norm.pdf(old, -3526, 1100) * (old[1] - old[0]), rtol=1e-12)
+
+
+def test_mixture_rays_carry_every_component_with_its_weight():
+    from compute.ray_sampling import MAX_RAYS, mixture_rays
+    comps = [('n', -300.0, 350.0, 0.8), ('n', -2100.0, 350.0, 0.2)]     # LEG_1_6 direction 1
+    offs, pdf, masses = mixture_rays(comps)
+    assert offs[0] == pytest.approx(-2100.0 - 6 * 350.0) and offs[-1] == pytest.approx(-300.0 + 6 * 350.0)
+    spacing = offs[1] - offs[0]
+    assert spacing <= 12 * 350.0 / 999 + 1e-9 and len(offs) <= MAX_RAYS     # same density as one component
+    assert masses.sum() == pytest.approx(1.0, abs=1e-6)
+    from scipy.stats import norm
+    lo, hi = -2100.0 - 3 * 350.0, -2100.0 + 3 * 350.0
+    second_lane = (offs > lo) & (offs < hi)
+    expected = (0.2 * (norm.cdf(hi, -2100, 350) - norm.cdf(lo, -2100, 350))
+                + 0.8 * (norm.cdf(hi, -300, 350) - norm.cdf(lo, -300, 350)))
+    assert masses[second_lane].sum() == pytest.approx(expected, abs=1e-3)   # ~0.013 with component 1 only
+
+
+def test_mixture_rays_with_a_uniform_part_and_a_narrow_component():
+    from compute.ray_sampling import MAX_RAYS, mixture_rays
+    comps = [('n', 0.0, 20.0, 0.9), ('u', -5000.0, 5000.0, 0.1)]
+    offs, pdf, masses = mixture_rays(comps)
+    assert len(offs) == MAX_RAYS                     # the narrow peak asks for more rays than allowed
+    assert offs[0] == pytest.approx(-5000.0) and offs[-1] == pytest.approx(5000.0)
+    assert masses.sum() == pytest.approx(1.0, abs=0.02)
+    with pytest.raises(ValueError):
+        mixture_rays([('n', 0.0, 0.0, 1.0)])

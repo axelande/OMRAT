@@ -232,7 +232,7 @@ class TestDriftRepairMigration:
 
 
 # ---------------------------------------------------------------------------
-# drift: anchor_p / anchor_d / start_from / squat_mode defaults
+# drift: anchor_p / anchor_d / start_from defaults
 # ---------------------------------------------------------------------------
 
 class TestDriftDefaults:
@@ -267,7 +267,7 @@ class TestDriftDefaults:
     def test_start_from_default(self, storage):
         out = storage._normalize_legacy_to_schema({'drift': {}})
         assert out['drift']['start_from'] == 'leg_center'
-        assert out['drift']['squat_mode'] == 'average_speed'
+        assert 'squat_mode' not in out['drift']   # squat moved to pc (compute/squat.py)
 
 
 # ---------------------------------------------------------------------------

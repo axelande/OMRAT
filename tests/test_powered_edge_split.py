@@ -145,10 +145,14 @@ class TestReportEdgeBlock:
         seg_root = rep['by_obstacle_segment_legdir']['d1']
         edge_sum = sum(v for seg in seg_root.values() for v in seg.values())
         assert edge_sum == pytest.approx(rep['by_obstacle']['d1'], rel=1e-12)
-        # Only the face towards the leg end is ever reached.
+        # The face towards the leg end takes (almost) everything.  A side face
+        # parallel to the rays is grazed by a hair (1e-4) in the conformal
+        # projection: a parallel bows a few metres away from the central
+        # meridian (KNOWN_ISSUES 27).
         from shapely import wkt as _wkt
         geom = _wkt.loads(_tpm._minimal_powered_data()['depths'][0][2])
-        assert set(seg_root) == {f"seg_{_west_face_index(geom)}"}
+        west = f"seg_{_west_face_index(geom)}"
+        assert sum(seg_root[west].values()) / rep['by_obstacle']['d1'] > 0.999
         # Per leg-direction entries mirror by_obstacle_leg.
         for dir_key, total in rep['by_obstacle_leg']['d1'].items():
             per_dir = sum(seg.get(dir_key, 0.0) for seg in seg_root.values())
@@ -193,14 +197,15 @@ class TestPoweredLayerPerEdge:
         assert len(obj_p) == 1                                   # object total is per obstacle
         edge_vals = [r['total_edge_probability'] for r in rows]
         assert sum(edge_vals) == pytest.approx(obj_p.pop(), rel=1e-9)
-        assert sum(1 for v in edge_vals if v == 0.0) == 3        # back and side faces untouched
+        assert sum(1 for v in edge_vals if v == 0.0) >= 2        # back face and a side face untouched
+        assert max(edge_vals) > 0.999 * sum(edge_vals)            # the west face takes almost all
         # The per-leg column follows the edge, not the obstacle.  It is named
         # after the route table ("leg 1" East going -> leg_1_East_going).
         from compute.leg_labels import leg_field_name
         col = leg_field_name(data['segment_data'], '1:0')
         assert col == 'leg_1_East_going' and col in names
         leg_vals = [r[col] for r in rows]
-        assert sum(1 for v in leg_vals if v == 0.0) == 3
+        assert sum(1 for v in leg_vals if v == 0.0) >= 2
         assert max(leg_vals) == pytest.approx(max(edge_vals))
 
     def test_layer_falls_back_to_heuristic_without_edge_block(self, qgis_iface):

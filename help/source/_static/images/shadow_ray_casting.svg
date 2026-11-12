@@ -13,7 +13,7 @@
   </defs>
 
   <text x="480" y="28" text-anchor="middle" font-size="18" font-weight="bold" fill="#1a1a2e">Shadow-Aware Ray Casting (Category II)</text>
-  <text x="480" y="48" text-anchor="middle" font-size="12" fill="#555" font-style="italic">N_RAYS = 500 across the lateral distribution; first-hit creates natural shadows</text>
+  <text x="480" y="48" text-anchor="middle" font-size="12" fill="#555" font-style="italic">1000 rays (up to 3000) over the whole lateral mixture, +/-6 sigma of every component; the first hit casts the shadow</text>
 
   <!-- LEFT: Lateral distribution curve -->
   <rect x="20" y="65" width="90" height="490" rx="4" fill="#f5f5f5" stroke="#ccc" stroke-width="1"/>
@@ -120,10 +120,10 @@
   <!-- FORMULA BOX -->
   <rect x="810" y="275" width="140" height="165" rx="5" fill="#E3F2FD" stroke="#90CAF9" stroke-width="1"/>
   <text x="880" y="295" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">Per-obstacle sum</text>
-  <text x="880" y="315" text-anchor="middle" font-size="9" fill="#1565C0">mass_A = sum(pdf_i * dx)</text>
-  <text x="880" y="335" text-anchor="middle" font-size="8" fill="#333">(only first-hit rays)</text>
-  <text x="880" y="360" text-anchor="middle" font-size="9" fill="#1565C0">d_mean = weighted avg</text>
-  <text x="880" y="385" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">P = Pc * Q * mass</text>
-  <text x="880" y="405" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">* exp(-d_mean/a)</text>
+  <text x="880" y="315" text-anchor="middle" font-size="9" fill="#1565C0">m_r = pdf(z_r) * dz (ray share)</text>
+  <text x="880" y="335" text-anchor="middle" font-size="8" fill="#333">(rays whose first hit is A)</text>
+  <text x="880" y="360" text-anchor="middle" font-size="9" fill="#1565C0">d_r = distance of ray r to A</text>
+  <text x="880" y="385" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">P = Pc * Q * sum_r m_r</text>
+  <text x="880" y="405" text-anchor="middle" font-size="10" font-weight="bold" fill="#0D47A1">* exp(-d_r / a)</text>
   <text x="880" y="425" text-anchor="middle" font-size="8" fill="#333">a = ai * V (recovery)</text>
 </svg>

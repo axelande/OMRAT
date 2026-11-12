@@ -13,7 +13,7 @@ Scope (intentionally narrow):
     - Route geometry vs the write-once ``segments_imported`` baseline
     - Consequence inputs: per-matrix "default vs modified" bit
 
-Out of scope (open work, see CLAUDE.md):
+Out of scope (open work):
     - Per-cell consequence deltas (the matrices are large; one bit per
       matrix is enough to surface that the analyst changed something)
     - Tamper-resistance against text-edited .omrat files (this is an
@@ -32,6 +32,7 @@ from compute.iwrap_defaults import (
     IWRAP_ROSE_DEFAULT,
     IWRAP_REPAIR_DEFAULT,
 )
+from compute.encounter_angle import DEFAULT_DEG as ANGLE_DEFAULT_DEG, KEY as ANGLE_KEY, min_angle_deg
 
 __all__ = [
     "build_choices_and_deltas_markdown",
@@ -123,6 +124,14 @@ def _pc_section(pc: dict[str, Any]) -> list[str]:
         lines.append(
             f"| pc.{key} | {_fmt_sig(cur_f)} | {_fmt_sig(dflt_f)} | {delta} |"
         )
+    # Smallest route angle at a waypoint (compute/encounter_angle.py); IWRAP's limit is 10 degrees.
+    angle = min_angle_deg(pc)
+    if _is_close(angle, ANGLE_DEFAULT_DEG):
+        delta = "—"
+    else:
+        delta = "⚠ " + _pct_delta(angle, ANGLE_DEFAULT_DEG)
+        any_delta = True
+    lines.append(f"| pc.{ANGLE_KEY} (degrees) | {angle:g} | {ANGLE_DEFAULT_DEG:g} | {delta} |")
     if not any_delta:
         lines.append("")
         lines.append("_All causation factors match IWRAP defaults._")
@@ -141,7 +150,6 @@ def _drift_section(drift: dict[str, Any]) -> list[str]:
         ('anchor_d', 'Anchor distance factor'),
         ('drift_p', 'Drift probability'),
         ('start_from', 'Start from'),
-        ('squat_mode', 'Squat mode'),
     ]
     for key, label in scalar_specs:
         cur = drift.get(key)

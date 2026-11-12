@@ -71,7 +71,7 @@
      <item>
       <widget class="QPushButton" name="pbImport">
        <property name="toolTip">
-        <string>Load a CSV with an mmsi and/or imo column plus a ship_type column (index 0-20, AIS type code 30-89 or a name such as Tanker, Cargo, Passenger) and an optional note column.  The table is created when missing and its rows are replaced.</string>
+        <string>Load a CSV with an mmsi and/or imo column plus a ship_type column (index 0-20, AIS type code 30-99 or a name such as Tanker, Cargo, Passenger) and an optional note column.  The table is created when missing and its rows are replaced.</string>
        </property>
        <property name="text">
         <string>Import CSV...</string>

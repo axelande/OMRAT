@@ -33,6 +33,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from defusedxml import ElementTree as DefusedET
 from defusedxml import minidom as defused_minidom
 
+from compute import passenger_reduction
+from compute.ray_sampling import mixture_span
+from geometries.distribution_curves import mixture
+from geometries.model_projection import ModelProjector, projected_bearing
+
 # Geometry fixing utilities
 try:
     from shapely import wkt as shp_wkt
@@ -95,7 +100,45 @@ def prettify_xml(elem: ET.Element) -> str:
     return raw.replace('encoding="utf-8"', 'encoding="UTF-8"', 1)
 
 
-def build_drifting(parent: ET.Element, drift: dict):
+MIN_ANCHOR_DIST_FROM_GROUND = 3
+"""IWRAP's default ``min_anchor_dist_from_ground``.  OMRAT has no such rule;
+the value is written explicitly (or the project's own, from an import) so
+the export no longer depends on IWRAP's default."""
+
+
+def _most_common(values: list[float]) -> float:
+    counts: dict[float, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return max(counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+
+
+def blackout_classes(drift: dict, type_names: list | None) -> tuple[float | None, float | None]:
+    """``(blackout_roro_passenger, blackout_other)`` from OMRAT's per-type blackout rates.
+
+    IWRAP has two classes; OMRAT keeps one rate per ship type.  The
+    roro / passenger class is the one ``default_blackout_by_ship_type``
+    gives the lower default; each class gets the rate most of its types
+    carry.  ``None`` where the project has no per-type rates (or no type
+    list) -- the caller then falls back to the legacy keys.
+    """
+    from compute.basic_equations import default_blackout_by_ship_type
+
+    by_type = drift.get('blackout_by_ship_type') if isinstance(drift, dict) else None
+    if not isinstance(by_type, dict) or not by_type or not type_names:
+        return None, None
+    low = {i for i, v in default_blackout_by_ship_type(list(type_names)).items() if v < 1.0}
+    roro, other = [], []
+    for k, v in by_type.items():
+        try:
+            idx, rate = int(k), float(v)
+        except (TypeError, ValueError):
+            continue
+        (roro if idx in low else other).append(rate)
+    return (_most_common(roro) if roro else None), (_most_common(other) if other else None)
+
+
+def build_drifting(parent: ET.Element, drift: dict, type_names: list | None = None):
     drifting = ET.SubElement(parent, 'drifting')
     # Set attributes on drifting per XSD
     if (v := drift.get('anchor_p')) is not None:
@@ -107,11 +150,21 @@ def build_drifting(parent: ET.Element, drift: dict):
         drifting.set('max_anchor_depth', str(v))
     if (v := drift.get('speed') or drift.get('drift_speed')) is not None:
         drifting.set('drift_speed', str(v))
-    if (v := drift.get('drift_blackout_other')) is not None:
+    # Blackout: both IWRAP classes from the per-type rates the drifting model
+    # uses.  Only ``blackout_other`` was written before 2026-11-09, so IWRAP
+    # always used its default 0.1 for ro-ro / passenger ships (KNOWN_ISSUES 20).
+    roro_rate, other_rate = blackout_classes(drift, type_names)
+    if other_rate is not None:
+        drifting.set('blackout_other', f"{other_rate:g}")
+    elif (v := drift.get('drift_blackout_other')) is not None:
         drifting.set('blackout_other', str(v))
     elif (v := drift.get('drift_p')) is not None:
         # Best effort mapping if provided
         drifting.set('blackout_other', str(v))
+    if roro_rate is not None:
+        drifting.set('blackout_roro_passenger', f"{roro_rate:g}")
+    drifting.set('min_anchor_dist_from_ground',
+                 f"{_as_float(drift.get('min_anchor_dist_from_ground', MIN_ANCHOR_DIST_FROM_GROUND)):g}")
     # Required children per XSD: repair_time and drift_directions
     repair = drift.get('repair', {}) if isinstance(drift.get('repair'), dict) else {}
     rep = ET.SubElement(drifting, 'repair_time')
@@ -236,6 +289,35 @@ def build_waypoints(parent: ET.Element, segment_data: dict):
 LEG_EXTENSION_M = '50000'
 """Leg extension written for a direction whose Cat II is enabled."""
 
+POWERED_WIDTH_STEP_M = 100
+"""``max_width_powered`` is rounded up to a multiple of this (metres)."""
+
+
+def powered_width(seg: dict) -> int | None:
+    """IWRAP ``max_width_powered`` for a leg: wide enough for every ray OMRAT's powered model casts.
+
+    IWRAP counts powered grounding and allision only for ships within
+    ``max_width_powered / 2`` of the leg line.  OMRAT casts its Cat I and
+    Cat II rays over the whole lateral mixture of both directions: each
+    normal component's mean +/- ``RAY_SPAN_SIGMA`` sigma and the uniform
+    bounds (:func:`compute.ray_sampling.mixture_span`).  The export wrote the
+    leg ``Width`` (the AIS passage line) here, so IWRAP dropped every ship
+    outside it -- most of the Cat I hits of a leg whose sigma is a third of
+    its width.  The IWRAP width is symmetric about the leg, so this is twice
+    the largest offset of either direction, rounded up, never narrower than
+    ``Width``; ``max_width`` stays ``Width``.  ``None`` when the leg has
+    neither a width nor a distribution.
+    """
+    width = _as_float(seg.get('Width'))
+    half = 0.0
+    for direction in (0, 1):
+        span = mixture_span(mixture(seg, direction))
+        if span is not None:
+            half = max(half, abs(span[0]), abs(span[1]))
+    need = math.ceil(2.0 * half / POWERED_WIDTH_STEP_M) * POWERED_WIDTH_STEP_M
+    out = max(width, float(need))
+    return int(math.ceil(out)) if out > 0 else None
+
 
 def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
     legs = ET.SubElement(parent, 'legs')
@@ -247,7 +329,8 @@ def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
         leg.set('name', str(seg.get('Leg_name', '')))
         if seg.get('Width') is not None:
             leg.set('max_width', str(seg.get('Width')))
-            leg.set('max_width_powered', str(seg.get('Width')))
+        if (w_powered := powered_width(seg)) is not None:
+            leg.set('max_width_powered', str(w_powered))
         # A leg-direction with ``ai <= 0`` has Cat II switched off in OMRAT.
         # IWRAP has no such switch (``grounding_check_time = 0`` means "use
         # the global default"), so the extension past the waypoint where
@@ -286,40 +369,94 @@ def build_legs(parent: ET.Element, segment_data: dict, waypoint_lookup: dict):
     return leg_map
 
 
-def build_leg_leg_distributions(parent_waypoints: ET.Element, segment_data: dict, waypoint_lookup: dict, leg_map: dict):
-    # Build a mapping from waypoint coordinates to waypoint elements (attributes present)
+def export_junction_rows(segment_data: dict, junctions_payload: dict | None) -> list[tuple[str, str, str, float]]:
+    """``(waypoint key, in-leg, out-leg, fraction)`` for every routing row to export.
+
+    The registry is the one a calculation uses: the stored ``junctions``
+    block refreshed against ``segment_data`` (``user`` / ``ais`` matrices
+    kept, geometric defaults for the rest).  A leg never routes to itself;
+    a row is renormalised after a self share is dropped.  Every other leg
+    of the junction gets a row, a zero share included, and the rounded
+    shares of an in-leg sum to exactly 1, so IWRAP has nothing left to
+    distribute automatically (see ``build_leg_leg_distributions``).  The
+    waypoint key is ``"lat,lon"`` as ``build_waypoints`` writes it.
+    """
+    from geometries.junctions import deserialize_junctions, refresh_junction_registry
+
+    registry = refresh_junction_registry(deserialize_junctions(junctions_payload), segment_data)
+    rows: list[tuple[str, str, str, float]] = []
+    for junction in registry.values():
+        key = None
+        for leg_id, side in junction.legs.items():
+            seg = segment_data.get(leg_id) or segment_data.get(str(leg_id)) or {}
+            coords = parse_point_str(seg.get('Start_Point' if side == 'start' else 'End_Point', '') or '')
+            if coords:
+                key = f"{coords[0]},{coords[1]}"
+                break
+        if key is None:
+            continue
+        for in_leg, row in junction.transitions.items():
+            if in_leg not in junction.legs:
+                continue
+            row = row or {}
+            outs = [str(o) for o in junction.legs if str(o) != str(in_leg)]
+            shares = {o: max(0.0, float(row.get(o, 0.0) or 0.0)) for o in outs}
+            total = sum(shares.values())
+            if total <= 0:
+                continue
+            rounded = {o: round(v / total, 6) for o, v in shares.items()}
+            biggest = max(rounded, key=lambda o: rounded[o])
+            rounded[biggest] = round(1.0 - sum(v for o, v in rounded.items() if o != biggest), 6)
+            for out_leg in outs:
+                rows.append((key, str(in_leg), out_leg, rounded[out_leg]))
+    return rows
+
+
+def build_leg_leg_distributions(parent_waypoints: ET.Element, segment_data: dict, leg_map: dict,
+                                junctions_payload: dict | None = None) -> int:
+    """Write OMRAT's junction matrices as IWRAP routing rows; returns the row count.
+
+    IWRAP routes traffic through a waypoint only with ``leg_leg_distribution``
+    rows ``from_leg -> to_leg`` (a native file: in-leg -> every other leg,
+    row-stochastic, never itself).  The rows are written as
+    ``method="MANUAL"`` (IWRAP's "Manually specified overall percentage",
+    ``fraction`` = share 0..1): a ``method="AUTOMATIC"`` row is IWRAP's own
+    split -- the in-leg's remainder shared equally between its automatic
+    rows (33.33 % each at a four-leg junction) -- and IWRAP ignores the
+    fraction written there (checked in IWRAP's Waypoint Editor).
+    The importer reads ``fraction`` on every row: in a model IWRAP has
+    saved, the automatic rows hold the split IWRAP used.  Until 2026-11-09 the export wrote one
+    self pair per leg start, so IWRAP saw no traffic through any waypoint:
+    merging 0, bend 0, no waypoint crossing (KNOWN_ISSUES 17).
+    """
     waypoint_nodes = {}
     for w_el in list(parent_waypoints.findall('waypoint')):
         lat = w_el.get('latitude')
         lon = w_el.get('longitude')
         if lat is None or lon is None:
             continue
-        key = f"{lat},{lon}"
-        waypoint_nodes[key] = w_el
+        waypoint_nodes[f"{lat},{lon}"] = w_el
 
-    # Attach one automatic self-distribution per starting waypoint
-    counter = 1
-    for seg_id, info in leg_map.items():
-        start_key = info.get('start_key')
-        if not start_key:
-            continue
-        sk_norm = start_key
-        w_el = waypoint_nodes.get(sk_norm)
-        if w_el is None:
+    counter = 0
+    for key, in_leg, out_leg, fraction in export_junction_rows(segment_data, junctions_payload):
+        w_el = waypoint_nodes.get(key)
+        from_guid = (leg_map.get(in_leg) or {}).get('guid')
+        to_guid = (leg_map.get(out_leg) or {}).get('guid')
+        if w_el is None or not from_guid or not to_guid:
             continue
         llds = w_el.find('leg_leg_distributions')
         if llds is None:
             llds = ET.SubElement(w_el, 'leg_leg_distributions')
+        counter += 1
         dist = ET.SubElement(llds, 'leg_leg_distribution')
         dist.set('guid', new_guid())
-        dist.set('from_leg_uid', info.get('guid', ''))
-        # Self-pair for now
-        dist.set('to_leg_uid', info.get('guid', ''))
-        dist.set('method', 'AUTOMATIC')
+        dist.set('from_leg_uid', from_guid)
+        dist.set('to_leg_uid', to_guid)
+        dist.set('method', 'MANUAL')
         dist.set('name', f"WTD_{counter}")
         dist.set('season', '-1')
-        dist.set('fraction', '1')
-        counter += 1
+        dist.set('fraction', repr(round(fraction, 6)))
+    return counter
 
 
 def _as_float(v) -> float:
@@ -346,6 +483,17 @@ def _fill_mal_mixed_dist(md_el: ET.Element, seg: dict, dir_num: int) -> None:
     # 100 on import, so export divides by 100.  Writing percent made every
     # export -> import round trip multiply the weights by 100 (KNOWN_ISSUES
     # item 3).
+    #
+    # Lateral sign (KNOWN_ISSUES 16).  OMRAT keeps one axis for both
+    # directions: negative = starboard of the *drawn* direction.  IWRAP
+    # measures each direction from its own heading: positive = starboard
+    # ("towards the right side in the sailing direction").  Direction 1
+    # sails the drawn way, so its offsets change sign; direction 2 sails
+    # against it, so OMRAT's positive (port of the drawn direction) is
+    # already its starboard and is written as stored.  Until 2026-11-09
+    # direction 1 was written as is and direction 2 negated, which put both
+    # directions on the port side in IWRAP.
+    flip = dir_num == 1
     for i in range(1, 4):
         w = _as_float(seg.get(f'weight{dir_num}_{i}', 0))
         if w <= 0:
@@ -356,7 +504,7 @@ def _fill_mal_mixed_dist(md_el: ET.Element, seg: dict, dir_num: int) -> None:
         mean = _as_float(seg.get(f'mean{dir_num}_{i}', 0))
         std = _as_float(seg.get(f'std{dir_num}_{i}', 0))
         std = std if std > 0 else 1e-6  # IWRAP rejects Normal Std == 0; clamp matches importer
-        if dir_num == 2:
+        if flip:
             mean = -mean
         item.set('param_0', str(mean))
         item.set('param_1', str(std))
@@ -368,10 +516,8 @@ def _fill_mal_mixed_dist(md_el: ET.Element, seg: dict, dir_num: int) -> None:
         u_item.set('combi', '/Lower Bound/Upper Bound')
         u_min = _as_float(seg.get(f'u_min{dir_num}', 0))
         u_max = _as_float(seg.get(f'u_max{dir_num}', 0))
-        if dir_num == 2:
-            u_min, u_max = -u_min, -u_max
-            if u_min > u_max:
-                u_min, u_max = u_max, u_min
+        if flip:
+            u_min, u_max = -u_max, -u_min
         u_item.set('param_0', str(u_min))
         u_item.set('param_1', str(u_max))
         u_item.set('type', 'Uniform')
@@ -465,18 +611,45 @@ def _wire_leg_guids(
                 break
 
 
+def _structure_depth(height: Any) -> str:
+    """IWRAP ``depth`` of a structure area: ``-height``, or ``-1`` without a height.
+
+    IWRAP stores a structure's clearance as a negative depth: the areas it
+    makes from a bridge polyline carry ``depth = -height`` of the span, its
+    other structures (pylons) ``-1``.  The import reads it back the same way
+    (``_classify_area_el``).  A height that is missing, 0 or not a number
+    means "every ship hits" in OMRAT and goes out as ``-1``.
+    """
+    try:
+        h = float(height)
+    except (TypeError, ValueError):
+        return '-1'
+    if not math.isfinite(h) or h <= 0:
+        return '-1'
+    return f"{-h:g}"
+
+
 def _build_objects_as_depths(objects_list: list) -> list:
+    """The project's structures as IWRAP structure areas (``type="1"``).
+
+    Each entry is ``{'id', 'depth', 'polygon', 'is_object': True}`` with the
+    height as a negative depth (:func:`_structure_depth`).  Until 2026-11-12
+    every structure went out as ``-1`` and its height was lost; an import
+    then gave every structure a height of 1 m.
+    """
     result = []
     for obj in objects_list:
         if isinstance(obj, dict):
             oid = obj.get('id', '')
+            height = obj.get('height', obj.get('heights', ''))
             poly = obj.get('polygon', '')
         else:
             try:
-                oid, _height, poly = obj
+                oid, height, poly = obj
             except Exception:  # nosec B110 B112
                 continue
-        result.append([str(oid), str(-1), str(poly)])
+        result.append({'id': str(oid), 'depth': _structure_depth(height),
+                       'polygon': str(poly), 'is_object': True})
     return result
 
 
@@ -582,14 +755,76 @@ def _add_global_settings(root: ET.Element, data: dict | None = None) -> None:
                     break
         cf.set(attr, rendered if rendered is not None else default)
 
+    # Passenger ship / fast ferry reduction: the project's own factors
+    # (``compute.passenger_reduction``, default 20 like IWRAP).  The export
+    # hard-coded 20 until 2026-11-09 while OMRAT had no such factor, so IWRAP
+    # reduced risks OMRAT never reduced (KNOWN_ISSUES 19).
     misc = ET.SubElement(gs, 'misc')
-    misc.set('fastferry_reduction_factor', '20')
+    misc.set('fastferry_reduction_factor', f"{passenger_reduction.factor(pc, passenger_reduction.FAST_FERRY_KEY):g}")
     mtbc = _fmt_pc(pc.get('mean_time_between_checks'))
     misc.set('meantime_between_checks', mtbc if mtbc is not None else '240')
-    misc.set('passengership_reductionfactor', '20')
+    misc.set('passengership_reductionfactor',
+             f"{passenger_reduction.factor(pc, passenger_reduction.PASSENGER_KEY):g}")
+
+
+_BEAM_KEY = 'Ship Beam (meters)'
+_FREQ_KEY = 'Frequency (ships/year)'
+
+
+def _fill_missing_beams(data: dict) -> int:
+    """Beam = class midpoint length / 6.5 where a cell has ships but no beam
+    (the collision model's ``estimate_beam``); returns the number of cells filled."""
+    intervals = (data.get('ship_categories') or {}).get('length_intervals') or []
+    filled = 0
+    for leg in (data.get('traffic_data') or {}).values():
+        if not isinstance(leg, dict):
+            continue
+        for block in leg.values():
+            if not isinstance(block, dict) or _BEAM_KEY not in block or _FREQ_KEY not in block:
+                continue
+            for i, row in enumerate(block[_FREQ_KEY]):
+                for j, q in enumerate(row):
+                    try:
+                        beam = float(block[_BEAM_KEY][i][j])
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if _sanitize_num(q) <= 0 or (math.isfinite(beam) and beam > 0):
+                        continue
+                    try:
+                        loa = (float(intervals[j]['min']) + float(intervals[j]['max'])) / 2.0
+                    except (IndexError, KeyError, TypeError, ValueError):
+                        loa = 150.0
+                    block[_BEAM_KEY][i][j] = round(loa / 6.5, 2)
+                    filled += 1
+    return filled
+
+
+def _with_filled_traffic(data: dict) -> dict:
+    """``data`` with a private copy of the traffic in which ``Scaling (%)`` is
+    applied to the frequencies and the gaps a calculation fills are filled
+    (``fill_traffic_gaps``: draught and speed; beam = L / 6.5).
+
+    Missing values were exported as 0 until 2026-11-09, IWRAP's "not given",
+    so IWRAP used its own draughts for those ships (KNOWN_ISSUES 22).
+    """
+    import copy
+    from compute.traffic_gaps import fill_traffic_gaps
+    from compute.traffic_scaling import bake_traffic_scaling
+
+    out = dict(data)
+    out['traffic_data'] = copy.deepcopy(data.get('traffic_data') or {})
+    out['traffic_scaling'] = copy.deepcopy(data.get('traffic_scaling') or {})
+    # IWRAP has no Scaling (%): write the frequencies the calculation uses.
+    # A no-op after ``prepare_export_data`` (which bakes it before the
+    # redirects, in the run's order); here for direct callers.
+    bake_traffic_scaling(out)
+    fill_traffic_gaps(out)
+    _fill_missing_beams(out)
+    return out
 
 
 def generate_iwrap_xml(data: dict) -> ET.Element:
+    data = _with_filled_traffic(data)
     root = ET.Element('riskmodel')
     _set_root_metadata(root, data)
     ET.SubElement(root, 'ship_type_data')
@@ -601,14 +836,14 @@ def generate_iwrap_xml(data: dict) -> ET.Element:
     leg_map = build_legs(root, data.get('segment_data', {}), wl)
     waypoints_el = root.find('waypoints')
     if waypoints_el is not None:
-        build_leg_leg_distributions(waypoints_el, data.get('segment_data', {}), wl, leg_map)
+        build_leg_leg_distributions(waypoints_el, data.get('segment_data', {}), leg_map, data.get('junctions'))
     legs_el = root.find('legs')
     if legs_el is not None:
         _wire_leg_guids(legs_el, data, td_guid_map, mal_guid_map)
     combined_areas = list(data.get('depths', []) or []) + _build_objects_as_depths(data.get('objects', []) or [])
     build_areas(root, combined_areas)
     ET.SubElement(root, 'traffic_areas')
-    build_drifting(root, data.get('drift', {}))
+    build_drifting(root, data.get('drift', {}), (data.get('ship_categories') or {}).get('types'))
     ET.SubElement(root, 'area_traffic')
     ET.SubElement(root, 'routes')
     ET.SubElement(root, 'tug_boats')
@@ -661,6 +896,10 @@ def _parse_area_entry(dep, idx: int) -> tuple:
         dep_id = str(dep[0]) if len(dep) > 0 else str(idx)
         dep_depth = str(dep[1]) if len(dep) > 1 else ''
         polygon = dep[2] if len(dep) > 2 else ''
+    if isinstance(dep, dict) and 'is_object' in dep:
+        # Structures from ``_build_objects_as_depths`` say so: their depth
+        # is minus the height, so "-1" alone no longer identifies them.
+        return dep_id, dep_depth, polygon, bool(dep['is_object'])
     is_object_area = False
     try:
         is_object_area = float(dep_depth) == -1.0
@@ -1016,11 +1255,79 @@ def _emit_shiptypes_from_matrices(shiptypes_el: ET.Element, freq_mat, speed_mat,
             })
 
 
+IWRAP_LENGTH_CLASSES: list[str] = [f"{lo}-{lo + 25}" for lo in range(0, 350, 25)]
+"""IWRAP's own length categories (``0-25`` ... ``325-350``).  IWRAP looks a
+category up by this name; an unknown name (OMRAT's ``350-400``) was written
+into the ``0-25`` slot on import, replacing the real small craft (KNOWN_ISSUES 18)."""
+
+
+def _omrat_interval_label(interval: dict, c: int) -> str:
+    # Integer "min-max" ("0-25"), not the OMRAT label with decimals ("0.0 - 25.0").
+    try:
+        return f"{int(float(interval['min']))}-{int(float(interval['max']))}"
+    except (KeyError, TypeError, ValueError):
+        return re.sub(r"\s*-\s*", "-", str(interval.get('label', f'{c}'))).strip()
+
+
+def iwrap_length_class(interval: dict, c: int = 0) -> str:
+    """The IWRAP length category an OMRAT length interval is exported into.
+
+    An interval whose name IWRAP knows keeps it.  Any other goes to the IWRAP
+    class that contains its midpoint, and everything from 350 m up to the
+    last class (``325-350``).
+    """
+    label = _omrat_interval_label(interval, c)
+    if label in IWRAP_LENGTH_CLASSES:
+        return label
+    try:
+        mid = (float(interval['min']) + float(interval['max'])) / 2.0
+    except (KeyError, TypeError, ValueError):
+        return IWRAP_LENGTH_CLASSES[-1]
+    return IWRAP_LENGTH_CLASSES[max(0, min(int(mid // 25), len(IWRAP_LENGTH_CLASSES) - 1))]
+
+
+def length_class_merges(ship_categories: dict | None) -> list[tuple[str, str]]:
+    """``(OMRAT interval, IWRAP class)`` for every interval the export renames or merges."""
+    if not isinstance(ship_categories, dict):
+        return []
+    intervals = ship_categories.get('length_intervals') or []
+    out = []
+    for c, interval in enumerate(intervals):
+        if not isinstance(interval, dict):
+            continue
+        label, target = _omrat_interval_label(interval, c), iwrap_length_class(interval, c)
+        if label != target:
+            out.append((label, target))
+    return out
+
+
+def describe_length_class_merges(merges: list[tuple[str, str]]) -> str:
+    """Text for the export message ('' when every length class is IWRAP's own)."""
+    if not merges:
+        return ''
+    lines = '\n'.join(f'  {omrat} m -> {iwrap} m' for omrat, iwrap in merges)
+    return ('\n\nIWRAP has no length class for:\n' + lines
+            + '\nThose ships were exported in the class shown (ships added, speed, draught, '
+              'beam and height as ship-weighted means).')
+
+
+def _cells_avg(mat, freq_mat, cells: list[tuple[int, int]]) -> float:
+    """Ship-weighted mean of ``mat`` over ``(row, col)`` cells (unknown values left out)."""
+    pairs = [(_mat_safe(freq_mat, r, c), _mat_safe(mat, r, c)) for r, c in cells]
+    return round(_weighted_mean(pairs), 2)
+
+
 def _emit_shiptypes_grouped(shiptypes_el: ET.Element, freq_mat, speed_mat, draft_mat,
                             height_mat, beam_mat, types: list, intervals: list):
     groups: dict[str, list[int]] = {}
     for r, type_name in enumerate(types):
         groups.setdefault(_UI_TO_IWRAP.get(type_name, 'Other ship'), []).append(r)
+    # OMRAT length columns per IWRAP category, in IWRAP's order; columns that
+    # land in the same category are merged like the ship types (ships add up,
+    # the other values are ship-weighted means).
+    columns: dict[str, list[int]] = {}
+    for c, interval in enumerate(intervals):
+        columns.setdefault(iwrap_length_class(interval, c), []).append(c)
     # Always emit all 14 canonical IWRAP ship types (empty categories for unmapped ones)
     # so IWRAP does not need to fall back to its own AIS re-extraction.
     for iwrap_name in _IWRAP_SHIP_TYPE_ORDER:
@@ -1030,22 +1337,17 @@ def _emit_shiptypes_grouped(shiptypes_el: ET.Element, freq_mat, speed_mat, draft
                           ('grounding_safety_margin', '-1'), ('name', iwrap_name)]:
             st_el.set(attr, val)
         cats_el = ET.SubElement(st_el, 'categories')
-        for c, interval in enumerate(intervals):
-            # IWRAP looks up categories by name — use integer "min-max" format ("0-25")
-            # not the OMRAT label which has decimals ("0.0 - 25.0" → "0.0-25.0").
-            try:
-                label = f"{int(float(interval['min']))}-{int(float(interval['max']))}"
-            except (KeyError, TypeError, ValueError):
-                label = re.sub(r"\s*-\s*", "-", str(interval.get('label', f'{c}'))).strip()
-            freq_sum = sum(_mat_safe(freq_mat, r, c) for r in rows)
+        for label in IWRAP_LENGTH_CLASSES:
+            cells = [(r, c) for c in columns.get(label, []) for r in rows]
+            freq_sum = sum(_mat_safe(freq_mat, r, c) for r, c in cells)
             if freq_sum <= 0:
                 continue
             _add_category_attr(cats_el, {
                 'name': label, 'freq': round(freq_sum, 2),
-                'speed': _mat_avg(speed_mat, freq_mat, c, rows),
-                'draught': _mat_avg(draft_mat, freq_mat, c, rows),
-                'height_1': _mat_avg(height_mat, freq_mat, c, rows),
-                'width': _mat_avg(beam_mat, freq_mat, c, rows),
+                'speed': _cells_avg(speed_mat, freq_mat, cells),
+                'draught': _cells_avg(draft_mat, freq_mat, cells),
+                'height_1': _cells_avg(height_mat, freq_mat, cells),
+                'width': _cells_avg(beam_mat, freq_mat, cells),
                 'depth': 0, 'p_ballast': 0,
             })
 
@@ -1188,11 +1490,10 @@ def _load_ship_type_codes(csv_path: str) -> Dict[Tuple[int, int], dict]:
 
 
 def _find_ship_type_csv(xml_path: str) -> Optional[str]:
-    """Try to locate Ship Type Codes.csv near the XML file or in known paths."""
+    """Ship Type Codes.csv next to the XML file, else the copy shipped in ``compute/``."""
     candidates = [
         os.path.join(os.path.dirname(xml_path), 'Ship Type Codes.csv'),
         os.path.join(os.path.dirname(__file__), 'Ship Type Codes.csv'),
-        os.path.join(os.path.dirname(__file__), '..', 'tests', 'example_data', 'Ship Type Codes.csv'),
     ]
     for path in candidates:
         if os.path.isfile(path):
@@ -1278,6 +1579,28 @@ def _fill_repair_combi(repair_el, repair_dict: dict, debug: bool) -> None:
                 repair_dict[key] = (p0, p1, p2)[i]
 
 
+_BLACKOUT_CLASSES_KEY = '_iwrap_blackout_classes'
+"""Transient ``(roro_passenger, other)`` blackout rates; turned into
+``blackout_by_ship_type`` by :func:`_apply_blackout_classes` once the ship types are known."""
+
+
+def _apply_blackout_classes(result: dict) -> None:
+    """Per-type blackout rates from IWRAP's two classes (mirror of :func:`blackout_classes`)."""
+    from compute.basic_equations import default_blackout_by_ship_type
+
+    drift = result.get('drift') or {}
+    classes = drift.pop(_BLACKOUT_CLASSES_KEY, None)
+    types = (result.get('ship_categories') or {}).get('types')
+    if not classes or not types:
+        return
+    roro, other = classes
+    by_type = {}
+    for idx, default in default_blackout_by_ship_type(list(types)).items():
+        value = roro if default < 1.0 else other
+        by_type[idx] = float(value) if value is not None else default
+    drift['blackout_by_ship_type'] = by_type
+
+
 def _parse_drifting_el(drifting_el, debug: bool) -> dict:
     drift = {
         'drift_p': 1, 'anchor_p': 0.95, 'anchor_d': 7, 'speed': 1.0,
@@ -1294,6 +1617,13 @@ def _parse_drifting_el(drifting_el, debug: bool) -> dict:
         drift['drift_p'] = float(v)
     elif (v := drifting_el.get('anchor_probability')) is not None:
         drift['drift_p'] = float(v)
+    roro = drifting_el.get('blackout_roro_passenger')
+    other = drifting_el.get('blackout_other')
+    if roro is not None or other is not None:
+        drift[_BLACKOUT_CLASSES_KEY] = (
+            float(roro) if roro is not None else None, float(other) if other is not None else None)
+    if (v := drifting_el.get('min_anchor_dist_from_ground')) is not None:
+        drift['min_anchor_dist_from_ground'] = _as_float(v)
     if (v := drifting_el.get('max_anchor_depth')) is not None:
         drift['anchor_d'] = int(round(float(v)))
     if (v := drifting_el.get('drift_speed')) is not None:
@@ -1405,6 +1735,18 @@ def _parse_tds_el(tds_el, ship_type_codes: dict, debug: bool) -> tuple[dict, set
     return td_map, all_ship_types, all_length_intervals
 
 
+def _parse_lld_rows(wp_el) -> list[tuple[str, str, float]]:
+    """``(from_leg_uid, to_leg_uid, fraction)`` of one waypoint's routing rows."""
+    rows = []
+    for lld in wp_el.iter('leg_leg_distribution'):
+        try:
+            fraction = float(lld.get('fraction', 0))
+        except (TypeError, ValueError):
+            continue
+        rows.append((lld.get('from_leg_uid', ''), lld.get('to_leg_uid', ''), fraction))
+    return rows
+
+
 def _parse_waypoints_el(wps_el) -> dict:
     if wps_el is None:
         return {}
@@ -1413,9 +1755,64 @@ def _parse_waypoints_el(wps_el) -> dict:
             'name': wp_el.get('name', ''),
             'lat': float(wp_el.get('latitude', 0)),
             'lon': float(wp_el.get('longitude', 0)),
+            'llds': _parse_lld_rows(wp_el),
         }
         for wp_el in wps_el.findall('waypoint')
     }
+
+
+def _leg_guid_map(legs_el) -> dict[str, str]:
+    """IWRAP leg guid -> OMRAT segment id (same numbering as ``_parse_legs_el``)."""
+    if legs_el is None:
+        return {}
+    return {leg_el.get('guid', ''): str(idx)
+            for idx, leg_el in enumerate(legs_el.findall('leg'), start=1) if leg_el.get('guid')}
+
+
+def _junctions_from_llds(waypoint_map: dict, guid_map: dict[str, str], segment_data: dict) -> dict:
+    """Junction matrices from IWRAP's routing rows (mirror of ``build_leg_leg_distributions``).
+
+    Rows to the same leg (the self pairs older OMRAT exports wrote) are
+    ignored.  A junction with at least one row is stored as ``user`` so a
+    refresh keeps it; in-legs without a row get the geometric default row;
+    rows are normalised.  Junctions without rows are left out: loading
+    gives them the geometric default, as before.
+    """
+    from geometries.junctions import (
+        build_junctions, compute_geometric_transition_matrix, junction_id_for_point, serialize_junctions,
+    )
+
+    registry = build_junctions(segment_data)
+    found: dict[str, dict[str, dict[str, float]]] = {}
+    for wp in waypoint_map.values():
+        rows = wp.get('llds') or []
+        if not rows:
+            continue
+        jid = junction_id_for_point((float(wp.get('lon', 0)), float(wp.get('lat', 0))))
+        junction = registry.get(jid)
+        if junction is None:
+            continue
+        for from_guid, to_guid, fraction in rows:
+            in_leg, out_leg = guid_map.get(from_guid), guid_map.get(to_guid)
+            if (in_leg is None or out_leg is None or in_leg == out_leg or fraction <= 0
+                    or in_leg not in junction.legs or out_leg not in junction.legs):
+                continue
+            row = found.setdefault(jid, {}).setdefault(in_leg, {})
+            row[out_leg] = row.get(out_leg, 0.0) + fraction
+    out = {}
+    for jid, rows in found.items():
+        junction = registry[jid]
+        geometric = compute_geometric_transition_matrix(junction, segment_data)
+        transitions = {}
+        for in_leg in junction.legs:
+            row = rows.get(in_leg) or geometric.get(in_leg) or {}
+            total = sum(row.values())
+            if total > 0:
+                transitions[in_leg] = {k: v / total for k, v in row.items()}
+        junction.transitions = transitions
+        junction.source = 'user'
+        out[jid] = junction
+    return serialize_junctions(out)
 
 
 def _parse_mal_el(mals_el) -> dict:
@@ -1446,27 +1843,33 @@ def _parse_mal_el(mals_el) -> dict:
 
 
 def _fill_segment_from_mal(seg: dict, ftl_guid: str, ltf_guid: str, mal_map: dict) -> None:
+    # Mirror of ``_fill_mal_mixed_dist``: IWRAP's positive = starboard of
+    # the sailing direction, OMRAT's negative = starboard of the drawn
+    # direction.  The first-to-last flow sails the drawn way (sign changes),
+    # the last-to-first flow against it (sign kept).  Before 2026-11-09 the
+    # importer flipped direction 2 instead, so a native IWRAP file came in
+    # with both lanes mirrored (KNOWN_ISSUES 16).
     if ftl_guid in mal_map:
         mal = mal_map[ftl_guid]
         for i, (m, s, w) in enumerate(zip(mal['means'], mal['stds'], mal['weights']), 1):
-            seg[f'mean1_{i}'] = m
+            seg[f'mean1_{i}'] = -m
             seg[f'std1_{i}'] = s
             seg[f'weight1_{i}'] = w * 100.0
         if mal['u_min'] is not None:
-            seg['u_min1'] = mal['u_min']
-            seg['u_max1'] = mal['u_max']
+            seg['u_min1'] = -mal['u_max']
+            seg['u_max1'] = -mal['u_min']
             seg['u_p1'] = int(round(mal['u_p'] * 100.0))
         if mal.get('check_time', 0) > 0:
             seg['ai1'] = mal['check_time']
     if ltf_guid in mal_map:
         mal = mal_map[ltf_guid]
         for i, (m, s, w) in enumerate(zip(mal['means'], mal['stds'], mal['weights']), 1):
-            seg[f'mean2_{i}'] = -m
+            seg[f'mean2_{i}'] = m
             seg[f'std2_{i}'] = s
             seg[f'weight2_{i}'] = w * 100.0
         if mal['u_min'] is not None:
-            seg['u_min2'] = -mal['u_max']
-            seg['u_max2'] = -mal['u_min']
+            seg['u_min2'] = mal['u_min']
+            seg['u_max2'] = mal['u_max']
             seg['u_p2'] = int(round(mal['u_p'] * 100.0))
         if mal.get('check_time', 0) > 0:
             seg['ai2'] = mal['check_time']
@@ -1618,12 +2021,26 @@ def _parse_areas_el(areas_el) -> tuple[list, list]:
     depths, objects = [], []
     if areas_el is None:
         return depths, objects
+    used: dict[bool, set[str]] = {True: set(), False: set()}
+
+    def _unique(area_id: str, is_obj: bool) -> str:
+        # Every area keeps its own id.  Until 2026-11-09 the part suffix of
+        # ``depth_<id>_<part>`` was cut off, so the 12,010 parts of the
+        # Kattegat export came back with 17 ids and the powered model took a
+        # whole depth class for one obstacle (KNOWN_ISSUES 21).
+        out, n = area_id, 1
+        while out in used[is_obj]:
+            n += 1
+            out = f"{area_id}_{n}"
+        used[is_obj].add(out)
+        return out
+
     for area_el in areas_el.findall('area_polygon'):
         name, depth_val, wkt, is_obj, height_val = _classify_area_el(area_el)
         if is_obj:
-            objects.append([name.replace('object_', ''), height_val, wkt])
+            objects.append([_unique(name.replace('object_', '', 1), True), height_val, wkt])
         else:
-            depths.append([name.replace('depth_', '').split('_')[0], depth_val, wkt])
+            depths.append([_unique(name.replace('depth_', '', 1), False), depth_val, wkt])
     return depths, objects
 
 
@@ -1648,6 +2065,14 @@ def _parse_global_settings_el(gs_el, result: dict, debug: bool) -> None:
         if 'grounding' in pc:
             pc['p_pc'] = pc['grounding']
     misc_el = gs_el.find('misc')
+    if misc_el is not None:
+        for attr, key in (('passengership_reductionfactor', passenger_reduction.PASSENGER_KEY),
+                          ('fastferry_reduction_factor', passenger_reduction.FAST_FERRY_KEY)):
+            try:
+                value = float(misc_el.get(attr, ''))
+            except (TypeError, ValueError):
+                continue
+            result['pc'][key] = value if value >= 1.0 else 1.0
     if misc_el is not None and (mtbc_val := misc_el.get('meantime_between_checks')) is not None:
         try:
             mtbc = float(mtbc_val)
@@ -1675,10 +2100,14 @@ def _compute_bend_angles(segment_data: dict, debug: bool) -> None:
             other = segment_data[other_id]
             if seg_end and other.get('Start_Point', '') == seg_end:
                 try:
-                    sp1, ep1 = seg['Start_Point'].split(), seg['End_Point'].split()
-                    sp2, ep2 = other['Start_Point'].split(), other['End_Point'].split()
-                    b1 = math.degrees(math.atan2(float(ep1[0]) - float(sp1[0]), float(ep1[1]) - float(sp1[1]))) % 360
-                    b2 = math.degrees(math.atan2(float(ep2[0]) - float(sp2[0]), float(ep2[1]) - float(sp2[1]))) % 360
+                    sp1 = tuple(float(v) for v in seg['Start_Point'].split()[:2])
+                    shared = tuple(float(v) for v in seg_end.split()[:2])
+                    ep2 = tuple(float(v) for v in other['End_Point'].split()[:2])
+                    # In a projection centred on the shared waypoint (raw degrees until
+                    # 2026-11-12, KNOWN_ISSUES 36); the value is informational only.
+                    proj = ModelProjector(*shared)
+                    b1 = projected_bearing(sp1, shared, proj)
+                    b2 = projected_bearing(shared, ep2, proj)
                     bend = abs(b2 - b1)
                     if bend > 180:
                         bend = 360 - bend
@@ -1709,6 +2138,9 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
     waypoint_map = _parse_waypoints_el(root.find('waypoints'))
     mal_map = _parse_mal_el(root.find('manoeuvring_aspects_legs'))
     result['segment_data'] = _parse_legs_el(root.find('legs'), waypoint_map, mal_map, debug)
+    junctions = _junctions_from_llds(waypoint_map, _leg_guid_map(root.find('legs')), result['segment_data'])
+    if junctions:
+        result['junctions'] = junctions
 
     if all_ship_types and all_length_intervals:
         omrat_types, parsed_intervals = _build_ship_categories_from_intervals(all_length_intervals)
@@ -1720,6 +2152,7 @@ def parse_iwrap_xml(xml_path: str, debug: bool = False) -> dict:
             root.find('legs'), td_map, omrat_types, intervals_list, debug
         )
 
+    _apply_blackout_classes(result)
     result['depths'], result['objects'] = _parse_areas_el(root.find('areas'))
     _parse_global_settings_el(root.find('global_settings'), result, debug)
     for seg in result['segment_data'].values():

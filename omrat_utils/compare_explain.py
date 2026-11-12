@@ -92,6 +92,8 @@ MAX_EXACT_GROUPS = 6
 #: needs no QGIS import; ``tests/test_compare_explain.py`` pins them equal).
 MERGING_LIMIT_DEG = 30.0
 _LIMIT_BAND_DEG = 1.0
+#: The leg-pair method classified by angle; the route method (2026-11-09) does not.
+_ANGLE_CLASSIFIES = False
 
 # Top-level blocks the collision run reads.
 _MODEL_KEYS: tuple[str, ...] = (
@@ -101,7 +103,12 @@ _MODEL_KEYS: tuple[str, ...] = (
 _TOP_GROUP = {'junctions': 'junctions', 'ship_categories': 'ships', 'traffic_scaling': 'traffic',
               'speed_restriction_zones': 'speed_zones'}
 _PC_KEYS = {'headon': 'head-on', 'overtaking': 'overtaking', 'crossing': 'crossing',
-            'merging': 'merging', 'bend': 'bend'}
+            'merging': 'merging', 'bend': 'bend',
+            # compute/passenger_reduction.py: scales every encounter type
+            'passenger_reduction': 'passenger ship reduction factor',
+            'fast_ferry_reduction': 'fast ferry reduction factor',
+            # compute/encounter_angle.py: which waypoint route pairs count
+            'min_encounter_angle_deg': 'smallest route angle at a waypoint'}
 
 _GEOMETRY_FIELDS = frozenset({'Start_Point', 'End_Point', 'line_length', 'start_wp', 'end_wp', 'bend_angle'})
 _ROUTING_FIELDS = frozenset({'suppressed', 'traffic_redirect', 'suppressed_with'})
@@ -857,9 +864,9 @@ def _finding_reclassification(expl: CollisionExplanation) -> list[Finding]:
             continue
         if min(abs(pc), abs(pm)) < 0.1 * max(abs(pc), abs(pm)):
             continue
-        details = ['Leg pairs meeting at 30 deg or less count as merging, steeper ones as crossing.  '
-                   'When traffic is moved, the same ships can meet another flow at a new angle '
-                   'and move from one type to the other.']
+        details = ['At a waypoint, routes that leave on the same leg merge and routes whose paths cross '
+                   'around the waypoint cross.  When traffic is moved, the same ships can join another '
+                   'flow and move from one type to the other.']
         for t, sign in (('crossing', pc), ('merging', pm)):
             rows = [r for r in _group_items(expl, g, (t,)) if r.by_group[g] * sign > 0]
             if rows:
@@ -974,9 +981,12 @@ def _finding_junctions(snap_a, snap_b, expl: CollisionExplanation) -> list[Findi
 def _finding_angles(expl: CollisionExplanation) -> list[Finding]:
     """Pairs whose angle moved onto (or across) the merging / crossing limit.
 
-    Only pairs present in both runs: a pair that exists in one run only
-    is explained by the routing or the legs, not by its angle.
+    Since 2026-11-09 the collision model classifies by route (same out-leg =
+    merging, interleaving paths = crossing; KNOWN_ISSUES 30), so an angle
+    no longer switches the type and this finding is not produced.
     """
+    if not _ANGLE_CLASSIFIES:
+        return []
     pairs: dict[str, tuple[float, float]] = {}
     for r in expl.items:
         if r.kind == 'pair' and r.angle_a is not None and r.angle_b is not None and r.a > 0 and r.b > 0:

@@ -8,8 +8,14 @@ from qgis.PyQt.QtWidgets import QDialogButtonBox
 from compute.cat1_start_zone import (
     DEFAULT_ENABLED, DEFAULT_PCT, KEY_ENABLED, KEY_PCT, start_zone_enabled, start_zone_pct,
 )
+from compute import encounter_angle, passenger_reduction
 from compute.iwrap_defaults import default_pc_values
+from compute.squat import KEY_DRIFTING, KEY_POWERED, squat_on
 from ui.causation_factor_widget import CausationFactorsWidget
+
+_SQUAT_BOXES: tuple[tuple[str, str], ...] = (
+    ('cbSquatDrifting', KEY_DRIFTING), ('cbSquatPowered', KEY_POWERED),
+)
 
 
 class CausationFactors:
@@ -29,6 +35,9 @@ class CausationFactors:
         self.data['crossing'] = float(self.cfw.leCrossingCf.text())
         self.data['merging'] = float(self.cfw.leMergingCf.text())
         self.data['bend'] = float(self.cfw.leBendCf.text())
+        spin = getattr(self.cfw, 'sbMinEncounterAngle', None)
+        if spin is not None:
+            self.data[encounter_angle.KEY] = float(spin.value())
 
         # Grounding and allision causation factors (Cat II = missed turn,
         # Cat I = obstacle already in the lane)
@@ -44,6 +53,19 @@ class CausationFactors:
             self.data[KEY_ENABLED] = bool(cb.isChecked())
             self.data[KEY_PCT] = float(sb.value())
 
+        # Passenger ship / fast ferry reduction (compute/passenger_reduction.py)
+        for name, key in (('sbPassengerReduction', passenger_reduction.PASSENGER_KEY),
+                          ('sbFastFerryReduction', passenger_reduction.FAST_FERRY_KEY)):
+            spin = getattr(self.cfw, name, None)
+            if spin is not None:
+                self.data[key] = float(spin.value())
+
+        # Squat in the grounding models (compute/squat.py)
+        for name, key in _SQUAT_BOXES:
+            box = getattr(self.cfw, name, None)
+            if box is not None:
+                self.data[key] = bool(box.isChecked())
+
     def set_values(self):
         # Powered and drifting causation factors
         self.cfw.lePoweredPc.setText(f"{self.data['p_pc']}")
@@ -55,6 +77,10 @@ class CausationFactors:
         self.cfw.leCrossingCf.setText(f"{self.data['crossing']}")
         self.cfw.leMergingCf.setText(f"{self.data['merging']}")
         self.cfw.leBendCf.setText(f"{self.data['bend']}")
+        # Smallest route angle at a waypoint; 10 degrees when the project has no value, as in compute.
+        spin = getattr(self.cfw, 'sbMinEncounterAngle', None)
+        if spin is not None:
+            spin.setValue(encounter_angle.min_angle_deg(self.data))
 
         # Grounding and allision causation factors
         self.cfw.leGroundingCf.setText(f"{self.data['grounding']}")
@@ -76,10 +102,35 @@ class CausationFactors:
                 pass
             cb.toggled.connect(sb.setEnabled)
 
+        # Passenger ship / fast ferry reduction; the default (20, IWRAP's) when the project has no value.
+        for name, key in (('sbPassengerReduction', passenger_reduction.PASSENGER_KEY),
+                          ('sbFastFerryReduction', passenger_reduction.FAST_FERRY_KEY)):
+            spin = getattr(self.cfw, name, None)
+            if spin is not None:
+                spin.setValue(passenger_reduction.factor(self.data, key))
+
+        # Squat; on when the project has no value, as in compute.
+        for name, key in _SQUAT_BOXES:
+            box = getattr(self.cfw, name, None)
+            if box is not None:
+                box.setChecked(squat_on(self.data, key))
+
     def run(self):
         self.cfw.show()
         self.set_values()
+        self._wire_signals()
+        self.cfw.exec()
+
+    def _wire_signals(self) -> None:
+        """Connect OK -- once.
+
+        The dialog lives as long as the plugin and ``run`` is called on every
+        open; connecting there added one more connection per open, so a single
+        OK ran ``commit_changes`` once per earlier open.
+        """
+        if getattr(self, '_signals_wired', False):
+            return
+        self._signals_wired = True
         self.buttonBox: QDialogButtonBox | None = self.cfw.findChild(QDialogButtonBox, 'buttonBox')
         if isinstance(self.buttonBox, QDialogButtonBox):
             self.buttonBox.accepted.connect(self.commit_changes)
-        self.cfw.exec()

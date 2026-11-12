@@ -27,7 +27,6 @@ from .shadow import (
 )
 from .clipping import (
     clip_corridor_at_obstacles,
-    keep_reachable_part,
 )
 from .generator import DriftCorridorGenerator
 
@@ -49,7 +48,6 @@ __all__ = [
     'extract_polygons',
     # Clipping
     'clip_corridor_at_obstacles',
-    'keep_reachable_part',
     # Generator
     'DriftCorridorGenerator',
 ]

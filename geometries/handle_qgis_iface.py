@@ -2230,7 +2230,8 @@ class HandleQGISIface:
             width = float(self.omrat.main_widget.twRouteList.item(row, 5).text())
             seg_key = str(segment_id)
             if seg_key in self.omrat.segment_data:
-                self.omrat.segment_data[seg_key]['Width'] = int(width)
+                # Whole metres stay an int in the file; a typed fraction is kept.
+                self.omrat.segment_data[seg_key]['Width'] = int(width) if width.is_integer() else width
             self._invalidate_junction_ais([seg_key])
             start_point_geom = QgsGeometry.fromWkt(f"Point ({start_point_wkt})")
             end_point_geom = QgsGeometry.fromWkt(f"Point ({end_point_wkt})")

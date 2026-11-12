@@ -192,7 +192,10 @@ def test_explanation_sums_to_change_and_reproduces_both_runs():
     assert any(d.startswith('LEG_1_1: sigma 500/500 -> 200/200 m') for d in lateral.details)
 
 
-def test_suppressed_leg_moves_merging_to_crossing():
+def test_suppressed_leg_moves_crossing_to_merging():
+    """Routes (KNOWN_ISSUES 30): with LEG_4_1 suppressed only three legs meet
+    at J, where routes can merge but never cross; its ships, moved to
+    LEG_2_1, merge with the other flows there instead."""
     a = _project()
     b = copy.deepcopy(a)
     b['segment_data']['4']['suppressed'] = True
@@ -203,14 +206,15 @@ def test_suppressed_leg_moves_merging_to_crossing():
     expl = ce.explain_collisions(a, b)
     assert expl.groups == ['routing']
     _assert_sums(expl)
-    assert expl.delta('merging') < 0 < expl.delta('crossing')
+    assert expl.delta('crossing') < 0 < expl.delta('merging')
+    assert expl.totals_b['crossing'] == 0.0
     routing = next(f for f in expl.findings if f.title.startswith('Routing differs'))
     assert any('LEG_4_1 (1600 ships/year) is suppressed in B; its ships move to LEG_2_1 (1600)' in d
                for d in routing.details)
     reclass = [f for f in expl.findings if f.title.startswith('Crossing (')]
     assert reclass and 'through routing' in reclass[0].title
-    gone = next(r for r in ce.items_for(expl, 'merging') if 'LEG_4_1' in r.label)
-    assert gone.b == 0 and gone.angle_a is not None and gone.angle_a <= ce.MERGING_LIMIT_DEG
+    gone = next(r for r in ce.items_for(expl, 'crossing') if 'LEG_4_1' in r.label)
+    assert gone.b == 0 and gone.a > 0
 
 
 def test_leg_only_in_b():

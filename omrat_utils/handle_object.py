@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import os
 from typing import TYPE_CHECKING
 
@@ -6,9 +7,9 @@ import re as _re
 from qgis.PyQt.QtCore import QVariant, Qt
 from qgis.PyQt.QtWidgets import QFileDialog, QTableWidgetItem, QTableWidget
 from qgis._core import QgsVectorDataProvider
-from qgis.core import (QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsField,
+from qgis.core import (Qgis, QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsField,
                        QgsFillSymbol, QgsGraduatedSymbolRenderer, QgsRendererRange,
-                       QgsCoordinateReferenceSystem, QgsCoordinateTransform)
+                       QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsMessageLog)
 from qgis.PyQt.QtGui import QColor
 import requests
 import tempfile
@@ -305,9 +306,8 @@ class OObject:
         """This will be called after the user right-clicks to finish the polygon"""
         try:
             self.area.featureAdded.disconnect(self.on_feature_added)
-            print('dictonnected')
-        except Exception as e:
-            print(e)
+        except (TypeError, RuntimeError):  # nosec B110 - already disconnected
+            pass
         if self.area_type == 'depth':
             self.add_simple_depth()
         if self.area_type == 'object':
@@ -316,16 +316,17 @@ class OObject:
     def load_area(self, name: str, wkt: str, row: int | None = None,
                   value: str | None = None, value_field: str | None = None,
                   defer_style: bool = False):
+        from geometries.depth_simplify import depth_value
         # Depth areas: add as feature to the consolidated depth layer
         if self.area_type == 'depth':
             if row is None:
                 row = self.p.main_widget.twDepthList.rowCount() - 1
             depth_val = 0.0
             if value is not None:
-                try:
-                    depth_val = float(value.split('-')[-1]) if '-' in str(value) else float(value)
-                except (ValueError, AttributeError):
-                    pass
+                # The class value compute uses: an interval's shallower end.
+                v = depth_value(value)
+                if not math.isnan(v):
+                    depth_val = v
             depth_id = int(row + 1)
             self._add_depth_feature(depth_id, depth_val, wkt, row, defer_style=defer_style)
             return
@@ -342,10 +343,9 @@ class OObject:
         fet.setGeometry(QgsGeometry.fromWkt(wkt))
 
         if value_field and value is not None:
-            try:
-                fet.setAttribute(value_field, float(value.split('-')[-1]) if '-' in value else float(value))
-            except (ValueError, AttributeError):
-                pass
+            v = depth_value(value)
+            if not math.isnan(v):
+                fet.setAttribute(value_field, v)
 
         if pr is not None:
             pr.addFeature(fet)
@@ -547,7 +547,8 @@ class OObject:
             self.p.main_widget.twDepthList.setItem(row, 1, QTableWidgetItem(f"{interval}-{intervals[idx + 1]}"))
             self.p.main_widget.twDepthList.setItem(row, 2, _wkt_table_item(wkt))
 
-            depth_val = intervals[idx + 1]
+            # Coloured by the class value compute uses: the shallower end.
+            depth_val = min(intervals[idx], intervals[idx + 1])
             self._add_depth_feature(row + 1, depth_val, wkt, row, defer_style=True)
 
         self._apply_depth_graduated_style()
@@ -556,7 +557,7 @@ class OObject:
         self.area_type = 'depth'
         if self.p.main_widget.pbAddSimpleDepth.text() == 'Save':
             self.store_depth()
-            self.p.main_widget.pbAddSimpleDepth.setText('Add manual')
+            self.p.main_widget.pbAddSimpleDepth.setText('Add manually')
             # Add drawn polygon to consolidated depth layer
             assert self.area is not None  # nosec B101
             row = self.deph_id - 1
@@ -570,7 +571,9 @@ class OObject:
             QgsProject.instance().removeMapLayer(self.area.id())
             self.area = None
         else:
-            self.deph_id += 1
+            # Next row of the table: loads (file, shapefile, GEBCO) fill the
+            # table without this counter, so counting on would overwrite rows.
+            self.deph_id = self.p.main_widget.twDepthList.rowCount() + 1
             # Create layer with Depth field - will be renamed after user enters depth value
             self.add_area(f'Depth - {self.deph_id} (enter depth)', value_field='Depth')
             self.p.main_widget.pbAddSimpleDepth.setText('Save')
@@ -596,10 +599,25 @@ class OObject:
         self.area_type = 'object'
         if self.p.main_widget.pbAddSimpleObject.text() == 'Save':
             self.store_object()
-            self.p.main_widget.pbAddSimpleObject.setText('Add manual')
-            self.loaded_object_areas.append(self.area)
+            self.p.main_widget.pbAddSimpleObject.setText('Add manually')
+            # The drawn structure becomes the same one-feature layer a loaded
+            # structure gets (``load_area``: Height field, stored style,
+            # geometry edits written to the table); the drawing layer goes.
+            table = self.p.main_widget.twObjectList
+            row = self.object_id - 1
+            wkt_item = table.item(row, 2)
+            height_item = table.item(row, 1)
+            if self.area is not None:
+                QgsProject.instance().removeMapLayer(self.area.id())
+                self.area = None
+            if wkt_item is not None:
+                wkt = wkt_item.data(_USER_ROLE) or wkt_item.text()
+                height = height_item.text() if height_item is not None else '10.0'
+                self.load_area(f'Structure - {height}m', wkt, row=row, value=height, value_field='Height')
         else:
-            self.object_id += 1
+            # Next row of the table: a project or shapefile load fills it
+            # without this counter, so counting on would overwrite rows.
+            self.object_id = self.p.main_widget.twObjectList.rowCount() + 1
             # Create layer with Height field
             self.add_area(f'Structure - {self.object_id} (enter height)', value_field='Height')
             self.p.main_widget.pbAddSimpleObject.setText('Save')
@@ -613,14 +631,10 @@ class OObject:
         item2 = QTableWidgetItem(f'{default_height}')
         polies = self.area.getFeatures()
         for poly in polies:
-            item3 = QTableWidgetItem(f'{poly.geometry().asWkt(precision=5)}')
+            wkt_poly = poly.geometry().asWkt(precision=5)
             self.p.main_widget.twObjectList.setItem(self.object_id - 1, 0, item1)
             self.p.main_widget.twObjectList.setItem(self.object_id - 1, 1, item2)
-            self.p.main_widget.twObjectList.setItem(self.object_id - 1, 2, item3)
-
-        # Rename the layer to show the height value
-        if self.area is not None:
-            self.area.setName(f'Structure - {default_height}m')
+            self.p.main_widget.twObjectList.setItem(self.object_id - 1, 2, _wkt_table_item(wkt_poly))
 
         self.p.iface.actionSaveActiveLayerEdits().trigger()
         self.p.iface.actionToggleEditing().trigger()
@@ -630,18 +644,20 @@ class OObject:
             self.p.main_widget,
             title,
             "",
-            "Shapefiler (*.shp)"
+            "Shapefiles (*.shp)"
         )
         return file_path if file_path else None
 
-    def _load_layer(self, file_path: str, layer_name: str, target_list: list) -> QgsVectorLayer | None:
-        layer = QgsVectorLayer(file_path, layer_name, "ogr")
-        if not layer.isValid():
-            print(f"Ogiltigt lager: {layer_name}")
-            return None
-        QgsProject.instance().addMapLayer(layer)
-        target_list.append(layer)
-        return layer
+    def _report_invalid_layer(self, file_path: str) -> None:
+        """Tell the user a chosen file could not be read as a vector layer."""
+        msg = f"Could not open {os.path.basename(file_path)} as a vector layer -- nothing was loaded."
+        QgsMessageLog.logMessage(f"{msg} ({file_path})", 'OMRAT', Qgis.MessageLevel.Warning)
+        notifier = getattr(self.p, 'notifier', None)
+        if notifier is not None:
+            try:
+                notifier.display_message(msg, level=Qgis.MessageLevel.Warning, duration=10)
+            except Exception:  # nosec B110 B112 - the log line above already has it
+                pass
 
     def _wgs84_transform(self, layer: QgsVectorLayer) -> QgsCoordinateTransform | None:
         # Object/depth WKTs are stored as EPSG:4326 throughout OMRAT, so a
@@ -654,44 +670,64 @@ class OObject:
         wgs84 = QgsCoordinateReferenceSystem('EPSG:4326')
         return QgsCoordinateTransform(src, wgs84, QgsProject.instance().transformContext())
 
-    def _populate_table(self, layer: QgsVectorLayer, table_widget, attr_name: str) -> None:
-        row_index = table_widget.rowCount()
+    @staticmethod
+    def _attribute(feature, layer: QgsVectorLayer, names: tuple[str, ...]):
+        """The first of ``names`` the layer has as a field (any case), or 0.0."""
+        by_lower = {n.lower(): n for n in layer.fields().names()}
+        for name in names:
+            field = by_lower.get(name.lower())
+            if field is not None:
+                return feature.attribute(field)
+        return 0.0
+
+    # Shapefile fields read as a structure's height, in order.  ``object``
+    # was the only one read until 2026-11-12; it stays for files made then.
+    STRUCTURE_HEIGHT_FIELDS = ('height', 'object')
+    DEPTH_FIELDS = ('depth',)
+
+    def load_objects(self) -> None:
+        """Add the polygons of a shapefile as structures.
+
+        Height from the field ``height`` (any case; ``object`` also read).
+        Every polygon becomes its own row and its own one-feature layer, as
+        when a project is loaded (``load_area``), so removing a row removes
+        its layer and geometry edits reach the table.
+        """
+        file_path = self._select_file("Select a shapefile with structures")
+        if file_path is None:
+            return
+        layer = QgsVectorLayer(file_path, "temp_structures", "ogr")
+        if not layer.isValid():
+            self._report_invalid_layer(file_path)
+            return
+
         tr = self._wgs84_transform(layer)
+        table = self.p.main_widget.twObjectList
+        self.area_type = 'object'
         for feature in layer.getFeatures():
             geom = feature.geometry()
             if tr is not None:
                 geom = QgsGeometry(geom)
                 geom.transform(tr)
-            wkt: str = geom.asWkt(precision=5)
-            value = feature.attribute(attr_name) if attr_name in layer.fields().names() else 0.0
-
-            table_widget.insertRow(row_index)
-            table_widget.setItem(row_index, 0, QTableWidgetItem(str(row_index + 1)))
-            table_widget.setItem(row_index, 1, QTableWidgetItem(str(value)))
-            table_widget.setItem(row_index, 2, QTableWidgetItem(wkt))
-            row_index += 1
-
-    def load_objects(self) -> None:
-        file_path = self._select_file("Välj shapefil med objektområden")
-        if file_path is None:
-            return
-
-        layer = self._load_layer(file_path, "Loaded Objects", self.loaded_object_areas)
-        if layer is None:
-            return
-
-        # Use the correct attribute name if different
-        self._populate_table(layer, self.p.main_widget.twObjectList, "object")
+            wkt = geom.asWkt(precision=5)
+            value = self._attribute(feature, layer, self.STRUCTURE_HEIGHT_FIELDS)
+            height = str(value) if value not in (None, '') else '0.0'
+            row = table.rowCount()
+            table.insertRow(row)
+            table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            table.setItem(row, 1, QTableWidgetItem(height))
+            table.setItem(row, 2, _wkt_table_item(wkt))
+            self.load_area(f'Structure - {height}m', wkt, row=row, value=height, value_field='Height')
 
     def load_depths(self) -> None:
-        file_path = self._select_file("Välj shapefil med djupområden")
+        file_path = self._select_file("Select a shapefile with depth areas")
         if file_path is None:
             return
 
         # Load shapefile as temporary layer (not added to project)
         temp_layer = QgsVectorLayer(file_path, "temp_depths", "ogr")
         if not temp_layer.isValid():
-            print("Ogiltigt lager: Loaded Depths")
+            self._report_invalid_layer(file_path)
             return
 
         tr = self._wgs84_transform(temp_layer)
@@ -704,7 +740,7 @@ class OObject:
                 geom = QgsGeometry(geom)
                 geom.transform(tr)
             wkt = geom.asWkt(precision=5)
-            value = feature.attribute("depth") if "depth" in temp_layer.fields().names() else 0.0
+            value = self._attribute(feature, temp_layer, self.DEPTH_FIELDS)
 
             self.p.main_widget.twDepthList.insertRow(row_index)
             self.p.main_widget.twDepthList.setItem(row_index, 0, QTableWidgetItem(str(row_index + 1)))
@@ -876,7 +912,7 @@ class OObject:
 
         # Reset button text in case user was mid-add
         try:
-            self.p.main_widget.pbAddSimpleDepth.setText('Add manual')
-            self.p.main_widget.pbAddSimpleObject.setText('Add manual')
+            self.p.main_widget.pbAddSimpleDepth.setText('Add manually')
+            self.p.main_widget.pbAddSimpleObject.setText('Add manually')
         except Exception:  # nosec B110 B112
             pass

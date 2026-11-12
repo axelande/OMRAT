@@ -248,10 +248,11 @@ class TestAdjustWeights:
         from qgis.PyQt.QtWidgets import QLineEdit
         d = dist_quiet
         d.adjust_weights = type(d).adjust_weights.__get__(d)
+        before = d.dw.leNormWeight1_1.text()
         unknown = QLineEdit()
         d.adjust_weights(unknown)
-        out = capsys.readouterr().out
-        assert 'Widget not found' in out
+        assert d.dw.leNormWeight1_1.text() == before
+        assert capsys.readouterr().out == ''      # no debug print left
 
     def test_dir2_widget_dispatch(self, dist_quiet):
         d = dist_quiet
@@ -352,15 +353,19 @@ class TestAddDist2Plot:
         labels = [line.get_label() for line in ax.lines]
         assert 'Uniform' in labels
 
-    def test_exception_swallowed(self, dist_quiet, qgis_iface, capsys):
-        """Bad data -> stats.norm.fit raises -> caught and printed."""
+    def test_exception_swallowed(self, dist_quiet, qgis_iface, monkeypatch):
+        """Bad data -> stats.norm.fit raises -> caught and written to the QGIS log
+        (it was a ``print``, which nobody sees inside QGIS)."""
         from matplotlib.figure import Figure
+        import omrat_utils.handle_distributions as hd
         from omrat_utils.handle_distributions import Params
+        logged = []
+        monkeypatch.setattr(hd.QgsMessageLog, 'logMessage', staticmethod(lambda msg, *a, **k: logged.append(msg)))
         d = dist_quiet
         ax = Figure().subplots()
         # Passing a string forces float conversion failure -> exception caught.
         d.add_dist2plot(ax, Params(), 'not-an-array', first=True)
-        # No raise; capsys may have an error printed.
+        assert any('Could not draw the distribution curves' in m for m in logged)
 
 
 # ---------------------------------------------------------------------------

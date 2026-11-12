@@ -15,6 +15,11 @@ class PC(BaseModel):
     # within the first ``cat1_skip_start_pct`` % of a leg.  Default on, 10 %.
     cat1_skip_start: bool = True
     cat1_skip_start_pct: float = 10.0
+    # Squat in the grounding models (compute/squat.py).  Default on.
+    squat_drifting: bool = True
+    squat_powered: bool = True
+    # Smallest angle between two routes at a waypoint (compute/encounter_angle.py).
+    min_encounter_angle_deg: float = 10.0
 
 
 class Rose(RootModel[Dict[str, float]]):
@@ -30,9 +35,11 @@ class Repair(BaseModel):
 
 
 class Drift(BaseModel):
-    drift_p: int
+    # Floats: a blackout rate of 0.5 per year or an anchoring depth of 7.5 m
+    # failed save and load while these were typed ``int`` (until 2026-11-12).
+    drift_p: float
     anchor_p: float
-    anchor_d: int
+    anchor_d: float
     speed: float
     rose: Rose
     repair: Repair
@@ -95,7 +102,7 @@ class Segment(BaseModel):
     Start_Point: str
     End_Point: str
     Dirs: List[str]
-    Width: int
+    Width: float
     line_length: float
     Route_Id: int
     Leg_name: str
@@ -124,11 +131,11 @@ class Segment(BaseModel):
     weight2_3: float
     u_min1: float
     u_max1: float
-    u_p1: int
+    u_p1: float
     ai1: float
     u_min2: float
     u_max2: float
-    u_p2: int
+    u_p2: float
     ai2: float
     # Scenario: leg left out of compute, its traffic moved to other legs.
     suppressed: Optional[bool] = None

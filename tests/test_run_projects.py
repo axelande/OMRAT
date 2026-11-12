@@ -47,7 +47,7 @@ def history(tmp_path, monkeypatch):
 @pytest.fixture
 def plugin(omrat, history):
     """Plugin with no current project: empty name, no output folder."""
-    omrat._main_run_id = None
+    omrat._baseline_runs = None
     omrat.main_widget.LEProjectName.setText('')
     omrat.main_widget.LEReportPath.setText('')
     omrat._runs_project_filter = None
@@ -77,7 +77,7 @@ class TestColumns:
         plugin.refresh_previous_runs_table()
         tw = plugin.main_widget.TWPreviousRuns
         headers = [tw.horizontalHeaderItem(c).text() for c in range(tw.columnCount())]
-        assert headers == ['Name', 'Main', 'Date', 'Duration', 'Version', 'Project']
+        assert headers == ['Name', 'Baseline', 'Date', 'Duration', 'Version', 'Project']
         versions = {tw.item(r, 0).text(): tw.item(r, 4).text() for r in range(tw.rowCount())}
         assert versions == {'new': '0.16.11', 'old': '—'}
 
@@ -118,14 +118,46 @@ class TestProjectFilter:
         cb.setCurrentIndex(0)   # All projects
         assert len(_shown_names(plugin)) == 3
 
-    def test_main_run_of_another_project_is_kept(self, plugin, history, tmp_path):
-        """Filtering must not mistake a hidden main run for a deleted one."""
+    def test_each_project_list_keeps_its_own_baseline(self, plugin, history, tmp_path):
+        """A baseline belongs to the list it was ticked in; filtering must
+        not mistake a hidden baseline for a deleted one."""
+        from qgis.PyQt.QtCore import Qt
+        _three_runs(history, tmp_path)
+        ids = {r.name: r.run_id for r in history.list_runs()}
+        plugin.refresh_previous_runs_table()
+        cb = plugin.main_widget.cbRunProject
+        tw = plugin.main_widget.TWPreviousRuns
+
+        cb.setCurrentIndex(cb.findData('Kattegat'))
+        tw.item(0, 1).setCheckState(Qt.CheckState.Checked)        # k1
+        assert plugin._get_baseline_run_id() == ids['k1']
+
+        cb.setCurrentIndex(cb.findData('Alpha'))
+        assert plugin._get_baseline_run_id() is None
+        row_a1 = _shown_names(plugin).index('a1')
+        tw.item(row_a1, 1).setCheckState(Qt.CheckState.Checked)
+        assert plugin._get_baseline_run_id() == ids['a1']
+
+        cb.setCurrentIndex(0)                                       # All projects
+        assert plugin._get_baseline_run_id() is None
+        assert all(tw.item(r, 1).checkState() == Qt.CheckState.Unchecked
+                   for r in range(tw.rowCount()))
+
+        cb.setCurrentIndex(cb.findData('Kattegat'))
+        assert plugin._get_baseline_run_id() == ids['k1']
+        assert tw.item(0, 1).checkState() == Qt.CheckState.Checked
+
+    def test_baseline_moved_to_another_project_is_dropped(self, plugin, history, tmp_path):
+        from qgis.PyQt.QtCore import Qt
         _three_runs(history, tmp_path)
         k1 = next(r.run_id for r in history.list_runs() if r.name == 'k1')
-        plugin._set_main_run_id(k1)
-        plugin.main_widget.LEProjectName.setText('Alpha')
-        plugin.show_current_project_runs()
-        assert plugin._get_main_run_id() == k1
+        plugin.refresh_previous_runs_table()
+        cb = plugin.main_widget.cbRunProject
+        cb.setCurrentIndex(cb.findData('Kattegat'))
+        plugin.main_widget.TWPreviousRuns.item(0, 1).setCheckState(Qt.CheckState.Checked)
+        history.set_project([k1], 'Alpha')
+        plugin.refresh_previous_runs_table()   # Kattegat is gone: the list follows
+        assert k1 not in plugin._baseline_map().values()
 
 
 class TestSetProject:

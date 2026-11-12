@@ -38,3 +38,63 @@ div.literal-block-wrapper div.code-block-caption {
     font-size: 0.85em;
     color: #555;
 }
+
+/* Collapsible sidebar navigation (_static/nav_toggle.js) ------------------
+ * Every entry is indented by the width of the arrow so entries with and
+ * without headings underneath line up.  Folding only happens once the
+ * script has added .nav-has-children, so without JavaScript the tree is
+ * simply open. */
+div.sphinxsidebar li.nav-item {
+    position: relative;
+    padding-left: 18px;
+}
+
+/* Headings inside a page keep their square bullet; they only need the
+   arrow indent when they have headings of their own. */
+div.sphinxsidebar li.nav-item:not(.toctree-l1):not(.nav-has-children) {
+    padding-left: 0;
+}
+
+div.sphinxsidebar li.nav-item > ul {
+    margin-top: 2px;
+    margin-bottom: 6px;
+}
+
+div.sphinxsidebar li.nav-has-children:not(.nav-open) > ul {
+    display: none;
+}
+
+div.sphinxsidebar button.nav-toggle {
+    position: absolute;
+    left: 0;
+    top: 0.3em;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #666;
+    line-height: 16px;
+    text-align: center;
+}
+
+div.sphinxsidebar li.toctree-l1 > button.nav-toggle {
+    top: 0.45em;
+}
+
+div.sphinxsidebar button.nav-toggle::before {
+    content: "\25B8";            /* small right-pointing triangle */
+    display: inline-block;
+    font-size: 15px;
+    transition: transform 0.15s ease;
+}
+
+div.sphinxsidebar li.nav-open > button.nav-toggle::before {
+    transform: rotate(90deg);    /* points down when open */
+}
+
+div.sphinxsidebar button.nav-toggle:hover,
+div.sphinxsidebar button.nav-toggle:focus-visible {
+    color: #3572a5;
+}

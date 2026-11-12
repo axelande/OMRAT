@@ -69,12 +69,18 @@ def get_Fcoll(na: float, pc: float) -> float:
     return na * pc
 
 
+# Hours in a year for blackout rates (per ship-year -> per hour): 365.25
+# days, the year the collision formulas' ``seconds_per_year`` use too.  The
+# drifting model used 365 days until 2026-11-12 (its results 0.07 % higher).
+HOURS_PER_YEAR = 365.25 * 24
+
+
 def get_drifting_prob(Fb: float, line_length: float, ship_speed: float) -> float:
     """Calculates the drifting probability """
     if ship_speed <= 0:
         return 1.0
     hours = line_length / ship_speed
-    return 1 - exp(- Fb / (24 * 365) * hours)
+    return 1 - exp(- Fb / HOURS_PER_YEAR * hours)
 
 
 def get_drift_time(distance: float, drift_speed: float) -> float:
@@ -229,21 +235,24 @@ SHIP_TYPE_NAMES: dict[int, str] = {
     20: "Chemical / gas tanker",
 }
 
-# IWRAP-like default blackout rate per ship-type index, events per ship-year.
-# IWRAP distinguishes "roro_passenger" (Passenger ferry, Ro-pax, Ro-ro,
-# Passenger cruise) which typically have a one-order-of-magnitude lower
-# blackout rate than other commercial vessels.  These match IWRAP's default
-# ``blackout_other = 1.0`` and ``blackout_roro_passenger = 0.1``.
+# Default blackout rate per ship-type index, events per ship-year: IWRAP's
+# ``blackout_roro_passenger = 0.1`` for passenger ships, ro-ro / ro-pax,
+# cruise ships *and* fast ferries / high speed craft, ``blackout_other = 1.0``
+# for the rest.  These ships usually have two or more propulsion units, hence
+# the lower rate (Hansen 2008, section 4.2.2).  IWRAP itself puts fast ferries
+# in its "other" class; OMRAT puts them with the passenger ships (user's
+# decision 2026-11-10), so an IWRAP export cannot carry their rate.
 _DEFAULT_BLACKOUT_BY_SHIP_TYPE: dict[int, float] = {i: 1.0 for i in SHIP_TYPE_NAMES}
-for _i in (8, 9, 10, 11):  # Passenger ferry, Ro-pax, Ro-ro, Passenger cruise
+for _i in (4, 8, 9, 10, 11):  # High speed craft, Passenger ferry, Ro-pax, Ro-ro, Passenger cruise
     _DEFAULT_BLACKOUT_BY_SHIP_TYPE[_i] = 0.1
 
-# Name tokens that identify the low-blackout "roro_passenger" IWRAP class.
-# Matched case-insensitively as substrings of the ship-type name so the
-# defaults follow the PROJECT's actual taxonomy (e.g. the AIS type list has
-# "Passenger, all ships of this type" at index 17, not 8-11).
+# Name tokens of the low-blackout class.  Matched case-insensitively as
+# substrings of the ship-type name so the defaults follow the PROJECT's actual
+# taxonomy (e.g. the AIS type list has "Passenger, all ships of this type" at
+# index 17, not 8-11, and "High speed craft (HSC)" at index 7).
 _LOW_BLACKOUT_NAME_TOKENS: tuple[str, ...] = (
     'passenger', 'ferry', 'ro-pax', 'ropax', 'ro-ro', 'roro', 'cruise',
+    'high speed', 'hsc',
 )
 
 
@@ -428,6 +437,99 @@ def get_head_on_collision_candidates(
     N_G = density1 * density2 * V_ij * P_G * L_w * seconds_per_year
 
     return N_G
+
+
+def _phi_integral(z):
+    """Antiderivative of the standard normal CDF: ``z Phi(z) + phi(z)``."""
+    return z * ndtr(z) + exp(-0.5 * z * z) / sqrt(2.0 * pi)
+
+
+def _normal_uniform_overlap(mu: float, sigma: float, lo: float, hi: float, half_width: float) -> float:
+    """``P(|X - Y| <= B)`` for ``X ~ N(mu, sigma)``, ``Y ~ U[lo, hi]`` (closed form)."""
+    if hi <= lo:
+        return 0.0
+    if sigma <= 0:
+        return _uniform_uniform_overlap(mu, mu, lo, hi, half_width)
+    b = half_width
+    g = _phi_integral
+    total = (g((hi + b - mu) / sigma) - g((lo + b - mu) / sigma)
+             - g((hi - b - mu) / sigma) + g((lo - b - mu) / sigma))
+    return float(min(1.0, max(0.0, sigma * total / (hi - lo))))
+
+
+def _uniform_uniform_overlap(a1: float, b1: float, a2: float, b2: float, half_width: float) -> float:
+    """``P(|X - Y| <= B)`` for ``X ~ U[a1, b1]``, ``Y ~ U[a2, b2]``; a point mass when ``a1 == b1``.
+
+    The covered length ``L(x)`` = length of ``[x - B, x + B]`` inside ``[a2, b2]`` is piecewise
+    linear in ``x``, so the trapezoid rule over its breakpoints is exact.
+    """
+    w2 = b2 - a2
+    if w2 <= 0:
+        return 0.0
+
+    def covered(x):
+        return max(0.0, min(b2, x + half_width) - max(a2, x - half_width))
+
+    if b1 <= a1:
+        return covered(a1) / w2
+    pts = sorted({a1, b1} | {p for p in (a2 - half_width, a2 + half_width, b2 - half_width, b2 + half_width)
+                             if a1 < p < b1})
+    area = sum(0.5 * (covered(x0) + covered(x1)) * (x1 - x0) for x0, x1 in zip(pts, pts[1:]))
+    return float(min(1.0, max(0.0, area / ((b1 - a1) * w2))))
+
+
+def lateral_overlap_probability(comps1, comps2, half_width: float) -> float:
+    """``P(|X - Y| <= B)`` for two lateral mixtures on the same axis.
+
+    ``comps`` are ``geometries.distribution_curves.mixture`` components --
+    ``('n', mean, std, w)`` / ``('u', low, high, w)``, weights summing to 1 --
+    and ``B`` the mean half-breadth ``(B1 + B2) / 2`` of the two ships.  This
+    is Hansen's geometric probability ``P_G`` evaluated component by
+    component: ``sum_i sum_j w_i w_j P_G(i, j)``.
+
+    Head-on and overtaking replaced each direction's mixture by one normal
+    (mixture mean, total variance) until 2026-11-09.  On a two-lane leg with
+    a minority component that smeared both lanes into the middle: one such
+    leg of a benchmark model came out 3.9 times too high (KNOWN_ISSUES 28).
+    """
+    total = 0.0
+    for k1, a1, b1, w1 in comps1 or []:
+        for k2, a2, b2, w2 in comps2 or []:
+            if w1 <= 0 or w2 <= 0:
+                continue
+            if k1 == 'n' and k2 == 'n':
+                m = a1 - a2
+                s = sqrt(b1 * b1 + b2 * b2)
+                p = (float(ndtr((m + half_width) / s) - ndtr((m - half_width) / s)) if s > 0
+                     else (1.0 if abs(m) <= half_width else 0.0))
+            elif k1 == 'n':
+                p = _normal_uniform_overlap(a1, b1, a2, b2, half_width)
+            elif k2 == 'n':
+                p = _normal_uniform_overlap(a2, b2, a1, b1, half_width)
+            else:
+                p = _uniform_uniform_overlap(a1, b1, a2, b2, half_width)
+            total += w1 * w2 * p
+    return float(total)
+
+
+def head_on_candidates_from_overlap(Q1: float, Q2: float, V1: float, V2: float, P_G: float, L_w: float) -> float:
+    """Hansen eq. 4.2-4.4 with a given geometric probability ``P_G``:
+    ``N_G = (Q1/V1) (Q2/V2) (V1 + V2) P_G L_w`` in candidates per year."""
+    if V1 <= 0 or V2 <= 0:
+        return 0.0
+    seconds_per_year = 365.25 * 24 * 3600
+    return (Q1 / (V1 * seconds_per_year)) * (Q2 / (V2 * seconds_per_year)) * (V1 + V2) * P_G * L_w * seconds_per_year
+
+
+def overtaking_candidates_from_overlap(
+    Q_fast: float, Q_slow: float, V_fast: float, V_slow: float, P_G: float, L_w: float,
+) -> float:
+    """Overtaking with a given ``P_G``: ``(Qf/Vf) (Qs/Vs) (Vf - Vs) P_G L_w``; 0 unless ``Vf > Vs``."""
+    if V_fast <= V_slow or V_fast <= 0 or V_slow <= 0:
+        return 0.0
+    seconds_per_year = 365.25 * 24 * 3600
+    return ((Q_fast / (V_fast * seconds_per_year)) * (Q_slow / (V_slow * seconds_per_year))
+            * (V_fast - V_slow) * P_G * L_w * seconds_per_year)
 
 
 def get_overtaking_collision_candidates(
@@ -643,84 +745,6 @@ def get_crossing_collision_candidates(
     N_G = Q1 * Q2 * V_ij * D_ij / (V1 * V2 * abs_sin * seconds_per_year)
 
     return N_G
-
-
-def get_bend_collision_candidates(
-    Q: float,            # Traffic volume (ships/year)
-    P_no_turn: float,    # Probability of not changing course at bend (≈0.01)
-    L: float,            # Ship length (m)
-    B: float,            # Ship beam (m)
-    theta: float,        # Bend angle (radians)
-    V: float,            # Ship speed (m/s)
-) -> float:
-    """
-    Calculate bend collision candidates at waypoints.
-
-    At bends / waypoints there is a probability that a vessel fails to
-    turn and continues on the original course.  It then crosses the path
-    of the traffic that did turn, at the bend's deflection angle.  This is
-    the crossing encounter of two sub-streams of the *same* traffic:
-
-    .. code-block:: text
-
-        Q_no_turn = Q * P_no_turn          (continued straight)
-        Q_turn    = Q * (1 - P_no_turn)    (made the turn)
-
-    both at speed ``V``, crossing at ``theta``.  The result is
-    :func:`get_crossing_collision_candidates` evaluated on that pair, so
-    the bend inherits the Pedersen collision diameter and the ``1/V``
-    scaling of the crossing formula.
-
-    Parameters
-    ----------
-    Q : float
-        Traffic volume (ships/year)
-    P_no_turn : float
-        Probability of not changing course at bend (typically ≈0.01)
-    L : float
-        Ship length (m)
-    B : float
-        Ship beam (m)
-    theta : float
-        Bend angle (radians) - the angle change at the waypoint
-    V : float
-        Ship speed (m/s).  Required: with two equal speeds the relative
-        speed is ``V_ij = 2*V*|sin(theta/2)|``, which does **not** cancel
-        out of the crossing formula.  Passing a placeholder ``1.0`` (as
-        this function did before v0.14.0) silently drops the bend's speed
-        dependence.
-
-    Returns
-    -------
-    float
-        Number of bend collision candidates per year
-    """
-    # Handle edge case of no bend
-    if np_abs(theta) < 1e-10:
-        return 0.0
-
-    if V <= 0:
-        return 0.0
-
-    # Traffic that fails to turn vs traffic that turns normally.
-    Q_no_turn = Q * P_no_turn
-    Q_turn = Q * (1 - P_no_turn)
-
-    # Both sub-streams are the same ship category at the same speed, so
-    # the crossing formula is evaluated with L1 == L2, B1 == B2, V1 == V2.
-    N_G_crossing = get_crossing_collision_candidates(
-        Q1=Q_no_turn,
-        Q2=Q_turn,
-        V1=V,
-        V2=V,
-        L1=L,
-        L2=L,
-        B1=B,
-        B2=B,
-        theta=theta
-    )
-
-    return N_G_crossing
 
 
 # =============================================================================

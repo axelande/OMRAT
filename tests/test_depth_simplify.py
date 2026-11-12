@@ -96,6 +96,15 @@ class TestDetailLimit:
         assert max_traffic_draught(td) == 9.5
         assert max_traffic_draught({}) is None
 
+    def test_max_traffic_draught_includes_squat(self):
+        """Squat at the cell speed (Barras, cargo Cb 0.72): 9.5 m at 10 kn grounds like 10.22 m."""
+        td = {'1': {'East going': {'Frequency (ships/year)': [[0], [5]],
+                                   'Draught (meters)': [[0.0], [9.5]],
+                                   'Speed (knots)': [[0.0], [10.0]]}}}
+        names = ['Fishing', 'Cargo, all ships of this type']
+        assert max_traffic_draught(td, True, names) == pytest.approx(10.22)
+        assert max_traffic_draught(td, False, names) == pytest.approx(9.5)
+
     def test_suggest_first_class_deeper_than_draught(self):
         classes = [0, 3, 6, 9, 12, 15, 18, 21, 30]
         assert suggest_detail_limit(classes, 16.08) == 18
@@ -254,3 +263,21 @@ def test_quantile_constants():
     """The model reach (99 %) is the default; the longer ones are margin."""
     assert REPAIR_QUANTILES[0] == DEFAULT_REPAIR_QUANTILE == REACH_QUANTILE
     assert NM_M == 1852.0
+
+
+class TestDepthValue:
+    """One rule for a depth class: the number, or an interval's shallower end."""
+
+    @pytest.mark.parametrize('text, expected', [
+        ('10', 10.0), (7.5, 7.5), ('-5', -5.0), ('0-10', 0.0), ('48-51', 48.0),
+        ('10 - 20', 10.0), ('-10--5', -10.0), ('20-10', 10.0),
+    ])
+    def test_values(self, text, expected):
+        from geometries.depth_simplify import depth_value
+        assert depth_value(text) == expected
+
+    @pytest.mark.parametrize('text', ['', 'deep', 'a-b-7.5', None])
+    def test_unreadable_is_nan(self, text):
+        import math
+        from geometries.depth_simplify import depth_value
+        assert math.isnan(depth_value(text))

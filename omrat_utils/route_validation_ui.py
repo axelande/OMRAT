@@ -16,8 +16,8 @@ drag or a waypoint-editor Connect that makes a leg cross others asks
 right away (:func:`offer_split_new_crossings`), and Run model asks
 before a run that would miss them (:func:`check_crossings_before_run`)
 -- the collision model only counts crossings at a shared waypoint, so an
-unsplit X-crossing silently contributed nothing (ESCOW
-``nelly_med_park``: LEG_8_1_d dragged across four routes).
+unsplit X-crossing silently contributed nothing (seen with one leg
+dragged across four routes).
 """
 
 from __future__ import annotations

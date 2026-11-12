@@ -1,11 +1,10 @@
 name: Deploy Documentation
 
 on:
+  # Every push to main: the docs also read the version from metadata.txt and
+  # include code from compute/, so a code-only push can change them too.
   push:
     branches: ["main"]
-    paths:
-      - 'help/source/**'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:  # Allow manual trigger
 
 permissions:

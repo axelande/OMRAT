@@ -33,7 +33,6 @@ class DriftCorridorTask(QgsTask):
         generator: Any,
         depth_threshold: float,
         height_threshold: float,
-        target_prob: float = 1e-3,
     ):
         """
         Initialize the drift corridor task.
@@ -43,13 +42,11 @@ class DriftCorridorTask(QgsTask):
             generator: The DriftCorridorGenerator object
             depth_threshold: Depths <= this value create shadows
             height_threshold: Heights <= this value create shadows
-            target_prob: Target probability for projection distance
         """
         super().__init__(description, QgsTask.Flag.CanCancel)
         self.generator = generator
         self.depth_threshold = depth_threshold
         self.height_threshold = height_threshold
-        self.target_prob = target_prob
         self.exception: Optional[Exception] = None
         self.error_msg: Optional[str] = None
         self.corridors: list[dict] = []
@@ -85,7 +82,6 @@ class DriftCorridorTask(QgsTask):
             self.corridors = self.generator.generate_corridors(
                 self.depth_threshold,
                 self.height_threshold,
-                self.target_prob
             )
 
             if self.isCanceled():

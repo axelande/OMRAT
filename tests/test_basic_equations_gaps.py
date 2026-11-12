@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.basic_equations import (
+from compute.basic_equations import (  # noqa: E402
     get_Fcoll,
     get_drifting_prob,
     get_drift_time,
@@ -210,11 +210,19 @@ class TestBlackoutDefaults:
             assert idx in d, f"blackout default missing for ship type index {idx}"
 
     def test_passenger_and_roro_have_lower_rate(self):
-        """IWRAP convention: Passenger/RoRo/RoPax get 0.1; others 1.0."""
+        """Passenger / Ro-ro / Ro-pax / cruise and fast ferries get 0.1; others 1.0."""
         d = default_blackout_by_ship_type()
-        passenger_like = [8, 9, 10, 11]  # indices that map to Passenger-variants
+        passenger_like = [4, 8, 9, 10, 11]  # High speed craft + the passenger variants
         for i in passenger_like:
             assert d[i] == 0.1
+
+    def test_fast_ferries_by_name_have_lower_rate(self):
+        """The project's own type list: fast ferries / HSC go with the passenger ships."""
+        names = ['Other Type', 'High speed craft (HSC), all ships of this type', 'Fast ferry',
+                 'Passenger, all ships of this type', 'Cargo, all ships of this type',
+                 'Fishing', 'Tanker, all ships of this type']
+        d = default_blackout_by_ship_type(names)
+        assert [d[i] for i in range(len(names))] == [1.0, 0.1, 0.1, 0.1, 1.0, 1.0, 1.0]
 
     def test_generic_ship_types_have_default_one(self):
         d = default_blackout_by_ship_type()

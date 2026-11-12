@@ -13,10 +13,18 @@ Category I: Obstacle already inside the lane.
 
 Category II: Ships failing to turn at a bend.
   Ships continue past the turning point on the previous heading.
-  P(hit obstacle) = mass * exp(-d_mean / (ai * V))
-    - mass: fraction of lateral distribution intercepted by the obstacle
-    - d_mean: weighted mean along-track distance to the obstacle
+  P(hit obstacle) = sum over the rays that hit it of m_r * exp(-d_r / (ai * V))
+    - m_r: share of ships on ray r (the whole lateral mixture, see
+      ``compute/ray_sampling.py``)
+    - d_r: along-track distance from the turning point to the first hit
     - Shadow: closer obstacles block the distribution for obstacles behind them
+  Summed per ray since 2026-11-09 (:func:`cat2_probability`); one mean
+  distance per obstacle made the result depend on how the water is cut
+  into polygons (KNOWN_ISSUES 26).
+
+Coordinates: :class:`ModelProjector`, a conformal projection centred on
+the model (KNOWN_ISSUES 27: the equirectangular :class:`SimpleProjector`
+around the first leg made the result depend on the leg order).
 
 Provides ``PoweredOverlapVisualizer`` which embeds matplotlib plots inside the
 existing ``ShowGeomRes`` dialog, following the same pattern as
@@ -26,7 +34,7 @@ existing ``ShowGeomRes`` dialog, following the same pattern as
 from __future__ import annotations
 
 from collections import defaultdict
-from math import cos, exp, radians
+from math import exp
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -48,6 +56,7 @@ from compute.powered_breakdown import (
     geometric_probability, leg_title as _leg_title,
 )
 from geometries.boundary_edges import boundary_edges
+from geometries.distribution_curves import mixture as lateral_mixture
 
 from ui.show_geom_res import ShowGeomRes
 
@@ -61,7 +70,7 @@ MAX_RANGE = 50_000   # max ray length in meters (50 km)
 DEFAULT_MAX_DRAFT = 15.0  # default max ship draft (m)
 # Ray count and span live in compute/ray_sampling.py (6 sigma, 1000 rays)
 # so the report and the tangent-line markers use the same figures.
-from compute.ray_sampling import N_RAYS, RAY_SPAN_SIGMA, ray_offsets  # noqa: E402,F401
+from compute.ray_sampling import N_RAYS, RAY_SPAN_SIGMA, mixture_rays, ray_offsets  # noqa: E402,F401
 from compute.speed_restriction import speed_matrix, turning_point  # noqa: E402
 
 
@@ -69,18 +78,10 @@ from compute.speed_restriction import speed_matrix, turning_point  # noqa: E402
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
-class SimpleProjector:
-    """Equirectangular projection (lon/lat -> metres) around a reference point."""
-
-    def __init__(self, lon_ref: float, lat_ref: float) -> None:
-        self.lon_ref = lon_ref
-        self.lat_ref = lat_ref
-        self.mx = 111_320.0 * cos(radians(lat_ref))
-        self.my = 110_540.0
-
-    def transform(self, lon: float, lat: float) -> tuple[float, float]:
-        return ((lon - self.lon_ref) * self.mx,
-                (lat - self.lat_ref) * self.my)
+# The projections live in geometries/model_projection.py (pure numpy) so the
+# ship-ship collision model can take its waypoint bearings from the same
+# ModelProjector without importing this Qt / matplotlib module.
+from geometries.model_projection import ModelProjector, SimpleProjector, model_projector  # noqa: E402,F401
 
 
 def _parse_point(coord_str: str) -> tuple[float, float]:
@@ -352,7 +353,7 @@ def _accumulate_obs_hits(
     ray_data: list = []
     obs_accum: dict = defaultdict(lambda: {
         "mass": 0.0, "weighted_dist": 0.0, "p_integral": 0.0,
-        "n_rays": 0, "ray_offsets": [], "ray_dists": [], "obs": None, "kind": None,
+        "n_rays": 0, "ray_offsets": [], "ray_dists": [], "ray_masses": [], "obs": None, "kind": None,
         "edges": {},
     })
     for i in range(n_rays):
@@ -371,20 +372,24 @@ def _accumulate_obs_hits(
         oa["n_rays"] += 1
         oa["ray_offsets"].append(off)
         oa["ray_dists"].append(best_d)
+        oa["ray_masses"].append(m_i)
         oa["obs"], oa["kind"] = obs, kind
         if edge_matrix is not None:
             e_idx = int(edge_matrix[i, int(best_obs_idx[i])])
             if e_idx >= 0:
-                ea = oa["edges"].setdefault(e_idx, {"mass": 0.0, "weighted_dist": 0.0, "n_rays": 0})
+                ea = oa["edges"].setdefault(e_idx, {"mass": 0.0, "weighted_dist": 0.0, "n_rays": 0,
+                                                    "ray_masses": [], "ray_dists": []})
                 ea["mass"] += m_i
                 ea["weighted_dist"] += m_i * best_d
                 ea["n_rays"] += 1
+                ea["ray_masses"].append(m_i)
+                ea["ray_dists"].append(best_d)
         ray_data.append((off, m_i, best_key, best_d))
     return ray_data, obs_accum
 
 
 def _edge_summaries(edge_accum: dict) -> dict[int, dict]:
-    """``{edge_idx: {mass, mean_dist, n_rays}}`` from the per-edge accumulator."""
+    """``{edge_idx: {mass, mean_dist, n_rays, ray_masses, ray_dists}}`` from the per-edge accumulator."""
     out: dict[int, dict] = {}
     for e_idx, ea in edge_accum.items():
         mass = ea["mass"]
@@ -392,8 +397,34 @@ def _edge_summaries(edge_accum: dict) -> dict[int, dict]:
             "mass": mass,
             "mean_dist": ea["weighted_dist"] / mass if mass > 0 else 0.0,
             "n_rays": ea["n_rays"],
+            "ray_masses": ea.get("ray_masses", []),
+            "ray_dists": ea.get("ray_dists", []),
         }
     return out
+
+
+def cat2_probability(summary: dict, recovery: float) -> float:
+    """Cat II hit probability of one obstacle (or edge) summary: ``sum m_r exp(-d_r / recovery)``.
+
+    Summed ray by ray, so it does not depend on how the water is cut into
+    polygons; ``mass * exp(-mean_dist / recovery)`` -- what the model used
+    until 2026-11-09 -- understates it because ``exp`` is convex, by 4 % on
+    the Kattegat model and by 40 % when a whole depth class was one obstacle
+    (KNOWN_ISSUES 26).  Falls back to that form for a summary without ray
+    lists.  0 when ``recovery`` (``ai * V``) is not positive.
+    """
+    if recovery is None or recovery <= 0:
+        return 0.0
+    masses = summary.get("ray_masses")
+    dists = summary.get("ray_dists")
+    if masses is not None and dists is not None and len(masses) == len(dists) and len(masses) > 0:
+        m = np.asarray(masses, dtype=float)
+        d = np.asarray(dists, dtype=float)
+        return float(np.sum(m * np.exp(-d / recovery)))
+    mass = float(summary.get("mass", 0.0) or 0.0)
+    if mass <= 0:
+        return 0.0
+    return mass * exp(-float(summary.get("mean_dist", 0.0)) / recovery)
 
 
 def _build_summaries(obs_accum: dict, ai: float, speed_ms: float) -> dict:
@@ -404,15 +435,32 @@ def _build_summaries(obs_accum: dict, ai: float, speed_ms: float) -> dict:
             "mass": oa["mass"],
             "mean_dist": mean_dist,
             "p_integral": oa["p_integral"],
-            "p_approx": oa["mass"] * _powered_na(mean_dist, ai, speed_ms),
+            # Ray by ray at the leg's mean speed (the model sums it per speed cell).
+            "p_approx": oa["p_integral"] if ai * speed_ms > 0 else 0.0,
             "n_rays": oa["n_rays"],
             "ray_offsets": oa["ray_offsets"],
             "ray_dists": oa["ray_dists"],
+            "ray_masses": oa["ray_masses"],
             "obs": oa["obs"],
             "kind": oa["kind"],
             "edges": _edge_summaries(oa.get("edges", {})),
         }
     return summaries
+
+
+def _ray_grid(mean_offset: float, sigma: float,
+              components: list | None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(offsets, pdf_vals, masses)``: the whole mixture when ``components`` is
+    given (``compute/ray_sampling.mixture_rays``), else one normal."""
+    if components:
+        try:
+            return mixture_rays(components)
+        except ValueError:
+            pass
+    offsets = ray_offsets(mean_offset, sigma)
+    dx = offsets[1] - offsets[0]
+    pdf_vals = norm.pdf(offsets, mean_offset, sigma)
+    return offsets, pdf_vals, pdf_vals * dx
 
 
 def _compute_cat2_with_shadows(
@@ -424,16 +472,16 @@ def _compute_cat2_with_shadows(
     ai: float,
     speed_ms: float,
     obstacles: list[tuple[dict, str]],
+    components: list | None = None,
 ) -> tuple[dict, list, np.ndarray, np.ndarray]:
     """Compute Cat II probabilities with shadow effects (vectorised).
 
-    Casts ``N_RAYS`` parallel rays over ``mean +/- RAY_SPAN_SIGMA * sigma``
-    (``compute/ray_sampling.py``); per ray keeps the FIRST obstacle hit.
+    Casts parallel rays over the whole lateral mixture ``components``
+    (:func:`compute.ray_sampling.mixture_rays`); without components, over
+    ``mean +/- RAY_SPAN_SIGMA * sigma`` of one normal.  Per ray keeps the
+    FIRST obstacle hit.
     """
-    offsets = ray_offsets(mean_offset, sigma)
-    dx = offsets[1] - offsets[0]
-    pdf_vals = norm.pdf(offsets, mean_offset, sigma)
-    masses = pdf_vals * dx
+    offsets, pdf_vals, masses = _ray_grid(mean_offset, sigma, components)
     n_rays = len(offsets)
     if not obstacles:
         return ({}, [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
@@ -468,6 +516,7 @@ def _build_cat1_summaries(obs_accum: dict) -> dict:
             "n_rays": oa["n_rays"],
             "ray_offsets": oa["ray_offsets"],
             "ray_dists": oa["ray_dists"],
+            "ray_masses": oa["ray_masses"],
             "obs": oa["obs"],
             "kind": oa["kind"],
             "edges": _edge_summaries(oa.get("edges", {})),
@@ -484,6 +533,7 @@ def _compute_cat1_in_lane(
     leg_length: float,
     obstacles: list[tuple[dict, str]],
     start_zone_frac: float = 0.0,
+    components: list | None = None,
 ) -> tuple[dict, list, np.ndarray, np.ndarray]:
     """Compute Cat I (in-lane) intercepted mass per obstacle (vectorised).
 
@@ -507,10 +557,7 @@ def _compute_cat1_in_lane(
     ``(offset, mass, hit_key | None, along_dist | None)`` tuples where
     the distance is measured from ``origin``.
     """
-    offsets = ray_offsets(mean_offset, sigma)
-    dx = offsets[1] - offsets[0]
-    pdf_vals = norm.pdf(offsets, mean_offset, sigma)
-    masses = pdf_vals * dx
+    offsets, pdf_vals, masses = _ray_grid(mean_offset, sigma, components)
     n_rays = len(offsets)
     if not obstacles or leg_length <= 0:
         return ({}, [(float(offsets[i]), float(masses[i]), None, None) for i in range(n_rays)],
@@ -605,15 +652,41 @@ def _build_leg_entry(seg_id: str, seg: dict, traffic: dict, proj: "SimpleProject
     for i, d_name in enumerate(dirs):
         # Cat II starts at the turning point: the speed there.
         spd_kn = _weighted_avg_speed_knots(seg_traffic[d_name], turning_point(i)) if d_name in seg_traffic else 0
+        mean_1 = float(seg.get(f"mean{i + 1}_1", 0))
+        std_1 = float(seg.get(f"std{i + 1}_1", 100))
+        # The whole lateral mixture (normals 1-3 + uniform, weights
+        # normalised), as drawn on the tangent line; one normal from
+        # mean/std_1 when the leg has no weights.
+        components = lateral_mixture(seg, i) or [("n", mean_1, std_1 if std_1 > 0 else 100.0, 1.0)]
         dir_info.append({
             "name": d_name, "speed_kn": spd_kn, "speed_ms": spd_kn * 1852.0 / 3600.0,
             "ai": ai_values[min(i, 1)],
-            "mean": float(seg.get(f"mean{i + 1}_1", 0)),
-            "std": float(seg.get(f"std{i + 1}_1", 100)),
+            "mean": mean_1,
+            "std": std_1,
+            "components": components,
         })
     return {"start": np.array([xs, ys]), "end": np.array([xe, ye]),
             "name": seg.get("Leg_name", ""), "start_wkt": seg["Start_Point"],
             "end_wkt": seg["End_Point"], "dirs": dir_info}
+
+
+def _unique_ids(obstacles: list[dict]) -> list[dict]:
+    """Give every obstacle its own id; a repeated id gets ``#2``, ``#3``, ...
+
+    The caster adds hits up per id, so two polygons sharing one were taken
+    for a single obstacle -- with one mean distance and colliding edge
+    numbers.  An IWRAP import gave all parts of a depth class the same id
+    (KNOWN_ISSUES 21); the importer is fixed, this keeps any other source
+    of duplicates from merging polygons.
+    """
+    seen: dict[str, int] = {}
+    for obs in obstacles:
+        oid = str(obs.get("id"))
+        n = seen.get(oid, 0) + 1
+        seen[oid] = n
+        if n > 1:
+            obs["id"] = f"{oid}#{n}"
+    return obstacles
 
 
 def _build_legs_and_obstacles(
@@ -623,10 +696,10 @@ def _build_legs_and_obstacles(
     max_draft: float,
 ) -> tuple[dict[str, dict], list[tuple[dict, str]], list[dict], list[dict], list[dict]]:
     """Extract projected legs, obstacle list, and raw geometry lists from *data*."""
-    depth_geoms_all = _load_depth_obstacles(data, proj)
+    depth_geoms_all = _unique_ids(_load_depth_obstacles(data, proj))
     depth_geoms = [d for d in depth_geoms_all if d["depth"] <= max_draft]
     depth_geoms_deep = [d for d in depth_geoms_all if d["depth"] > max_draft]
-    object_geoms = _load_object_obstacles(data, proj)
+    object_geoms = _unique_ids(_load_object_obstacles(data, proj))
     all_obstacles: list[tuple[dict, str]] = []
     if mode in ("grounding", "both"):
         all_obstacles.extend([(dg, "depth") for dg in depth_geoms])
@@ -678,11 +751,11 @@ def _run_all_computations(
 
             summaries, ray_data, offsets, pdf_vals = _compute_cat2_with_shadows(
                 turn_pt, ext_dir, n, d["mean"], d["std"],
-                d["ai"], d["speed_ms"], all_obstacles,
+                d["ai"], d["speed_ms"], all_obstacles, components=d.get("components"),
             )
             cat1_summaries, cat1_ray_data, _, _ = _compute_cat1_in_lane(
                 origin, ext_dir, n, d["mean"], d["std"], L, all_obstacles,
-                start_zone_frac=cat1_start_zone_frac,
+                start_zone_frac=cat1_start_zone_frac, components=d.get("components"),
             )
 
             if summaries or cat1_summaries:
@@ -1410,13 +1483,19 @@ class PoweredOverlapVisualizer:
         ax.set_yscale("log")
 
         def _p_of(s: dict) -> float:
-            return max(float(s.get("mass", 0.0) or 0.0) * float(np.exp(-float(s["mean_dist"]) / recovery)), P_FLOOR)
+            # Summed ray by ray, as the model does (KNOWN_ISSUES 26).
+            return max(cat2_probability(s, recovery), P_FLOOR)
+
+        def _surv_of(s: dict) -> float:
+            # Mean survival over the obstacle's rays: P / mass.
+            mass = float(s.get("mass", 0.0) or 0.0)
+            return max(cat2_probability(s, recovery) / mass, P_FLOOR) if mass > 0 else P_FLOOR
 
         p_vals: list[float] = []
         for key, s in summaries.items():
             c = self.obs_color_map.get(key, "#888888")
             d_mean = float(s["mean_dist"])
-            surv = max(float(np.exp(-d_mean / recovery)), P_FLOOR)
+            surv = _surv_of(s)
             p = _p_of(s)
             p_vals.append(p)
             ax.axvline(d_mean, color=c, linestyle=":", linewidth=0.9, alpha=0.8)
@@ -1426,7 +1505,7 @@ class PoweredOverlapVisualizer:
         self._annotate_column(
             ax, summaries,
             lambda key, s: (f"{_obs_tag(key)}: P = {float(s['mass']):.3g} x "
-                            f"{float(np.exp(-float(s['mean_dist']) / recovery)):.2e} = {_p_of(s):.2e}"),
+                            f"{_surv_of(s):.2e} = {_p_of(s):.2e}"),
             y_of=_p_of,
         )
         # Fit the visible stretch: the curve over the window plus the markers.
@@ -1611,16 +1690,14 @@ class PoweredOverlapVisualizer:
                 layout.removeWidget(widget)
                 widget.deleteLater()
 
-        # Build projector from first segment
+        # Same projection as the model (centred on the model, KNOWN_ISSUES 27).
         segments = data.get("segment_data", {})
         if not segments:
             return None  # type: ignore[return-value]
-        first_seg = segments[list(segments.keys())[0]]
         try:
-            lon0, lat0 = _parse_point(first_seg["Start_Point"])
+            proj = model_projector(segments)
         except Exception:  # nosec B110 B112
             return None  # type: ignore[return-value]
-        proj = SimpleProjector(lon0, lat0)
 
         # Extract data
         legs, all_obstacles, depth_geoms, depth_geoms_deep, object_geoms = \

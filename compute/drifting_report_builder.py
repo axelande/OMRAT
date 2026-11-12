@@ -63,6 +63,7 @@ class DriftingReportBuilderMixin:
         base: float,
         rp: float,
         contrib: float,
+        risk_factor: float = 1.0,
     ) -> None:
         """Store per-edge calculation trace for backtracing.
 
@@ -70,14 +71,15 @@ class DriftingReportBuilderMixin:
         (``hole_pct``, ``h_eff``, ``reachable_width``, ``edge_h_eff``,
         ``len_frac``, ``edge_dist``, ``edge_p_nr``, ``edge_hole``) are
         fixed -- only ``base`` and the number of ship cells contributing
-        vary.  Users back-trace the contribution via
-        ``contrib = base * rp * (h_eff * len_frac) * edge_p_nr``
-        where
-        ``len_frac = reachable_width / Σ reachable_widths`` (1D shadow-carved
-        share of the polygon) and ``edge_h_eff = reachable_width /
-        leg_drift_width`` is the pure-geometric per-edge share (kept for
-        backtracing only -- multiplying by it directly would ignore the
-        AIS ship-density profile embedded in the analytical h_eff).
+        vary.  Users back-trace the grounding / allision contribution via
+        ``contrib = base * rp * edge_hole * edge_p_nr * risk_factor`` with
+        ``edge_hole = edge_h_eff * recarve_scale * (h_eff / hole_pct)``
+        (``DriftingModelMixin._apply_hit_entry``): ``edge_h_eff =
+        reachable_width / leg_drift_width`` is the edge's share of the drift
+        width with the ships spread evenly along the reference line, and
+        ``h_eff / hole_pct`` what survives the shadow of closer obstacles and
+        anchoring.  ``len_frac = reachable_width / Σ reachable_widths`` (the
+        edge's share of the polygon) splits anchoring over the edges.
         """
         if seg_idx is None:
             return
@@ -103,6 +105,7 @@ class DriftingReportBuilderMixin:
         # differs; refresh so the stored value reflects the last observed one.
         entry['h_eff'] = float(h_eff)
         entry['edge_hole'] = float(edge_hole)
+        entry['risk_factor'] = float(risk_factor)
         entry['exposure_sum'] += float(base) * float(rp)
         entry['contrib_sum'] += float(contrib)
         entry['cell_count'] += 1

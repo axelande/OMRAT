@@ -63,8 +63,8 @@
   <line x1="650" y1="190" x2="770" y2="225" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
 
   <!-- Coordinate Transform -->
-  <rect x="200" y="330" width="500" height="40" rx="8" fill="#f3e5f5" stroke="#9C27B0" stroke-width="2"/>
-  <text x="450" y="355" text-anchor="middle" font-size="13" font-weight="bold" fill="#6A1B9A">CRS Transformation: WGS84 (EPSG:4326) &#x2192; UTM</text>
+  <rect x="80" y="330" width="740" height="40" rx="8" fill="#f3e5f5" stroke="#9C27B0" stroke-width="2"/>
+  <text x="450" y="355" text-anchor="middle" font-size="13" font-weight="bold" fill="#6A1B9A">Traffic preparation (gaps, scaling, redirects, speed zones) | WGS84 &#x2192; UTM / model projection</text>
   <line x1="350" y1="295" x2="400" y2="330" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   <line x1="560" y1="295" x2="500" y2="330" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
 
@@ -75,7 +75,7 @@
   <text x="160" y="458" text-anchor="middle" font-size="10" fill="#1565C0">1. Generate drift corridors (8 dirs)</text>
   <text x="160" y="475" text-anchor="middle" font-size="10" fill="#1565C0">2. Clip at obstacles</text>
   <text x="160" y="492" text-anchor="middle" font-size="10" fill="#1565C0">3. Split anchor/deep zones</text>
-  <text x="160" y="509" text-anchor="middle" font-size="10" fill="#1565C0">4. Monte Carlo probability</text>
+  <text x="160" y="509" text-anchor="middle" font-size="10" fill="#1565C0">4. Probability holes (analytical)</text>
   <text x="160" y="526" text-anchor="middle" font-size="10" fill="#1565C0">5. Apply repair time CDF</text>
   <text x="160" y="543" text-anchor="middle" font-size="10" fill="#1565C0">6. Weight by wind rose</text>
   <text x="160" y="560" text-anchor="middle" font-size="10" fill="#1565C0">7. Apply causation factor</text>
@@ -93,7 +93,7 @@
   <!-- Collision Path -->
   <rect x="610" y="410" width="260" height="160" rx="8" fill="#ede7f6" stroke="#673AB7" stroke-width="2"/>
   <text x="740" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#311B92">Collision Pipeline</text>
-  <text x="740" y="458" text-anchor="middle" font-size="10" fill="#4527A0">1. Pair ship types (i,j)</text>
+  <text x="740" y="458" text-anchor="middle" font-size="10" fill="#4527A0">1. Pair cells i,j on legs + routes</text>
   <text x="740" y="475" text-anchor="middle" font-size="10" fill="#4527A0">2. Calculate relative speed</text>
   <text x="740" y="492" text-anchor="middle" font-size="10" fill="#4527A0">3. Geometric collision P_G</text>
   <text x="740" y="509" text-anchor="middle" font-size="10" fill="#4527A0">4. Traffic density conversion</text>
@@ -120,7 +120,7 @@
   <text x="390" y="720" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Probability Tables</text>
 
   <rect x="520" y="690" width="200" height="50" rx="8" fill="#c8e6c9" stroke="#4CAF50" stroke-width="2"/>
-  <text x="620" y="720" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Project File (.omrat)</text>
+  <text x="620" y="720" text-anchor="middle" font-size="12" font-weight="bold" fill="#2E7D32">Run history + JSON files</text>
 
   <line x1="350" y1="655" x2="160" y2="690" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   <line x1="450" y1="655" x2="390" y2="690" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>

@@ -6,6 +6,7 @@ Orchestrates corridor generation for all legs and directions,
 handling data collection, coordinate transformations, and progress reporting.
 """
 
+import math
 from typing import TYPE_CHECKING
 
 from shapely.geometry import Polygon, MultiPolygon, LineString
@@ -14,7 +15,6 @@ from pyproj import CRS
 
 from .constants import DIRECTIONS
 from .coordinates import get_utm_crs, transform_geometry
-from .distribution import get_projection_distance, get_distribution_width
 from .corridor import create_projected_corridor
 from .clipping import clip_corridor_at_obstacles, split_corridor_by_anchor_zone
 
@@ -165,13 +165,13 @@ class DriftCorridorGenerator:
         anchor_threshold = anchor_d * depth_threshold
         anchor_zone = self._get_anchor_zone(anchor_threshold)
 
+        legs, half_widths = self._get_legs_and_half_widths()
         self._precollected_data = {
-            'legs': self._get_legs_from_routes(),
+            'legs': legs,
+            'half_widths': half_widths,
             'depth_obstacles': depth_obstacles,
             'structure_obstacles': structure_obstacles,
-            'lateral_std': self._get_distribution_std(),
-            'repair_params': self._get_repair_params(),
-            'drift_speed': self._get_drift_speed_ms(),
+            'projection_dist': self._get_corridor_length(),
             'anchor_zone': anchor_zone,
         }
 
@@ -211,11 +211,11 @@ class DriftCorridorGenerator:
                         pass
         return legs
 
-    def _parse_depth_row(self, table, row: int, bin_width: float):
+    def _parse_depth_row(self, table, row: int):
         depth_item = table.item(row, 1)
         if depth_item is None:
             return None, None
-        depth = self._parse_depth_value(depth_item.text().strip(), bin_width)
+        depth = self._parse_depth_value(depth_item.text().strip())
         if depth is None:
             return None, None
         wkt = _item_wkt(table.item(row, 2))
@@ -227,27 +227,68 @@ class DriftCorridorGenerator:
     def _unpack_data(self, depth_threshold: float, height_threshold: float) -> tuple:
         if self._precollected_data is not None:
             d = self._precollected_data
-            return (d['legs'], d['depth_obstacles'], d['structure_obstacles'],
-                    d['lateral_std'], d['repair_params'], d['drift_speed'],
-                    d.get('anchor_zone', Polygon()))
-        legs = self._get_legs_from_routes()
+            return (d['legs'], d['half_widths'], d['depth_obstacles'], d['structure_obstacles'],
+                    d['projection_dist'], d.get('anchor_zone', Polygon()))
+        legs, half_widths = self._get_legs_and_half_widths()
         depth_obstacles = self._get_depth_obstacles(depth_threshold)
         structure_obstacles = self._get_structure_obstacles(height_threshold)
         anchor_d = float(self.plugin.drift_values.get('anchor_d', 0))
         anchor_zone = self._get_anchor_zone(anchor_d * depth_threshold)
-        return (legs, depth_obstacles, structure_obstacles,
-                self._get_distribution_std(), self._get_repair_params(),
-                self._get_drift_speed_ms(), anchor_zone)
+        return (legs, half_widths, depth_obstacles, structure_obstacles,
+                self._get_corridor_length(), anchor_zone)
+
+    def _get_legs_and_half_widths(self) -> tuple[list[LineString], list[float]]:
+        """The model's legs (``segment_data``) and each corridor's half-width.
+
+        The half-width is the drift model's own (``depth_simplify.
+        lateral_spread_m``: 5 x the weighted sigma of the lateral mixture,
+        2500 m without one), the wider of the leg's two travel directions --
+        one Drift Analysis corridor covers both.  Without ``segment_data``
+        the route layers are used with the 2500 m fallback.  Until
+        2026-11-12 every leg got the width of the leg shown on the
+        Distributions tab.
+        """
+        from geometries.depth_simplify import FALLBACK_SPREAD_M, lateral_spread_m
+        legs: list[LineString] = []
+        widths: list[float] = []
+        for seg in (getattr(self.plugin, 'segment_data', None) or {}).values():
+            if not isinstance(seg, dict):
+                continue
+            try:
+                start = [float(v) for v in str(seg['Start_Point']).split()]
+                end = [float(v) for v in str(seg['End_Point']).split()]
+                line = LineString([start[:2], end[:2]])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if line.length <= 0:
+                continue
+            legs.append(line)
+            widths.append(max(lateral_spread_m(seg, 0), lateral_spread_m(seg, 1)))
+        if legs:
+            return legs, widths
+        legs = self._get_legs_from_routes()
+        return legs, [FALLBACK_SPREAD_M] * len(legs)
+
+    def _get_corridor_length(self) -> float:
+        """The drift model's reach: drift by which 99 % are repaired, capped at
+        10 x the longest leg (``depth_simplify.corridor_length_m``).
+
+        Until 2026-11-12 the corridors used the 99.9 % lognormal quantile of
+        repair keys read from the wrong place (always the defaults).
+        """
+        from geometries.depth_simplify import corridor_length_m
+        length = corridor_length_m(getattr(self.plugin, 'drift_values', None),
+                                   getattr(self.plugin, 'segment_data', None))
+        return float(length) if length else 10000.0
 
     def _get_depth_obstacles(self, depth_threshold: float) -> list[tuple[Polygon, float]]:
         """Get depth polygons shallower than threshold."""
         from qgis.core import QgsMessageLog, Qgis
         table = self.plugin.main_widget.twDepthList
-        bin_width = self._detect_depth_bin_width(table)
         obstacles = []
         for row in range(table.rowCount()):
             try:
-                depth, geom = self._parse_depth_row(table, row, bin_width)
+                depth, geom = self._parse_depth_row(table, row)
                 if depth is None or geom is None or depth > depth_threshold:
                     continue
                 obstacles.extend(_expand_poly_geoms(geom, depth))
@@ -271,11 +312,10 @@ class DriftCorridorGenerator:
         if anchor_threshold <= 0:
             return Polygon()
         table = self.plugin.main_widget.twDepthList
-        bin_width = self._detect_depth_bin_width(table)
         anchor_geoms = []
         for row in range(table.rowCount()):
             try:
-                depth, geom = self._parse_depth_row(table, row, bin_width)
+                depth, geom = self._parse_depth_row(table, row)
                 if depth is None or geom is None or depth >= anchor_threshold:
                     continue
                 geom = make_valid(geom)
@@ -287,61 +327,19 @@ class DriftCorridorGenerator:
             return make_valid(_unary_union(anchor_geoms))
         return Polygon()
 
-    def _detect_depth_bin_width(self, table) -> float:
-        """Detect bin width from depth values in the table."""
-        depth_values = []
-        for row in range(table.rowCount()):
-            depth_item = table.item(row, 1)
-            if depth_item is None:
-                continue
-            depth_text = depth_item.text().strip()
-            try:
-                if '-' in depth_text and not depth_text.startswith('-'):
-                    continue  # Skip intervals for bin detection
-                elif depth_text.startswith('-'):
-                    if '--' in depth_text:
-                        continue
-                    val = abs(float(depth_text))
-                else:
-                    val = float(depth_text)
-                depth_values.append(val)
-            except ValueError:
-                continue
+    @staticmethod
+    def _parse_depth_value(depth_text: str) -> float | None:
+        """The model's class value of a depth cell (``depth_simplify.depth_value``):
+        the number, or an interval's shallower end; ``None`` if unreadable.
 
-        # Calculate most common difference
-        if len(depth_values) >= 2:
-            sorted_depths = sorted(set(depth_values))
-            if len(sorted_depths) >= 2:
-                diffs = [sorted_depths[i + 1] - sorted_depths[i]
-                         for i in range(len(sorted_depths) - 1)]
-                if diffs:
-                    from collections import Counter
-                    diff_counts = Counter(round(d, 1) for d in diffs)
-                    most_common_diff = diff_counts.most_common(1)[0][0]
-                    if most_common_diff > 0:
-                        return most_common_diff
-        return 0.0
-
-    def _parse_depth_value(self, depth_text: str, bin_width: float) -> float | None:
-        """Parse a depth value from text, returning the max depth for the cell."""
-        try:
-            if '-' in depth_text and not depth_text.startswith('-'):
-                # Interval like "0-10" -> use upper bound
-                parts = depth_text.split('-')
-                return float(parts[-1])
-            elif depth_text.startswith('-'):
-                if '--' in depth_text:
-                    # Negative interval like "-10--5" -> use upper bound (less negative)
-                    parts = depth_text.split('--')
-                    return abs(float(parts[0]))
-                else:
-                    # Single negative value -> add bin width
-                    return abs(float(depth_text)) + bin_width
-            else:
-                # Single positive value -> add bin width
-                return float(depth_text) + bin_width
-        except ValueError:
-            return None
+        Until 2026-11-12 the corridors took the *deeper* end and added the
+        table's most common step to a single value ("10" -> 15 m with 5 m
+        classes), and made a negative depth positive, so they did not show
+        the water the model grounds ships on.
+        """
+        from geometries.depth_simplify import depth_value
+        v = depth_value(depth_text)
+        return None if math.isnan(v) else v
 
     def _get_structure_obstacles(self, height_threshold: float) -> list[tuple[Polygon, float]]:
         """Get structure polygons lower than threshold."""
@@ -365,48 +363,23 @@ class DriftCorridorGenerator:
                 QgsMessageLog.logMessage(f"Error parsing structure row {row}: {e}", "OMRAT", Qgis.MessageLevel.Warning)
         return obstacles
 
-    def _get_distribution_std(self) -> float:
-        """Get the lateral distribution standard deviation."""
-        try:
-            std1 = float(self.plugin.main_widget.leNormStd1_1.text() or 0)
-            if std1 > 0:
-                return std1
-        except (ValueError, AttributeError):
-            pass
-        return 100.0
-
-    def _get_repair_params(self) -> dict:
-        """Get repair time distribution parameters."""
-        drift_values = self.plugin.drift_values
-        return {
-            'use_lognormal': drift_values.get('use_lognormal', 1),
-            'std': drift_values.get('std', 0.95),
-            'loc': drift_values.get('loc', 0.2),
-            'scale': drift_values.get('scale', 0.85),
-        }
-
-    def _get_drift_speed_ms(self) -> float:
-        """Get drift speed in m/s."""
-        drift_values = self.plugin.drift_values
-        speed_kts = float(drift_values.get('speed', 1.94))
-        return speed_kts * 1852.0 / 3600.0
-
-    def generate_corridors(self, depth_threshold: float, height_threshold: float,
-                           target_prob: float = 1e-3) -> list[dict]:
+    def generate_corridors(self, depth_threshold: float, height_threshold: float) -> list[dict]:
         """
         Generate drift corridors for all legs in all 8 directions.
+
+        Width and length are the drift model's (``_get_legs_and_half_widths``,
+        ``_get_corridor_length``).
 
         Args:
             depth_threshold: Depths <= this value create shadows
             height_threshold: Heights <= this value create shadows
-            target_prob: Target probability for projection distance
 
         Returns:
             List of corridor dicts with: direction, angle, leg_index, polygon (WGS84)
         """
         from qgis.core import QgsMessageLog, Qgis
         self._cancelled = False
-        legs, depth_obs, struct_obs, lateral_std, repair_params, drift_speed, anchor_zone = (
+        legs, half_widths, depth_obs, struct_obs, projection_dist, anchor_zone = (
             self._unpack_data(depth_threshold, height_threshold)
         )
         if not legs:
@@ -415,10 +388,9 @@ class DriftCorridorGenerator:
         total_work = len(legs) * len(DIRECTIONS)
         if not self._report_progress(0, total_work, "Initializing..."):
             return []
-        half_width = get_distribution_width(lateral_std, 0.99) / 2
-        projection_dist = min(get_projection_distance(repair_params, drift_speed, target_prob), 50000)
         QgsMessageLog.logMessage(
-            f"Corridor params: half_width={half_width:.1f}m, projection_dist={projection_dist:.1f}m",
+            f"Corridor params: half widths {min(half_widths):.0f}-{max(half_widths):.0f} m, "
+            f"length {projection_dist:.0f} m (the drift model's)",
             "OMRAT", Qgis.MessageLevel.Info,
         )
         wgs84 = CRS("EPSG:4326")
@@ -429,7 +401,7 @@ class DriftCorridorGenerator:
             if self._cancelled:
                 return corridors
             leg_corridors, completed = self._generate_leg_corridors(
-                leg, leg_idx, len(legs), all_obstacles, half_width,
+                leg, leg_idx, len(legs), all_obstacles, half_widths[leg_idx],
                 projection_dist, wgs84, completed, total_work, anchor_zone=anchor_zone,
             )
             corridors.extend(leg_corridors)

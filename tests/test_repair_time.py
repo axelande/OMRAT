@@ -26,8 +26,16 @@ if str(ROOT) not in sys.path:
 # Use the headless Agg backend so plt.figure() doesn't try to spin up Qt.
 import matplotlib  # noqa: E402
 matplotlib.use("Agg")
+import matplotlib.pyplot  # noqa: E402
 
 from omrat_utils.repair_time import Repair  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _close_figures():
+    """Every Repair opens a pyplot figure; close them after each test."""
+    yield
+    matplotlib.pyplot.close('all')
 
 
 def _make_repair(
@@ -163,3 +171,110 @@ class TestTestEvaluate:
         r.ax.plot.assert_not_called()
         captured = capsys.readouterr()
         assert "empty" in captured.out
+
+
+class TestLognormalEvaluate:
+    """Test eval with *Lognormal* selected plots the lognormal CDF.
+
+    It used to validate the (empty) user-defined expression box whatever
+    radio button was selected, so Lognormal always answered "The repair
+    function is empty".
+    """
+
+    def test_lognormal_plots_cdf_not_expression(self, capsys):
+        r = _make_repair(user_defined=False, func_text="",
+                         std=0.97, loc=0.2, scale=0.49)
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        assert capsys.readouterr().out == ""   # no error, no note
+        r.ax.plot.assert_called_once()
+        xs, ys = r.ax.plot.call_args.args
+        expected = stats.lognorm(0.97, 0.2, 0.49).cdf(np.asarray(xs))
+        assert ys == pytest.approx(list(expected), abs=1e-12)
+        r.canvas.draw.assert_called_once()
+
+    def test_lognormal_range_reaches_the_drift_model_quantile(self):
+        from compute.drift_reach import REACH_QUANTILE
+        r = _make_repair(user_defined=False, std=0.95, loc=0.2, scale=0.85)
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        xs, ys = r.ax.plot.call_args.args
+        t99 = float(stats.lognorm(0.95, 0.2, 0.85).ppf(REACH_QUANTILE))
+        assert xs[0] == 0.0
+        assert xs[-1] > t99 > 4.0          # the default 0-4 h would cut it
+        assert ys[-1] > REACH_QUANTILE
+        r.ax.axvline.assert_called_once()
+        assert r.ax.axvline.call_args.args[0] == pytest.approx(t99)
+
+    def test_lognormal_accepts_decimal_comma(self, capsys):
+        r = _make_repair(user_defined=False)
+        r.sett.dsw.leRepairStd.text.return_value = "0,97"
+        r.sett.dsw.leRepairLoc.text.return_value = "0,2"
+        r.sett.dsw.leRepairScale.text.return_value = "0,49"
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        assert capsys.readouterr().out == ""
+        r.ax.plot.assert_called_once()
+        assert r.get_repair_prob(1.0) == pytest.approx(
+            float(stats.lognorm(0.97, 0.2, 0.49).cdf(1.0)), abs=1e-12)
+
+    @pytest.mark.parametrize("field, text, words", [
+        ("leRepairStd", "abc", "standard deviation: 'abc' is not a number"),
+        ("leRepairStd", "0", "standard deviation must be greater than 0"),
+        ("leRepairScale", "-1", "scale must be greater than 0"),
+        ("leRepairLoc", "", "location: '' is not a number"),
+        ("leRepairLoc", "inf", "location must be a finite number"),
+    ])
+    def test_bad_lognormal_parameter_is_named(self, capsys, field, text, words):
+        r = _make_repair(user_defined=False)
+        getattr(r.sett.dsw, field).text.return_value = text
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.test_evaluate()
+        r.ax.plot.assert_not_called()
+        r.canvas.draw.assert_called_once()
+        out = capsys.readouterr().out
+        assert words in out.lower()
+        assert "repair function is empty" not in out
+
+
+class TestRefreshPlot:
+    """Edits redraw without popups; the problem goes in the plot."""
+
+    def test_bad_lognormal_is_written_in_the_plot(self, capsys):
+        r = _make_repair(user_defined=False, std=0.0)
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.refresh_plot()
+        assert capsys.readouterr().out == ""   # no popup / console message
+        r.ax.plot.assert_not_called()
+        r.ax.text.assert_called_once()
+        assert "greater than 0" in r.ax.text.call_args.args[2]
+        r.canvas.draw.assert_called_once()
+
+    def test_empty_expression_is_written_in_the_plot(self, capsys):
+        r = _make_repair(user_defined=True, func_text="")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.refresh_plot()
+        assert capsys.readouterr().out == ""
+        msg = r.ax.text.call_args.args[2]
+        assert msg == "The repair function is empty."
+
+    def test_out_of_range_note_only_on_test_eval(self, capsys):
+        r = _make_repair(user_defined=True, func_text="x * 2")
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.refresh_plot()
+        r.ax.plot.assert_called_once()
+        assert capsys.readouterr().out == ""
+
+    def test_lognormal_plots(self):
+        r = _make_repair(user_defined=False, std=0.97, loc=0.2, scale=0.49)
+        r.ax = MagicMock()
+        r.canvas = MagicMock()
+        r.refresh_plot()
+        r.ax.plot.assert_called_once()

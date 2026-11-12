@@ -353,6 +353,9 @@ _SETTING_LABELS: dict[str, str] = {
     "pc.allision": "Causation factor powered allision",
     "pc.grounding_cat1": "Causation factor powered grounding (Cat I, in lane)",
     "pc.allision_cat1": "Causation factor powered allision (Cat I, in lane)",
+    "pc.min_encounter_angle_deg": "Smallest route angle at a waypoint (degrees)",
+    "pc.squat_drifting": "Squat in drifting grounding",
+    "pc.squat_powered": "Squat in powered grounding",
     "traffic_scaling.global_percent": "Global traffic scaling (%)",
 }
 

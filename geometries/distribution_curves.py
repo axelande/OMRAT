@@ -10,8 +10,8 @@ The tangent line is the leg's cross-section: it runs through the point at
 ``Tangent_Pos`` along the leg, perpendicular to it, over the leg width.
 Its lateral axis ``x`` is the one every distribution uses: metres from
 the leg centreline, *negative on the starboard side of the drawn
-direction* (the tangent / AIS passage line starts on the bearing+90 side,
-see CLAUDE.md "Leg direction convention").  Both directions share it.
+direction* (the tangent / AIS passage line starts on the bearing+90
+side).  Both directions share it.
 
 Each direction's fitted distribution (the normal + uniform mixture the
 models use: ``mean{d}_{i}`` / ``std{d}_{i}`` / ``weight{d}_{i}`` and
@@ -28,7 +28,7 @@ from __future__ import annotations
 from math import exp, isfinite, pi, sqrt
 from typing import Any
 
-from compute.ray_sampling import RAY_SPAN_SIGMA, span_bounds
+from compute.ray_sampling import RAY_SPAN_SIGMA, mixture_span, span_bounds
 
 #: The taller peak of a leg's two curves is this fraction of the leg width.
 HEIGHT_FRACTION = 0.25
@@ -153,12 +153,17 @@ def span_marks(seg_d: dict[str, Any], direction: int, span_sigma: float = RAY_SP
     """Lateral ``(low, high)`` in metres covered by the powered model's rays
     for ``direction`` (0 or 1).
 
-    The ray caster samples the *first* normal component only
-    (``mean{d}_1`` / ``std{d}_1``), so that is what is marked; ``None``
-    when that component is missing or has no spread.
+    The ray caster samples the whole mixture (every normal's
+    ``mean +/- k sigma`` and the uniform bounds, ``compute.ray_sampling.mixture_span``);
+    until 2026-11-09 it sampled -- and this marked -- the first normal only.
+    Without weights it falls back to ``mean{d}_1`` / ``std{d}_1`` like the
+    caster; ``None`` when nothing usable is defined.
     """
     if not isinstance(seg_d, dict):
         return None
+    span = mixture_span(mixture(seg_d, direction), span_sigma)
+    if span is not None:
+        return span
     d = direction + 1
     m, s = _f(seg_d.get(f'mean{d}_1')), _f(seg_d.get(f'std{d}_1'))
     if m is None or s is None or s <= 0:

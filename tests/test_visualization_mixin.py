@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from compute.visualization import VisualizationMixin
+from compute.visualization import VisualizationMixin  # noqa: E402
 
 
 @pytest.fixture
@@ -148,22 +148,26 @@ class TestRunPoweredGroundingVisualization:
                 {'traffic_data': {'1': {}}})
             MockDlg.assert_not_called()
 
-    def test_happy_path_invokes_visualizer(self, host):
+    def test_happy_path_shows_the_deepest_draught_bin(self, host):
+        """Not a fixed 15 m any more: the deepest depth bin the model casts
+        for the traffic (a 9 m draught + squat grounds on the 8 m class)."""
         data = _minimal_powered_data()
-        data['max_draft'] = 8.5
+        data['traffic_data'] = {'1': {'East going': {
+            'Frequency (ships/year)': [[100.0]], 'Speed (knots)': [[10.0]], 'Draught (meters)': [[9.0]]}}}
+        poly = 'POLYGON((14.3 55.3, 14.31 55.3, 14.31 55.31, 14.3 55.31, 14.3 55.3))'
+        data['depths'] = [['1', '3', poly], ['2', '8', poly], ['3', '12', poly]]
         with patch('compute.visualization.ShowGeomRes') as MockDlg, \
              patch('compute.visualization.PoweredOverlapVisualizer') as MockViz:
             dialog_instance = MockDlg.return_value
             host.run_powered_grounding_visualization(data)
             call = MockViz.show_in_dialog.call_args
             assert call.kwargs.get('mode') == 'grounding'
-            assert call.kwargs.get('max_draft') == 8.5
+            assert call.kwargs.get('max_draft') == 8.0
             dialog_instance.exec.assert_called_once()
 
-    def test_none_max_draft_falls_back_to_15(self, host):
-        data = _minimal_powered_data()
-        data['max_draft'] = None
+    def test_no_ship_can_ground_shows_no_depth_obstacles(self, host):
+        data = _minimal_powered_data()   # no depth areas at all
         with patch('compute.visualization.ShowGeomRes'), \
              patch('compute.visualization.PoweredOverlapVisualizer') as MockViz:
             host.run_powered_grounding_visualization(data)
-            assert MockViz.show_in_dialog.call_args.kwargs['max_draft'] == 15.0
+            assert MockViz.show_in_dialog.call_args.kwargs['max_draft'] == -1.0
